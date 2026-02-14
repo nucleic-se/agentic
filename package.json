@@ -1,0 +1,42 @@
+{
+  "name": "@nucleic/agentic-core",
+  "version": "0.1.0",
+  "description": "Domain-agnostic agentic toolbox — reusable primitives for prompt composition, tick pipelines, LLM abstraction, capability/pack management, migration orchestration, and tracing.",
+  "license": "ISC",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "import": "./dist/runtime/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "peerDependencies": {
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.17",
+    "zod": "^4.3.6"
+  }
+}
