@@ -45,6 +45,7 @@ export type {
     GraphRunResult,
     GraphDeadLetter,
     GraphEngineConfig,
+    GraphStepResult,
     IGraphEngine,
     IGraphBuilder,
 } from './contracts/index.js';

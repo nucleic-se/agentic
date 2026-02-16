@@ -74,6 +74,7 @@ export type {
     GraphRunResult,
     GraphDeadLetter,
     GraphEngineConfig,
+    GraphStepResult,
     IGraphEngine,
     IGraphBuilder,
 } from './graph/index.js';

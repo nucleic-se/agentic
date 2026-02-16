@@ -24,6 +24,7 @@ import {
   CapabilityRegistry,
   estimateTokens,
 } from '@nucleic/agentic';
+import type { GraphStepResult } from '@nucleic/agentic';
 ```
 
 ## Modules
@@ -35,7 +36,7 @@ import {
 | **Tick Pipeline** | Ordered step execution for simulation/processing loops |
 | **AI Builders** | Fluent prompt builder + chainable pipeline with retry/validation |
 | **LLM Provider** | Abstract interface for any language model backend |
-| **State Graph** | Directed graph engine for LLM agent workflows with shared state |
+| **State Graph** | Directed graph engine for LLM agent workflows with shared state, step-by-step execution, and hooks |
 | **Pack System** | Manifest-based capability registration with dependency validation |
 | **Migration Orchestrator** | Run ordered data migrations across packs |
 | **Tracer** | Lightweight structured event tracing with ring buffer |
@@ -295,7 +296,7 @@ Pipeline methods:
 
 A directed graph engine for LLM agent workflows. Nodes share a typed mutable state object; edges (static or conditional) determine execution order. Designed for plan → act → observe → decide loops with conditional routing and cycle safety.
 
-**Execution model:** The engine clones the initial state (never mutates the caller's object), runs the entry node, snapshots state after each step, resolves the next edge, and repeats until reaching `END` or exceeding `maxSteps`.
+**Execution model:** The engine clones the initial state (never mutates the caller's object), runs the entry node, snapshots state after each step, resolves the next edge, and repeats until reaching `END` or exceeding `maxSteps`. Use `run()` to execute the full graph, or `step()` to advance one node at a time for external loop control. Optional `onBeforeNode`/`onAfterNode` hooks observe each execution step.
 
 ### Building a Graph
 
@@ -535,6 +536,66 @@ for (const snap of result.snapshots) {
 }
 ```
 
+### Single-Step Execution with `step()`
+
+The `step()` method executes exactly one node and returns a `GraphStepResult`. This is the core execution primitive — `run()` is built on top of it. Use `step()` when you need external control over the execution loop (e.g. one graph node per game tick, or interleaving graph execution with other work).
+
+```ts
+import type { GraphStepResult } from '@nucleic/agentic';
+
+const engine = builder.build({ maxSteps: 50 });
+
+// Clone initial state yourself when using step()
+const state = structuredClone(initialState);
+let nodeId = 'plan'; // start at entry node
+let stepCount = 0;
+
+while (true) {
+  const result: GraphStepResult<MyState> = await engine.step(state, nodeId, stepCount);
+  stepCount++;
+
+  console.log(`Executed: ${result.executedNodeId}`);
+  console.log(`Next: ${result.nextNodeId ?? 'END'}`);
+  console.log(`Snapshot:`, result.snapshot);
+
+  if (result.done) break;
+  nodeId = result.nextNodeId!;
+}
+```
+
+`GraphStepResult<TState>` has the following shape:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `executedNodeId` | `string` | The node that was just executed |
+| `nextNodeId` | `string \| undefined` | Next node to execute, or `undefined` if done |
+| `snapshot` | `Readonly<TState>` | Frozen deep clone of state after execution |
+| `done` | `boolean` | `true` when `nextNodeId` is `END` or absent |
+
+### Execution Hooks
+
+Pass `onBeforeNode` and `onAfterNode` callbacks in the engine config to observe or log each node execution. Hooks receive the node ID, a read-only view of state, and the current step count. Async hooks are awaited.
+
+```ts
+const engine = builder.build({
+  maxSteps: 50,
+  onBeforeNode: (nodeId, state, stepCount) => {
+    console.log(`[step ${stepCount}] About to execute: ${nodeId}`);
+  },
+  onAfterNode: (nodeId, state, stepCount) => {
+    console.log(`[step ${stepCount}] Finished: ${nodeId}`, state);
+  },
+});
+
+// Hooks fire for both run() and step()
+const result = await engine.run(initialState);
+```
+
+Hook signature:
+```ts
+(nodeId: string, state: Readonly<TState>, stepCount: number) => void | Promise<void>
+```
+
 ### Graph Validation
 
 `StateGraphBuilder.build()` validates the graph before returning an engine. Validation checks:
@@ -652,7 +713,7 @@ const applied = await orchestrator.migrate(bootOrder);
 
 ## Tracer
 
-Lightweight structured event tracing with a ring buffer.
+Lightweight structured event tracing with a ring buffer. Each event carries a `correlationId` for grouping related traces (e.g. per-request, per-session, per-agent).
 
 ```ts
 import { InMemoryTracer } from '@nucleic/agentic';
@@ -660,14 +721,13 @@ import { InMemoryTracer } from '@nucleic/agentic';
 const tracer = new InMemoryTracer(5000); // max 5000 events
 
 tracer.trace({
-  simulationId: 'sim-1',
+  correlationId: 'req-1',
   type: 'llm-call',
-  tick: 3,
   timestamp: Date.now(),
   data: { model: 'gpt-4', tokens: 1500 },
 });
 
-const recent = tracer.recent('sim-1', 10); // 10 most recent, newest first
+const recent = tracer.recent('req-1', 10); // 10 most recent, newest first
 ```
 
 ## Utilities

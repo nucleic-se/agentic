@@ -23,7 +23,7 @@ export class AIPromptService implements IAIPromptService {
 export class AIPromptBuilder implements IAIPromptBuilder {
     private systemMessage?: string;
     private userMessage?: string;
-    private schemaValue?: any;
+    private schemaValue?: Record<string, unknown>;
 
     constructor(private llmProvider: ILLMProvider, private model?: string) {}
 
@@ -41,7 +41,7 @@ export class AIPromptBuilder implements IAIPromptBuilder {
         return this;
     }
 
-    schema(schema: any): IAIPromptBuilder {
+    schema(schema: Record<string, unknown>): IAIPromptBuilder {
         this.schemaValue = schema;
         return this;
     }

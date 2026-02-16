@@ -1,18 +1,15 @@
 /**
  * State graph engine — executes a graph against shared state.
  *
- * Execution model:
- * 1. Clone initial state (caller's object is never mutated).
- * 2. Start at the entry node.
- * 3. Run node.process(state, context) — node mutates state in place.
- * 4. Snapshot state after each node (deep clone for replay/debug).
- * 5. Resolve next node: conditional edge → static edge → implicit END.
- * 6. Repeat until END or maxSteps exceeded.
+ * Two execution modes:
+ *
+ * 1. `run(initialState)` — clone + run to completion (loop of step()).
+ * 2. `step(state, nodeId, stepCount)` — execute one node, return cursor.
+ *    Caller manages the loop. Useful for one-node-per-tick interleaving.
  *
  * Error handling:
- * - Node errors are caught and pushed to the dead letter queue with
- *   a pre-execution state snapshot, then re-thrown so the caller can
- *   decide recovery strategy.
+ * - Node errors are caught, pushed to the dead letter queue with
+ *   a pre-execution state snapshot, then re-thrown.
  * - Router errors (from conditional edges) are treated the same way.
  *
  * @module runtime/graph
@@ -24,6 +21,7 @@ import type {
     GraphContext,
     GraphRunResult,
     GraphSnapshot,
+    GraphStepResult,
     GraphDeadLetter,
     GraphEngineConfig,
     GraphEnd,
@@ -45,6 +43,8 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
     private readonly graph: IGraph<TState>;
     private readonly maxSteps: number;
     private readonly tracer: ITracer;
+    private readonly onBeforeNode?: GraphEngineConfig['onBeforeNode'];
+    private readonly onAfterNode?: GraphEngineConfig['onAfterNode'];
 
     constructor(graph: IGraph<TState>, config?: GraphEngineConfig) {
         if (!graph) {
@@ -53,6 +53,8 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         this.graph = graph;
         this.maxSteps = config?.maxSteps ?? 100;
         this.tracer = config?.tracer ?? noopTracer;
+        this.onBeforeNode = config?.onBeforeNode;
+        this.onAfterNode = config?.onAfterNode;
 
         if (this.maxSteps < 1) {
             throw new Error(`StateGraphEngine: maxSteps must be ≥ 1, got ${this.maxSteps}.`);
@@ -62,6 +64,81 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
     /** Read-only view of the dead letter queue. */
     get deadLetterQueue(): readonly GraphDeadLetter<TState>[] {
         return this._deadLetterQueue;
+    }
+
+    /**
+     * Execute a single node. The caller manages the execution loop.
+     *
+     * State is mutated in place — the caller is responsible for cloning
+     * if isolation is needed. A deep-clone snapshot is still taken for
+     * the returned GraphStepResult and DLQ.
+     */
+    async step(state: TState, nodeId: string, stepCount: number = 0): Promise<GraphStepResult<TState>> {
+        if (stepCount >= this.maxSteps) {
+            throw new Error(
+                `Max steps (${this.maxSteps}) exceeded at node '${nodeId}'. Possible infinite loop.`,
+            );
+        }
+
+        const node = this.graph.getNode(nodeId);
+        if (!node) {
+            throw new Error(
+                `Node '${nodeId}' not found in graph (step ${stepCount}). ` +
+                'This likely means a conditional edge returned an invalid node ID.',
+            );
+        }
+
+        // Snapshot state before execution (for DLQ on failure)
+        const preSnapshot = structuredClone(state);
+
+        const context: GraphContext<TState> = Object.freeze({
+            nodeId,
+            stepCount,
+            tracer: this.tracer,
+        });
+
+        // Before-hook
+        await this.onBeforeNode?.(nodeId, state, stepCount);
+
+        try {
+            await node.process(state, context);
+        } catch (error) {
+            this.recordError(nodeId, error as Error, preSnapshot, stepCount);
+            throw error;
+        }
+
+        // After-hook
+        await this.onAfterNode?.(nodeId, state, stepCount);
+
+        // Snapshot state after successful execution
+        const snapshot: GraphSnapshot<TState> = Object.freeze({
+            nodeId,
+            state: structuredClone(state),
+            timestamp: Date.now(),
+        });
+
+        this.tracer.trace({
+            correlationId: 'graph',
+            type: 'graph.step',
+            timestamp: Date.now(),
+            data: { nodeId, step: stepCount },
+        });
+
+        // Resolve next node (router errors are caught separately)
+        let nextNodeId: string | GraphEnd;
+        try {
+            nextNodeId = this.resolveNext(nodeId, state);
+        } catch (error) {
+            this.recordError(nodeId, error as Error, structuredClone(state), stepCount);
+            throw error;
+        }
+
+        return Object.freeze({
+            executedNodeId: nodeId,
+            nextNodeId,
+            snapshot,
+            done: nextNodeId === END,
+        });
     }
 
     async run(initialState: TState): Promise<GraphRunResult<TState>> {
@@ -79,59 +156,10 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         let steps = 0;
 
         while (currentNodeId !== END) {
-            if (steps >= this.maxSteps) {
-                throw new Error(
-                    `Max steps (${this.maxSteps}) exceeded at node '${currentNodeId}'. Possible infinite loop.`,
-                );
-            }
-
-            const node = this.graph.getNode(currentNodeId);
-            if (!node) {
-                throw new Error(
-                    `Node '${currentNodeId}' not found in graph (step ${steps}). ` +
-                    'This likely means a conditional edge returned an invalid node ID.',
-                );
-            }
-
-            // Snapshot state before execution (for DLQ on failure)
-            const preSnapshot = structuredClone(state);
-
-            const context: GraphContext<TState> = Object.freeze({
-                nodeId: currentNodeId,
-                stepCount: steps,
-                tracer: this.tracer,
-            });
-
-            try {
-                await node.process(state, context);
-            } catch (error) {
-                this.recordError(currentNodeId, error as Error, preSnapshot, steps);
-                throw error;
-            }
-
+            const result = await this.step(state, currentNodeId as string, steps);
+            snapshots.push(result.snapshot);
+            currentNodeId = result.nextNodeId;
             steps++;
-
-            // Snapshot state after successful execution
-            snapshots.push(Object.freeze({
-                nodeId: currentNodeId,
-                state: structuredClone(state),
-                timestamp: Date.now(),
-            }));
-
-            this.tracer.trace({
-                simulationId: 'graph',
-                type: 'graph.step',
-                timestamp: Date.now(),
-                data: { nodeId: currentNodeId, step: steps },
-            });
-
-            // Resolve next node (router errors are caught separately)
-            try {
-                currentNodeId = this.resolveNext(currentNodeId, state);
-            } catch (error) {
-                this.recordError(currentNodeId, error as Error, structuredClone(state), steps);
-                throw error;
-            }
         }
 
         return Object.freeze({ state, snapshots: Object.freeze(snapshots), steps });
@@ -172,7 +200,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         step: number,
     ): void {
         this.tracer.trace({
-            simulationId: 'graph',
+            correlationId: 'graph',
             type: 'graph.error',
             timestamp: Date.now(),
             data: {

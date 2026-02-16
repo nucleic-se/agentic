@@ -20,9 +20,9 @@ export class InMemoryTracer implements ITracer {
         }
     }
 
-    recent(simulationId: string, limit: number): TraceEvent[] {
+    recent(correlationId: string, limit: number): TraceEvent[] {
         return this.events
-            .filter(e => e.simulationId === simulationId)
+            .filter(e => e.correlationId === correlationId)
             .slice(-limit)
             .reverse();
     }

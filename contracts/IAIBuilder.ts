@@ -10,7 +10,7 @@ import { z } from 'zod';
 export interface IAIPromptBuilder {
     system(message: string): IAIPromptBuilder;
     user(message: string): IAIPromptBuilder;
-    schema(schema: any): IAIPromptBuilder;
+    schema(schema: Record<string, unknown>): IAIPromptBuilder;
     run<T = string>(): Promise<T>;
 }
 

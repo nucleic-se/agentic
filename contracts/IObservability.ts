@@ -7,17 +7,17 @@
  */
 
 export interface TraceEvent {
-    simulationId: string;
+    /** Grouping key — correlates related events (e.g. a graph run, a session). */
+    correlationId: string;
     type: string;
-    tick?: number;
     timestamp: number;
     data: Record<string, unknown>;
 }
 
 export interface ITracer {
-    /** Emit a structured trace event */
+    /** Emit a structured trace event. */
     trace(event: TraceEvent): void;
 
-    /** Query recent trace events (most recent first) */
-    recent(simulationId: string, limit: number): TraceEvent[];
+    /** Query recent trace events (most recent first). */
+    recent(correlationId: string, limit: number): TraceEvent[];
 }

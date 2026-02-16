@@ -19,6 +19,7 @@ export type {
     GraphRunResult,
     GraphDeadLetter,
     GraphEngineConfig,
+    GraphStepResult,
     IGraphEngine,
     IGraphBuilder,
 } from './IGraphEngine.js';

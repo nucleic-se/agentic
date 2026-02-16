@@ -163,6 +163,22 @@ export interface GraphEngineConfig {
     maxSteps?: number;
     /** Tracer instance for structured observability. */
     tracer?: ITracer;
+    /** Called before a node executes. */
+    onBeforeNode?: (nodeId: string, state: Readonly<GraphState>, stepCount: number) => void | Promise<void>;
+    /** Called after a node executes successfully. */
+    onAfterNode?: (nodeId: string, state: Readonly<GraphState>, stepCount: number) => void | Promise<void>;
+}
+
+/** Result of a single step execution. */
+export interface GraphStepResult<TState> {
+    /** The node that was executed. */
+    readonly executedNodeId: string;
+    /** ID of the next node to execute, or END if the graph is done. */
+    readonly nextNodeId: string | GraphEnd;
+    /** Snapshot taken after the node executed. */
+    readonly snapshot: GraphSnapshot<TState>;
+    /** Whether the graph has terminated (nextNodeId === END). */
+    readonly done: boolean;
 }
 
 /**
@@ -174,6 +190,21 @@ export interface GraphEngineConfig {
 export interface IGraphEngine<TState extends GraphState = GraphState> {
     /** Run the graph from its entry node with the given initial state. */
     run(initialState: TState): Promise<GraphRunResult<TState>>;
+
+    /**
+     * Execute a single node.
+     *
+     * The caller manages the execution loop — useful for interleaving
+     * graph execution with external work (e.g. one-node-per-tick).
+     *
+     * State is mutated in place (no clone). The caller is responsible
+     * for cloning if isolation is needed.
+     *
+     * @param state     Mutable state object.
+     * @param nodeId    The node to execute.
+     * @param stepCount Steps completed so far (for context and maxSteps).
+     */
+    step(state: TState, nodeId: string, stepCount?: number): Promise<GraphStepResult<TState>>;
 
     /** Errors captured during execution — survives across multiple runs. */
     readonly deadLetterQueue: readonly GraphDeadLetter<TState>[];

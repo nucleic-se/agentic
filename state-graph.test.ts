@@ -17,7 +17,7 @@ import {
     InMemoryTracer,
 } from './index.js';
 import { END } from './contracts/index.js';
-import type { IGraphNode, GraphContext, ILLMProvider, LLMRequest } from './index.js';
+import type { IGraphNode, GraphContext, ILLMProvider, LLMRequest, GraphStepResult } from './index.js';
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -948,5 +948,273 @@ describe('Builder Guards', () => {
             .addNode(new CallbackGraphNode<CounterState>('orphan', async () => {}))
             .setEntry('a');
         expect(() => builder.build()).toThrow('unreachable');
+    });
+});
+
+// ── step() API ─────────────────────────────────────────────────
+
+describe('step() — single node execution', () => {
+    it('executes one node and returns cursor to next', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }));
+        graph.addNode(new CallbackGraphNode<CounterState>('b', async (s) => { s.count++; }));
+        graph.addEdge('a', 'b');
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 0, log: [] };
+        const result = await engine.step(state, 'a', 0);
+
+        expect(result.executedNodeId).toBe('a');
+        expect(result.nextNodeId).toBe('b');
+        expect(result.done).toBe(false);
+        expect(state.count).toBe(1); // mutated in place
+    });
+
+    it('returns done:true when next is END', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('last', async (s) => { s.count = 42; }));
+        graph.addEdge('last', END);
+        graph.setEntry('last');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 0, log: [] };
+        const result = await engine.step(state, 'last', 0);
+
+        expect(result.done).toBe(true);
+        expect(result.nextNodeId).toBe(END);
+        expect(state.count).toBe(42);
+    });
+
+    it('returns done:true on implicit END (no outbound edge)', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('only', async (s) => { s.count = 7; }));
+        graph.setEntry('only');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 0, log: [] };
+        const result = await engine.step(state, 'only', 0);
+
+        expect(result.done).toBe(true);
+    });
+
+    it('mutates state in place (no clone)', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('mutate', async (s) => { s.count = 999; }));
+        graph.setEntry('mutate');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 0, log: [] };
+        await engine.step(state, 'mutate');
+
+        expect(state.count).toBe(999); // same object mutated
+    });
+
+    it('caller can loop step() to completion', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.log.push('a'); }));
+        graph.addNode(new CallbackGraphNode<CounterState>('b', async (s) => { s.log.push('b'); }));
+        graph.addNode(new CallbackGraphNode<CounterState>('c', async (s) => { s.log.push('c'); }));
+        graph.addEdge('a', 'b');
+        graph.addEdge('b', 'c');
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 0, log: [] };
+        let nodeId: string = 'a';
+        let steps = 0;
+
+        while (true) {
+            const result = await engine.step(state, nodeId, steps);
+            steps++;
+            if (result.done) break;
+            nodeId = result.nextNodeId as string;
+        }
+
+        expect(state.log).toEqual(['a', 'b', 'c']);
+        expect(steps).toBe(3);
+    });
+
+    it('follows conditional edges', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('gate', async () => {}));
+        graph.addNode(new CallbackGraphNode<CounterState>('high', async () => {}));
+        graph.addNode(new CallbackGraphNode<CounterState>('low', async () => {}));
+        graph.addConditionalEdge('gate', (s) => s.count > 5 ? 'high' : 'low');
+        graph.setEntry('gate');
+
+        const engine = new StateGraphEngine(graph);
+
+        const r1 = await engine.step({ count: 10, log: [] }, 'gate');
+        expect(r1.nextNodeId).toBe('high');
+
+        const r2 = await engine.step({ count: 1, log: [] }, 'gate');
+        expect(r2.nextNodeId).toBe('low');
+    });
+
+    it('enforces maxSteps', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('loop', async (s) => { s.count++; }));
+        graph.addEdge('loop', 'loop');
+        graph.setEntry('loop');
+
+        const engine = new StateGraphEngine(graph, { maxSteps: 3 });
+        await expect(engine.step({ count: 0, log: [] }, 'loop', 3)).rejects.toThrow('Max steps (3) exceeded');
+    });
+
+    it('adds node errors to DLQ', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('fail', async () => { throw new Error('step-boom'); }));
+        graph.setEntry('fail');
+
+        const engine = new StateGraphEngine(graph);
+        await expect(engine.step({ count: 0, log: [] }, 'fail')).rejects.toThrow('step-boom');
+        expect(engine.deadLetterQueue).toHaveLength(1);
+        expect(engine.deadLetterQueue[0].nodeId).toBe('fail');
+    });
+
+    it('snapshot contains deep-cloned post-execution state', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('inc', async (s) => { s.count = 42; }));
+        graph.setEntry('inc');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 0, log: [] };
+        const result = await engine.step(state, 'inc');
+
+        expect(result.snapshot.state.count).toBe(42);
+        // Snapshot is a clone, not same reference
+        state.count = 999;
+        expect(result.snapshot.state.count).toBe(42);
+    });
+
+    it('run() produces same result as manual step() loop', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; s.log.push('a'); }));
+        graph.addNode(new CallbackGraphNode<CounterState>('b', async (s) => { s.count++; s.log.push('b'); }));
+        graph.addEdge('a', 'b');
+        graph.setEntry('a');
+
+        // run()
+        const engine1 = new StateGraphEngine(graph);
+        const runResult = await engine1.run({ count: 0, log: [] });
+
+        // step() loop
+        const engine2 = new StateGraphEngine(graph);
+        const state: CounterState = { count: 0, log: [] };
+        let nodeId: string = 'a';
+        let steps = 0;
+        while (true) {
+            const r = await engine2.step(state, nodeId, steps);
+            steps++;
+            if (r.done) break;
+            nodeId = r.nextNodeId as string;
+        }
+
+        expect(state.count).toBe(runResult.state.count);
+        expect(state.log).toEqual(runResult.state.log);
+        expect(steps).toBe(runResult.steps);
+    });
+
+    it('stepCount defaults to 0', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('check', async (_s, ctx) => {
+            expect(ctx.stepCount).toBe(0);
+        }));
+        graph.setEntry('check');
+
+        const engine = new StateGraphEngine(graph);
+        await engine.step({ count: 0, log: [] }, 'check');
+    });
+});
+
+// ── Execution Hooks ────────────────────────────────────────────
+
+describe('Execution Hooks', () => {
+    it('onBeforeNode fires before node executes', async () => {
+        const log: string[] = [];
+        const engine = new StateGraphBuilder<CounterState>()
+            .addNode(new CallbackGraphNode<CounterState>('a', async (s) => {
+                log.push(`exec:${s.count}`);
+                s.count++;
+            }))
+            .setEntry('a')
+            .build({
+                onBeforeNode: (nodeId, state, step) => {
+                    log.push(`before:${nodeId}:${(state as CounterState).count}:${step}`);
+                },
+            });
+
+        await engine.run({ count: 0, log: [] });
+        expect(log).toEqual(['before:a:0:0', 'exec:0']);
+    });
+
+    it('onAfterNode fires after node executes', async () => {
+        const log: string[] = [];
+        const engine = new StateGraphBuilder<CounterState>()
+            .addNode(new CallbackGraphNode<CounterState>('a', async (s) => {
+                s.count = 42;
+                log.push('exec');
+            }))
+            .setEntry('a')
+            .build({
+                onAfterNode: (nodeId, state, step) => {
+                    log.push(`after:${nodeId}:${(state as CounterState).count}:${step}`);
+                },
+            });
+
+        await engine.run({ count: 0, log: [] });
+        expect(log).toEqual(['exec', 'after:a:42:0']);
+    });
+
+    it('hooks fire on every node in a chain', async () => {
+        const hookLog: string[] = [];
+        const engine = new StateGraphBuilder<CounterState>()
+            .addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }))
+            .addNode(new CallbackGraphNode<CounterState>('b', async (s) => { s.count++; }))
+            .setEntry('a')
+            .addEdge('a', 'b')
+            .build({
+                onBeforeNode: (id) => { hookLog.push(`before:${id}`); },
+                onAfterNode: (id) => { hookLog.push(`after:${id}`); },
+            });
+
+        await engine.run({ count: 0, log: [] });
+        expect(hookLog).toEqual(['before:a', 'after:a', 'before:b', 'after:b']);
+    });
+
+    it('hooks work with step() too', async () => {
+        const hookLog: string[] = [];
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('x', async (s) => { s.count++; }));
+        graph.setEntry('x');
+
+        const engine = new StateGraphEngine(graph, {
+            onBeforeNode: (id) => { hookLog.push(`before:${id}`); },
+            onAfterNode: (id) => { hookLog.push(`after:${id}`); },
+        });
+
+        await engine.step({ count: 0, log: [] }, 'x');
+        expect(hookLog).toEqual(['before:x', 'after:x']);
+    });
+
+    it('async hooks are awaited', async () => {
+        const log: string[] = [];
+        const engine = new StateGraphBuilder<CounterState>()
+            .addNode(new CallbackGraphNode<CounterState>('a', async () => { log.push('exec'); }))
+            .setEntry('a')
+            .build({
+                onBeforeNode: async () => {
+                    await new Promise(r => setTimeout(r, 10));
+                    log.push('async-before');
+                },
+                onAfterNode: async () => {
+                    await new Promise(r => setTimeout(r, 10));
+                    log.push('async-after');
+                },
+            });
+
+        await engine.run({ count: 0, log: [] });
+        expect(log).toEqual(['async-before', 'exec', 'async-after']);
     });
 });

@@ -5,10 +5,11 @@
  * Supports structured output (JSON Schema) and embeddings.
  */
 
-export interface LLMRequest<T = any> {
+export interface LLMRequest<T = unknown> {
     instructions: string;
     text: string;
-    schema: any; // JSON Schema definition
+    /** JSON Schema definition for structured output. */
+    schema?: Record<string, unknown>;
     model?: string;
     temperature?: number;
 }

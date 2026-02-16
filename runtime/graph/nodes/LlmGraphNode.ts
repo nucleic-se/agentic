@@ -34,7 +34,7 @@ export interface LlmGraphNodeConfig<TState extends GraphState> {
     /** State key to write the LLM output to. */
     outputKey: keyof TState & string;
     /** Optional JSON Schema for structured output. */
-    schema?: unknown;
+    schema?: Record<string, unknown>;
     /** Optional model override. */
     model?: string;
     /** Optional temperature override (0–2). */

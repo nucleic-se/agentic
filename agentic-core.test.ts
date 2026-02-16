@@ -159,9 +159,9 @@ describe('TickPipeline', () => {
 describe('InMemoryTracer', () => {
     it('traces and queries recent events', () => {
         const tracer = new InMemoryTracer(100);
-        tracer.trace({ simulationId: 's1', type: 'test', timestamp: 1, data: { a: 1 } });
-        tracer.trace({ simulationId: 's1', type: 'test', timestamp: 2, data: { a: 2 } });
-        tracer.trace({ simulationId: 's2', type: 'test', timestamp: 3, data: {} });
+        tracer.trace({ correlationId: 's1', type: 'test', timestamp: 1, data: { a: 1 } });
+        tracer.trace({ correlationId: 's1', type: 'test', timestamp: 2, data: { a: 2 } });
+        tracer.trace({ correlationId: 's2', type: 'test', timestamp: 3, data: {} });
 
         const recent = tracer.recent('s1', 10);
         expect(recent).toHaveLength(2);
@@ -170,9 +170,9 @@ describe('InMemoryTracer', () => {
 
     it('ring buffer drops oldest', () => {
         const tracer = new InMemoryTracer(2);
-        tracer.trace({ simulationId: 's1', type: 'a', timestamp: 1, data: {} });
-        tracer.trace({ simulationId: 's1', type: 'b', timestamp: 2, data: {} });
-        tracer.trace({ simulationId: 's1', type: 'c', timestamp: 3, data: {} });
+        tracer.trace({ correlationId: 's1', type: 'a', timestamp: 1, data: {} });
+        tracer.trace({ correlationId: 's1', type: 'b', timestamp: 2, data: {} });
+        tracer.trace({ correlationId: 's1', type: 'c', timestamp: 3, data: {} });
 
         const recent = tracer.recent('s1', 10);
         expect(recent).toHaveLength(2);
