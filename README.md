@@ -23,6 +23,14 @@ import {
   TickPipeline,
   CapabilityRegistry,
   estimateTokens,
+  // Agentic patterns
+  createReActAgent,
+  createPlanExecuteAgent,
+  createReflectionAgent,
+  createRAGAgent,
+  createChainOfThoughtAgent,
+  createSupervisorAgent,
+  createHumanInLoopAgent,
 } from '@nucleic/agentic';
 import type { GraphStepResult } from '@nucleic/agentic';
 ```
@@ -37,6 +45,7 @@ import type { GraphStepResult } from '@nucleic/agentic';
 | **AI Builders** | Fluent prompt builder + chainable pipeline with retry/validation |
 | **LLM Provider** | Abstract interface for any language model backend |
 | **State Graph** | Directed graph engine for LLM agent workflows with shared state, step-by-step execution, and hooks |
+| **Patterns** | Pre-built agentic patterns (ReAct, Plan-Execute, Reflection, RAG, Chain-of-Thought, Supervisor-Worker, Human-in-Loop) |
 | **Pack System** | Manifest-based capability registration with dependency validation |
 | **Migration Orchestrator** | Run ordered data migrations across packs |
 | **Tracer** | Lightweight structured event tracing with ring buffer |
@@ -637,6 +646,275 @@ class MyCustomNode<TState extends GraphState> implements IGraphNode<TState> {
   }
 }
 ```
+
+## Agentic Design Patterns
+
+Pre-built, composable graph patterns for common agent workflows. Each pattern is a factory function that returns a configured `IGraphEngine`. Use as-is or customize by forking the source.
+
+Patterns are **composable** — use `SubGraphNode` to nest them arbitrarily deep. For example, build a "Research Paper Writer" that uses ReAct for research, Reflection for writing, and a Supervisor pattern to coordinate.
+
+### Available Patterns
+
+| Pattern | Purpose |
+|---------|---------|
+| **ReAct** | Reason → Act → Observe loop with tool execution |
+| **Plan-Execute** | Create a plan, execute steps, optionally replan |
+| **Reflection** | Iterative self-critique and refinement loop |
+| **RAG** | Retrieve relevant docs, generate grounded answer |
+| **Chain-of-Thought** | Decompose problem into reasoning steps |
+| **Supervisor-Worker** | Coordinate multiple specialized sub-agents |
+| **Human-in-the-Loop** | Incorporate human feedback at decision points |
+
+### ReAct Pattern
+
+Alternates between reasoning about the next action and executing it using tools, with observations informing future reasoning.
+
+```ts
+import { createReActAgent } from '@nucleic/agentic';
+
+const agent = createReActAgent({
+  llm: myLlm,
+  tools: {
+    search: async (query) => {
+      // Your search implementation
+      return `Results for: ${query}`;
+    },
+    calculate: async (expr) => {
+      return eval(expr).toString();
+    },
+  },
+  maxIterations: 5,
+});
+
+const result = await agent.run({
+  goal: 'What is 15% of 240, and who won the 2024 election?',
+  thought: '', action: '', actionInput: '', observation: '',
+  answer: '', iteration: 0,
+});
+
+console.log(result.state.answer);
+```
+
+### Plan-Execute Pattern
+
+Creates a comprehensive plan, executes steps sequentially, optionally reviews progress and replans.
+
+```ts
+import { createPlanExecuteAgent } from '@nucleic/agentic';
+
+const agent = createPlanExecuteAgent({
+  llm: myLlm,
+  executor: async (step, context) => {
+    // Execute the step using previous results as context
+    console.log('Executing:', step);
+    console.log('Previous results:', context.previousResults);
+    return `Completed: ${step}`;
+  },
+  enableReview: true, // Review after each step
+});
+
+const result = await agent.run({
+  objective: 'Research and write a blog post about quantum computing',
+  plan: [], currentStep: 0, results: [],
+  review: '', shouldReplan: false,
+});
+```
+
+### Reflection Pattern
+
+Generates output, critiques it, and refines iteratively until quality threshold is met.
+
+```ts
+import { createReflectionAgent } from '@nucleic/agentic';
+
+const agent = createReflectionAgent({
+  llm: myLlm,
+  qualityThreshold: 8,  // 0-10 scale
+  maxRounds: 3,
+  keepHistory: true,    // Save all drafts
+});
+
+const result = await agent.run({
+  task: 'Write a haiku about recursion',
+  draft: '', critique: '', quality: 0, iteration: 0,
+});
+
+console.log(result.state.draft);    // Final refined output
+console.log(result.state.history);  // All previous drafts
+```
+
+### RAG Pattern
+
+Retrieves relevant documents, optionally re-ranks them, then generates an answer grounded in the context.
+
+```ts
+import { createRAGAgent } from '@nucleic/agentic';
+
+const agent = createRAGAgent({
+  llm: myLlm,
+  retriever: async (query) => {
+    // Your vector DB search
+    return await vectorDB.search(query, 5);
+  },
+  topK: 5,
+  enableReranking: true,   // Use LLM to rerank by relevance
+  includeCitations: true,  // Add source references
+});
+
+const result = await agent.run({
+  query: 'What is quantum entanglement?',
+  documents: [], answer: '',
+});
+
+console.log(result.state.answer);
+console.log(result.state.citations);
+```
+
+### Chain-of-Thought Pattern
+
+Decomposes complex problems into intermediate reasoning steps before synthesizing a final answer.
+
+```ts
+import { createChainOfThoughtAgent } from '@nucleic/agentic';
+
+const agent = createChainOfThoughtAgent({
+  llm: myLlm,
+  maxSteps: 5,
+});
+
+const result = await agent.run({
+  problem: 'If Alice has 3 apples and Bob has twice as many, how many total?',
+  steps: [], currentStep: 0, stepReasoning: [], answer: '',
+});
+
+console.log(result.state.stepReasoning);  // Each reasoning step
+console.log(result.state.answer);         // Final synthesis
+```
+
+### Supervisor-Worker Pattern
+
+A supervisor agent coordinates multiple specialized worker agents (each with their own graph), delegating tasks and aggregating results.
+
+```ts
+import { createSupervisorAgent, createReActAgent } from '@nucleic/agentic';
+import type { WorkerAgent } from '@nucleic/agentic';
+
+// Create specialized workers
+const researcher: WorkerAgent<any> = {
+  id: 'researcher',
+  capability: 'Research and gather information',
+  engine: createReActAgent({
+    llm: myLlm,
+    tools: { search: searchTool },
+    maxIterations: 3,
+  }),
+  input: (parent) => ({
+    goal: parent.task,
+    // Map supervisor state → worker state
+  }),
+  output: (worker, parent) => {
+    // Map worker result → supervisor state
+    parent.workerResults['researcher'] = worker.answer;
+  },
+};
+
+const writer: WorkerAgent<any> = {
+  id: 'writer',
+  capability: 'Write and compose content',
+  engine: createReflectionAgent({
+    llm: myLlm,
+    qualityThreshold: 8,
+  }),
+  input: (parent) => ({
+    task: `Write about: ${parent.workerResults['researcher']}`,
+  }),
+  output: (worker, parent) => {
+    parent.workerResults['writer'] = worker.draft;
+  },
+};
+
+const supervisor = createSupervisorAgent({
+  llm: myLlm,
+  workers: [researcher, writer],
+});
+
+const result = await supervisor.run({
+  task: 'Create a comprehensive guide on quantum computing',
+  nextWorker: '', workerResults: {}, result: '', iteration: 0,
+});
+```
+
+### Human-in-the-Loop Pattern
+
+Requests human feedback at decision points, refining output until approved.
+
+```ts
+import { createHumanInLoopAgent } from '@nucleic/agentic';
+
+const agent = createHumanInLoopAgent({
+  llm: myLlm,
+  requestHumanInput: async (prompt) => {
+    // Show prompt to user and wait for response
+    return await getUserInput(prompt);
+  },
+  maxIterations: 3,
+  autoApprove: false,  // Require explicit approval
+});
+
+const result = await agent.run({
+  task: 'Draft an email to the team about the new policy',
+  proposal: '', humanFeedback: '', approved: false,
+  result: '', iteration: 0,
+});
+```
+
+### Composing Patterns with SubGraphNode
+
+Patterns are just graph engines — nest them using `SubGraphNode`:
+
+```ts
+import { StateGraphBuilder, SubGraphNode } from '@nucleic/agentic';
+import { createReActAgent, createReflectionAgent } from '@nucleic/agentic';
+
+// Build sub-agents
+const researchAgent = createReActAgent({ llm, tools, maxIterations: 3 });
+const writingAgent = createReflectionAgent({ llm, qualityThreshold: 8 });
+
+// Compose into larger workflow
+const workflow = new StateGraphBuilder<MyState>()
+  .addNode(new SubGraphNode({
+    id: 'research',
+    engine: researchAgent,
+    input: (parent) => ({ goal: parent.topic, /* ... */ }),
+    output: (sub, parent) => { parent.researchData = sub.answer; },
+  }))
+  .addNode(new SubGraphNode({
+    id: 'write',
+    engine: writingAgent,
+    input: (parent) => ({ task: parent.researchData, /* ... */ }),
+    output: (sub, parent) => { parent.finalDraft = sub.draft; },
+  }))
+  .setEntry('research')
+  .addEdge('research', 'write')
+  .build();
+```
+
+### Customizing Patterns
+
+Fork and modify any pattern to fit your needs:
+
+```ts
+// Start with a pattern as a base
+import { createReActAgent } from '@nucleic/agentic';
+import { LlmGraphNode, CallbackGraphNode } from '@nucleic/agentic';
+
+// Or build from scratch using the same building blocks
+const customAgent = new StateGraphBuilder<MyState>()
+  .addNode(/* your custom nodes */)
+  .build();
+```
+
+All patterns use the same primitives: `LlmGraphNode`, `CallbackGraphNode`, `SubGraphNode`, and conditional routing. Read the [source code](./patterns/) for examples.
 
 ## Pack System
 

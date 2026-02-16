@@ -76,5 +76,40 @@ export type { LlmGraphNodeConfig, SubGraphNodeConfig } from './runtime/index.js'
 
 export type { MigrationState } from './runtime/index.js';
 
+// ── Patterns ───────────────────────────────────────────────────
+export {
+    createReActAgent,
+    createPlanExecuteAgent,
+    createReflectionAgent,
+    createRAGAgent,
+    createChainOfThoughtAgent,
+    createSupervisorAgent,
+    createHumanInLoopAgent,
+} from './patterns/index.js';
+
+export type {
+    PatternConfig,
+    PatternFactory,
+    ToolFunction,
+    ToolRegistry,
+    RetrieverFunction,
+    HumanInputFunction,
+    ReActState,
+    ReActConfig,
+    PlanExecuteState,
+    PlanExecuteConfig,
+    ReflectionState,
+    ReflectionConfig,
+    RAGState,
+    RAGConfig,
+    ChainOfThoughtState,
+    ChainOfThoughtConfig,
+    SupervisorState,
+    SupervisorWorkerConfig,
+    WorkerAgent,
+    HumanInLoopState,
+    HumanInLoopConfig,
+} from './patterns/index.js';
+
 // ── Utilities ──────────────────────────────────────────────────
 export { estimateTokens } from './utils.js';
