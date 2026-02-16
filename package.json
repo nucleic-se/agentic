@@ -1,5 +1,5 @@
 {
-  "name": "@nucleic/agentic-core",
+  "name": "@nucleic/agentic",
   "version": "0.1.0",
   "description": "Domain-agnostic agentic toolbox — reusable primitives for prompt composition, tick pipelines, LLM abstraction, capability/pack management, migration orchestration, and tracing.",
   "license": "ISC",

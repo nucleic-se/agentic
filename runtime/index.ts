@@ -1,5 +1,5 @@
 /**
- * agentic-core runtime barrel.
+ * @nucleic/agentic runtime barrel.
  */
 
 export { PromptEngine } from './PromptEngine.js';

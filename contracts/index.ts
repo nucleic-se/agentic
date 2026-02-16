@@ -1,5 +1,5 @@
 /**
- * agentic-core contracts barrel.
+ * @nucleic/agentic contracts barrel.
  *
  * Re-exports all domain-agnostic contracts from one place.
  */

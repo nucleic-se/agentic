@@ -1,5 +1,5 @@
 /**
- * agentic-core library tests.
+ * @nucleic/agentic library tests.
  *
  * Standalone tests for the generic primitives extracted from Aquarium.
  * These tests don't depend on Aquarium, Container, or any domain code.

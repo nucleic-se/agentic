@@ -1,5 +1,5 @@
 /**
- * agentic-core — domain-agnostic agentic toolbox.
+ * @nucleic/agentic — domain-agnostic agentic toolbox.
  *
  * Reusable primitives for prompt composition, tick pipelines,
  * pack/capability management, migration orchestration, and tracing.

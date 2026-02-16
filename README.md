@@ -1,4 +1,4 @@
-# agentic-core
+# @nucleic/agentic
 
 Domain-agnostic primitives for building agentic AI systems. Provides composable prompt assembly, step-based execution pipelines, capability/pack management, fluent LLM builders, migration orchestration, and structured tracing.
 
@@ -7,7 +7,7 @@ Zero domain opinions. Extend via TypeScript generics. One dependency (`zod`, for
 ## Install
 
 ```bash
-npm install agentic-core
+npm install @nucleic/agentic
 ```
 
 ## Quick Start
@@ -19,7 +19,7 @@ import {
   TickPipeline,
   CapabilityRegistry,
   estimateTokens,
-} from 'agentic-core';
+} from '@nucleic/agentic';
 ```
 
 ## Modules
@@ -47,8 +47,8 @@ Composes a prompt from multiple `PromptSection` objects within a token budget.
 Sticky sections are always included. Non-sticky sections are ranked by score (descending), then by `id` for deterministic tie-breaking. Sections are added until the budget is exhausted.
 
 ```ts
-import { PromptEngine } from 'agentic-core';
-import type { PromptSection } from 'agentic-core';
+import { PromptEngine } from '@nucleic/agentic';
+import type { PromptSection } from '@nucleic/agentic';
 
 const engine = new PromptEngine();
 
@@ -94,8 +94,8 @@ console.log(result.excluded);      // sections trimmed by budget
 A plugin system where each contributor produces `PromptSection[]` from a shared context. Register contributors, then collect all sections to feed into the Prompt Engine.
 
 ```ts
-import { PromptContributorRegistry } from 'agentic-core';
-import type { IPromptContributor, PromptContributionContext } from 'agentic-core';
+import { PromptContributorRegistry } from '@nucleic/agentic';
+import type { IPromptContributor, PromptContributionContext } from '@nucleic/agentic';
 
 // Define your domain context
 interface MyContext extends PromptContributionContext {
@@ -133,8 +133,8 @@ const allSections = await Promise.all(
 Ordered step-based execution pipeline. Each step has an `id`, an `order` (lower runs first), and an async `execute` method. Extend `TickContext` with domain-specific fields via generics.
 
 ```ts
-import { TickPipeline } from 'agentic-core';
-import type { TickContext, ITickStep } from 'agentic-core';
+import { TickPipeline } from '@nucleic/agentic';
+import type { TickContext, ITickStep } from '@nucleic/agentic';
 
 // Extend context for your domain
 interface GameContext extends TickContext {
@@ -179,7 +179,7 @@ await pipeline.run('sim-1', {
 Abstract interface for language model backends. Implement once for your provider (Ollama, OpenAI, Anthropic, etc.), then use it everywhere.
 
 ```ts
-import type { ILLMProvider, LLMRequest } from 'agentic-core';
+import type { ILLMProvider, LLMRequest } from '@nucleic/agentic';
 
 class MyLLMProvider implements ILLMProvider {
   async process<T>(request: LLMRequest<T>): Promise<T> {
@@ -211,7 +211,7 @@ class MyLLMProvider implements ILLMProvider {
 Build and execute LLM prompts with a chainable API. Takes an `ILLMProvider` directly — no DI container required.
 
 ```ts
-import { AIPromptService } from 'agentic-core';
+import { AIPromptService } from '@nucleic/agentic';
 
 const llm = new MyLLMProvider();
 const ai = new AIPromptService(llm);
@@ -291,8 +291,8 @@ Pipeline methods:
 Capability packs declare what they provide and require via manifests. The registry validates dependency graphs and resolves topological boot order.
 
 ```ts
-import { CapabilityRegistry } from 'agentic-core';
-import type { IPackManifest } from 'agentic-core';
+import { CapabilityRegistry } from '@nucleic/agentic';
+import type { IPackManifest } from '@nucleic/agentic';
 
 const registry = new CapabilityRegistry();
 
@@ -330,7 +330,7 @@ const bootOrder = registry.resolveBootOrder(['db-pack', 'app-pack']);
 Packs can implement `IPackBootstrap` to hook into the startup lifecycle:
 
 ```ts
-import type { IPackBootstrap, PackBootstrapContext } from 'agentic-core';
+import type { IPackBootstrap, PackBootstrapContext } from '@nucleic/agentic';
 
 const bootstrap: IPackBootstrap = {
   register(container, ctx) {
@@ -350,7 +350,7 @@ Runs pack migrations in dependency order, tracking which have been applied.
 import {
   MigrationOrchestrator,
   InMemoryMigrationState,
-} from 'agentic-core';
+} from '@nucleic/agentic';
 
 const state = new InMemoryMigrationState(); // or implement MigrationState for persistence
 const orchestrator = new MigrationOrchestrator(state, myDatabase);
@@ -364,7 +364,7 @@ const applied = await orchestrator.migrate(bootOrder);
 Lightweight structured event tracing with a ring buffer.
 
 ```ts
-import { InMemoryTracer } from 'agentic-core';
+import { InMemoryTracer } from '@nucleic/agentic';
 
 const tracer = new InMemoryTracer(5000); // max 5000 events
 
@@ -382,7 +382,7 @@ const recent = tracer.recent('sim-1', 10); // 10 most recent, newest first
 ## Utilities
 
 ```ts
-import { estimateTokens } from 'agentic-core';
+import { estimateTokens } from '@nucleic/agentic';
 
 estimateTokens('hello world'); // → 3  (~4 chars per token)
 ```
@@ -392,8 +392,8 @@ estimateTokens('hello world'); // → 3  (~4 chars per token)
 All core interfaces use TypeScript generics with sensible defaults. This means you can use them as-is for simple cases, or bind them to domain-specific types for full type safety.
 
 ```ts
-import type { TickContext, ITickStep, ITickPipeline } from 'agentic-core';
-import { TickPipeline } from 'agentic-core';
+import type { TickContext, ITickStep, ITickPipeline } from '@nucleic/agentic';
+import { TickPipeline } from '@nucleic/agentic';
 
 // Your domain extends the base context
 interface MyContext extends TickContext {
@@ -420,7 +420,7 @@ The same pattern applies to `IPromptContributor<MyContext>` and `IPromptContribu
 ## Architecture
 
 ```
-agentic-core/
+agentic/
 ├── contracts/           # Pure interfaces — no runtime code
 │   ├── IAIBuilder.ts        # IAIPromptBuilder, IAIPromptService, IAIPipeline
 │   ├── ICapabilityRegistry.ts
