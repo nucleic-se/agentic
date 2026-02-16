@@ -11,3 +11,8 @@ export { MigrationOrchestrator, InMemoryMigrationState } from './MigrationOrches
 export type { MigrationState } from './MigrationOrchestrator.js';
 export { AIPromptService, AIPromptBuilder } from './AIPromptService.js';
 export { AIPipeline } from './AIPipeline.js';
+export { StateGraph } from './graph/index.js';
+export { StateGraphEngine } from './graph/index.js';
+export { StateGraphBuilder } from './graph/index.js';
+export { CallbackGraphNode, LlmGraphNode, SubGraphNode } from './graph/index.js';
+export type { LlmGraphNodeConfig, SubGraphNodeConfig } from './graph/index.js';

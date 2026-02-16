@@ -60,3 +60,20 @@ export type {
     IAIPipeline,
     PipelineOptions,
 } from './IAIBuilder.js';
+
+// State graph engine
+export { END } from './graph/index.js';
+export type {
+    GraphState,
+    GraphEnd,
+    IGraphNode,
+    GraphContext,
+    RouterFn,
+    IGraph,
+    GraphSnapshot,
+    GraphRunResult,
+    GraphDeadLetter,
+    GraphEngineConfig,
+    IGraphEngine,
+    IGraphBuilder,
+} from './graph/index.js';

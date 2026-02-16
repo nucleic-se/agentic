@@ -35,7 +35,21 @@ export type {
     IAIPromptService,
     IAIPipeline,
     PipelineOptions,
+    GraphState,
+    GraphEnd,
+    IGraphNode,
+    GraphContext,
+    RouterFn,
+    IGraph,
+    GraphSnapshot,
+    GraphRunResult,
+    GraphDeadLetter,
+    GraphEngineConfig,
+    IGraphEngine,
+    IGraphBuilder,
 } from './contracts/index.js';
+
+export { END } from './contracts/index.js';
 
 // ── Runtimes ───────────────────────────────────────────────────
 export {
@@ -49,7 +63,15 @@ export {
     AIPromptService,
     AIPromptBuilder,
     AIPipeline,
+    StateGraph,
+    StateGraphEngine,
+    StateGraphBuilder,
+    CallbackGraphNode,
+    LlmGraphNode,
+    SubGraphNode,
 } from './runtime/index.js';
+
+export type { LlmGraphNodeConfig, SubGraphNodeConfig } from './runtime/index.js';
 
 export type { MigrationState } from './runtime/index.js';
 
