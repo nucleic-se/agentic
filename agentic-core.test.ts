@@ -134,14 +134,14 @@ describe('TickPipeline', () => {
         pipeline.registerStep(stepA);
         pipeline.registerStep(stepB);
 
-        await pipeline.run('sim1', { simulationId: 'sim1', tick: 1, stepState: {} });
+        await pipeline.run('sim1', { correlationId: 'sim1', tick: 1, stepState: {} });
         expect(log).toEqual(['b', 'a']); // order 10 before 20
     });
 
     it('throws on empty pipeline', async () => {
         const pipeline = new TickPipeline();
         await expect(
-            pipeline.run('sim1', { simulationId: 'sim1', tick: 1, stepState: {} })
+            pipeline.run('sim1', { correlationId: 'sim1', tick: 1, stepState: {} })
         ).rejects.toThrow('No tick steps registered');
     });
 

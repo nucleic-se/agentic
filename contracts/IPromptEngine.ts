@@ -7,6 +7,19 @@
 
 export type PromptSectionTag = string;
 
+/**
+ * Structural position in the assembled prompt.
+ * Sections are grouped by phase (in the order below),
+ * then ranked by score within each phase.
+ */
+export type PromptSectionPhase =
+    | 'constraint'    // system rules, safety — always first, always sticky
+    | 'task'          // current objective framing
+    | 'memory'        // retrieved memory items
+    | 'tools'         // tool catalog / available actions
+    | 'history'       // conversation or event history
+    | 'user';         // current user message — always last
+
 export interface PromptSection {
     /** Unique section identifier */
     id: string;
@@ -34,6 +47,14 @@ export interface PromptSection {
      * Defaults to 1.0 when omitted.
      */
     contextMultiplier?: number;
+
+    /**
+     * Structural position in the assembled prompt.
+     * Sections are grouped by phase (in the order above),
+     * then ranked by score within each phase.
+     * Defaults to 'task' when omitted for backward compatibility.
+     */
+    phase?: PromptSectionPhase;
 }
 
 export interface PromptComposeResult {

@@ -8,8 +8,7 @@
 import type { ITickPipeline, ITickStep, TickContext } from '../contracts/index.js';
 
 export class TickPipeline<TContext extends TickContext = TickContext>
-    implements ITickPipeline<TContext>
-{
+    implements ITickPipeline<TContext> {
     private steps = new Map<string, ITickStep<TContext>>();
 
     registerStep(step: ITickStep<TContext>): void {
@@ -24,10 +23,10 @@ export class TickPipeline<TContext extends TickContext = TickContext>
         return Array.from(this.steps.values()).sort((a, b) => a.order - b.order);
     }
 
-    async run(simulationId: string, context: TContext): Promise<void> {
+    async run(correlationId: string, context: TContext): Promise<void> {
         const ordered = this.listSteps();
         if (ordered.length === 0) {
-            throw new Error(`No tick steps registered for simulation "${simulationId}". Pipeline cannot run empty.`);
+            throw new Error(`No tick steps registered for simulation "${correlationId}". Pipeline cannot run empty.`);
         }
 
         for (const step of ordered) {

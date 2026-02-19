@@ -9,7 +9,7 @@
  */
 
 export interface TickContext {
-    simulationId: string;
+    correlationId: string;
     tick: number;
     /** Arbitrary per-step state bag for the current tick */
     stepState: Record<string, unknown>;
@@ -37,5 +37,5 @@ export interface ITickPipeline<TContext extends TickContext = TickContext> {
     listSteps(): ITickStep<TContext>[];
 
     /** Execute all steps in order for the given simulation tick */
-    run(simulationId: string, context: TContext): Promise<void>;
+    run(correlationId: string, context: TContext): Promise<void>;
 }

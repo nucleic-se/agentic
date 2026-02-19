@@ -8,6 +8,7 @@
 export type {
     PromptSection,
     PromptSectionTag,
+    PromptSectionPhase,
     PromptComposeResult,
     IPromptEngine,
     PromptContributionContext,
@@ -26,6 +27,8 @@ export type {
 export type {
     TraceEvent,
     ITracer,
+    TraceSpan,
+    ISpanTracer,
 } from './IObservability.js';
 
 // Pack manifest
@@ -47,6 +50,34 @@ export type {
     PackValidationError,
 } from './ICapabilityRegistry.js';
 
+// Shared types
+export type { JsonSchema } from './shared.js';
+
+// Typed tool system
+export type {
+    ToolTrustTier,
+    RetryPolicy,
+    RateLimit,
+    ITool,
+    ToolResult,
+    IToolRegistry,
+} from './ITool.js';
+
+// Memory system
+export type {
+    MemoryType,
+    MemoryItem,
+    MemoryQuery,
+    IMemoryStore,
+    IMemoryWriteValidator,
+} from './IMemory.js';
+
+// Tool prompt rendering
+export type { IToolPromptRenderer } from './IToolPromptRenderer.js';
+
+// Context assembly
+export type { AssemblyInput, IContextAssembler } from './IContextAssembler.js';
+
 // LLM provider
 export type {
     ILLMProvider,
@@ -66,13 +97,19 @@ export { END } from './graph/index.js';
 export type {
     GraphState,
     GraphEnd,
+    NodeRetryPolicy,
     IGraphNode,
     GraphContext,
     RouterFn,
+    AsyncRouterFn,
+    ParallelMergeFn,
+    ParallelEdge,
     IGraph,
     GraphSnapshot,
     GraphRunResult,
+    GraphCheckpoint,
     GraphDeadLetter,
+    OrchestratorLimits,
     GraphEngineConfig,
     GraphStepResult,
     IGraphEngine,

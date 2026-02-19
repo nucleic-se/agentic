@@ -17,6 +17,9 @@ import type {
     IGraph,
     IGraphNode,
     RouterFn,
+    AsyncRouterFn,
+    ParallelMergeFn,
+    ParallelEdge,
     GraphEnd,
     GraphState,
 } from '../../contracts/graph/index.js';
@@ -27,7 +30,8 @@ export class StateGraph<TState extends GraphState = GraphState>
 {
     private readonly nodes = new Map<string, IGraphNode<TState>>();
     private readonly staticEdges = new Map<string, string | GraphEnd>();
-    private readonly conditionalEdges = new Map<string, RouterFn<TState>>();
+    private readonly conditionalEdges = new Map<string, RouterFn<TState> | AsyncRouterFn<TState>>();
+    private readonly parallelEdges = new Map<string, ParallelEdge<TState>>();
     private entryNodeId?: string;
 
     // ── Mutation API ───────────────────────────────────────────
@@ -51,7 +55,7 @@ export class StateGraph<TState extends GraphState = GraphState>
         this.staticEdges.set(from, to);
     }
 
-    addConditionalEdge(from: string, router: RouterFn<TState>): void {
+    addConditionalEdge(from: string, router: RouterFn<TState> | AsyncRouterFn<TState>): void {
         this.validateNodeId(from, 'addConditionalEdge');
         this.assertNodeExists(from, 'addConditionalEdge');
         if (typeof router !== 'function') {
@@ -67,6 +71,32 @@ export class StateGraph<TState extends GraphState = GraphState>
         this.entryNodeId = nodeId;
     }
 
+    addParallelEdge(
+        from: string,
+        targets: string[],
+        merge: ParallelMergeFn<TState>,
+        then: string | GraphEnd,
+    ): void {
+        this.validateNodeId(from, 'addParallelEdge');
+        this.assertNodeExists(from, 'addParallelEdge');
+        if (!Array.isArray(targets) || targets.length < 2) {
+            throw new Error('addParallelEdge: targets must contain at least 2 nodes.');
+        }
+        for (const t of targets) {
+            this.validateNodeId(t, 'addParallelEdge (target)');
+            this.assertNodeExists(t, 'addParallelEdge (target)');
+        }
+        if (typeof merge !== 'function') {
+            throw new Error('addParallelEdge: merge must be a function.');
+        }
+        if (then !== END) {
+            this.validateNodeId(then, 'addParallelEdge (then)');
+            this.assertNodeExists(then, 'addParallelEdge (then)');
+        }
+        this.assertNoExistingEdge(from);
+        this.parallelEdges.set(from, { targets, merge, then });
+    }
+
     // ── Query API ──────────────────────────────────────────────
 
     getNode(id: string): IGraphNode<TState> | undefined {
@@ -77,8 +107,12 @@ export class StateGraph<TState extends GraphState = GraphState>
         return this.staticEdges.get(from);
     }
 
-    getConditionalEdge(from: string): RouterFn<TState> | undefined {
+    getConditionalEdge(from: string): RouterFn<TState> | AsyncRouterFn<TState> | undefined {
         return this.conditionalEdges.get(from);
+    }
+
+    getParallelEdge(from: string): ParallelEdge<TState> | undefined {
+        return this.parallelEdges.get(from);
     }
 
     getEntryNodeId(): string | undefined {
@@ -146,7 +180,7 @@ export class StateGraph<TState extends GraphState = GraphState>
     }
 
     private assertNoExistingEdge(from: string): void {
-        if (this.staticEdges.has(from) || this.conditionalEdges.has(from)) {
+        if (this.staticEdges.has(from) || this.conditionalEdges.has(from) || this.parallelEdges.has(from)) {
             throw new Error(`Node '${from}' already has an outbound edge. Each node may have at most one.`);
         }
     }
@@ -180,6 +214,19 @@ export class StateGraph<TState extends GraphState = GraphState>
                     if (!visited.has(nodeId)) {
                         queue.push(nodeId);
                     }
+                }
+            }
+
+            // Parallel edge targets and then-node
+            const parallel = this.parallelEdges.get(current);
+            if (parallel) {
+                for (const t of parallel.targets) {
+                    if (!visited.has(t)) {
+                        queue.push(t);
+                    }
+                }
+                if (parallel.then !== END && !visited.has(parallel.then)) {
+                    queue.push(parallel.then);
                 }
             }
         }

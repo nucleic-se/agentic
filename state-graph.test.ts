@@ -245,7 +245,7 @@ describe('StateGraphEngine', () => {
         graph.addEdge('a', 'b');
         graph.setEntry('a');
 
-        const engine = new StateGraphEngine(graph, { tracer });
+        const engine = new StateGraphEngine(graph, { tracer, correlationId: 'graph' });
         await engine.run({ count: 0, log: [] });
 
         const events = tracer.recent('graph', 10);
@@ -392,7 +392,7 @@ describe('Error Handling', () => {
         }));
         graph.setEntry('faulty');
 
-        const engine = new StateGraphEngine(graph, { tracer });
+        const engine = new StateGraphEngine(graph, { tracer, correlationId: 'graph' });
         await expect(engine.run({ count: 0, log: [] })).rejects.toThrow();
 
         const events = tracer.recent('graph', 10);
@@ -433,7 +433,7 @@ describe('StateGraphBuilder', () => {
         const engine = new StateGraphBuilder<CounterState>()
             .addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }))
             .setEntry('a')
-            .build({ maxSteps: 50, tracer });
+            .build({ maxSteps: 50, tracer, correlationId: 'graph' });
 
         await engine.run({ count: 0, log: [] });
         expect(tracer.recent('graph', 10)).toHaveLength(1);

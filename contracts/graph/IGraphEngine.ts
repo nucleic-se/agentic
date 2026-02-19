@@ -28,6 +28,16 @@ export type GraphEnd = typeof END;
 
 // ── Node ───────────────────────────────────────────────────────
 
+/** Retry policy for a graph node. */
+export interface NodeRetryPolicy {
+    maxRetries: number;
+    initialDelayMs: number;
+    /** Multiplier applied to delay after each retry. Default: 2.0. */
+    backoffMultiplier?: number;
+    /** Only retry on these error types (matched by error.name). Default: all. */
+    retryOn?: string[];
+}
+
 /**
  * A unit of work in the graph. Reads and mutates shared state.
  *
@@ -39,6 +49,12 @@ export type GraphEnd = typeof END;
 export interface IGraphNode<TState extends GraphState = GraphState> {
     /** Unique identifier. Must be non-empty and unique within a graph. */
     readonly id: string;
+
+    /** Optional retry policy — retries with backoff before routing to DLQ. */
+    readonly retryPolicy?: NodeRetryPolicy;
+
+    /** Optional timeout in ms — abort node execution if exceeded. */
+    readonly timeoutMs?: number;
 
     /**
      * Execute this node's logic.
@@ -63,6 +79,9 @@ export interface GraphContext<TState extends GraphState = GraphState> {
 
     /** Tracer for structured observability. */
     readonly tracer: ITracer;
+
+    /** Correlation ID propagated from engine config. */
+    readonly correlationId: string;
 }
 
 // ── Edges ──────────────────────────────────────────────────────
@@ -76,6 +95,13 @@ export interface GraphContext<TState extends GraphState = GraphState> {
  */
 export type RouterFn<TState extends GraphState = GraphState> =
     (state: Readonly<TState>) => string | GraphEnd;
+
+/**
+ * Async variant for routing decisions that require I/O
+ * (database lookups, lightweight LLM calls, external service checks).
+ */
+export type AsyncRouterFn<TState extends GraphState = GraphState> =
+    (state: Readonly<TState>) => Promise<string | GraphEnd>;
 
 // ── Graph (structure) ──────────────────────────────────────────
 
@@ -96,7 +122,7 @@ export interface IGraph<TState extends GraphState = GraphState> {
     addEdge(from: string, to: string | GraphEnd): void;
 
     /** Add a conditional edge — router function decides the target at runtime. */
-    addConditionalEdge(from: string, router: RouterFn<TState>): void;
+    addConditionalEdge(from: string, router: RouterFn<TState> | AsyncRouterFn<TState>): void;
 
     /** Designate the entry point. Must reference an existing node. */
     setEntry(nodeId: string): void;
@@ -108,10 +134,30 @@ export interface IGraph<TState extends GraphState = GraphState> {
     getStaticEdge(from: string): string | GraphEnd | undefined;
 
     /** Get the conditional edge router for a node, or undefined. */
-    getConditionalEdge(from: string): RouterFn<TState> | undefined;
+    getConditionalEdge(from: string): RouterFn<TState> | AsyncRouterFn<TState> | undefined;
 
     /** Get the entry node ID, or undefined if not set. */
     getEntryNodeId(): string | undefined;
+
+    /**
+     * Add a parallel edge that fans out to multiple nodes.
+     * All targets execute concurrently; results are merged into state
+     * using the provided merge function before the graph continues.
+     *
+     * @param from    Source node
+     * @param targets Nodes to execute in parallel
+     * @param merge   Merge concurrent state mutations into a single state
+     * @param then    Node to execute after merge (or END)
+     */
+    addParallelEdge(
+        from: string,
+        targets: string[],
+        merge: ParallelMergeFn<TState>,
+        then: string | GraphEnd,
+    ): void;
+
+    /** Get the parallel edge descriptor for a node, or undefined. */
+    getParallelEdge(from: string): ParallelEdge<TState> | undefined;
 
     /** List all registered nodes (insertion order). */
     getNodes(): IGraphNode<TState>[];
@@ -157,12 +203,57 @@ export interface GraphDeadLetter<TState = unknown> {
     readonly timestamp: number;
 }
 
+// ── Checkpoint ─────────────────────────────────────────────────
+
+/** Serialisable snapshot of graph execution state for resume. */
+export interface GraphCheckpoint<TState> {
+    readonly checkpointId: string;
+    readonly correlationId: string;
+    readonly currentNodeId: string;
+    readonly stepCount: number;
+    readonly state: TState;
+    readonly timestamp: number;
+}
+
+// ── Parallel Edge ──────────────────────────────────────────────
+
+/**
+ * Merge function for parallel edge execution.
+ * Receives the array of states produced by each parallel branch
+ * and returns a single merged state.
+ */
+export type ParallelMergeFn<TState extends GraphState = GraphState> =
+    (states: TState[]) => TState;
+
+/** Descriptor stored for a parallel edge. */
+export interface ParallelEdge<TState extends GraphState = GraphState> {
+    readonly targets: string[];
+    readonly merge: ParallelMergeFn<TState>;
+    readonly then: string | GraphEnd;
+}
+
+// ── Limits ─────────────────────────────────────────────────────
+
+/** Hard limits enforced across an entire graph run. */
+export interface OrchestratorLimits {
+    /** Max total tool executions across the entire run. */
+    maxToolCalls?: number;
+    /** Max total wall-clock ms for the entire run. */
+    maxTotalMs?: number;
+    /** Max total LLM tokens across all LlmGraphNode calls in the run. */
+    maxTotalTokens?: number;
+}
+
 /** Configuration for the graph engine. */
 export interface GraphEngineConfig {
     /** Maximum node executions before aborting (cycle safety). Default: 100. */
     maxSteps?: number;
     /** Tracer instance for structured observability. */
     tracer?: ITracer;
+    /** Correlation ID for all trace events emitted during this engine's runs. Defaults to a random UUID. */
+    correlationId?: string;
+    /** Hard limits for the entire run (tools, time, tokens). */
+    limits?: OrchestratorLimits;
     /** Called before a node executes. */
     onBeforeNode?: (nodeId: string, state: Readonly<GraphState>, stepCount: number) => void | Promise<void>;
     /** Called after a node executes successfully. */
@@ -206,6 +297,12 @@ export interface IGraphEngine<TState extends GraphState = GraphState> {
      */
     step(state: TState, nodeId: string, stepCount?: number): Promise<GraphStepResult<TState>>;
 
+    /** Capture current execution state as a serialisable checkpoint. */
+    checkpoint(state: TState, currentNodeId: string, stepCount: number): GraphCheckpoint<TState>;
+
+    /** Resume execution from a previously captured checkpoint. */
+    resume(checkpoint: GraphCheckpoint<TState>): Promise<GraphRunResult<TState>>;
+
     /** Errors captured during execution — survives across multiple runs. */
     readonly deadLetterQueue: readonly GraphDeadLetter<TState>[];
 }
@@ -216,7 +313,13 @@ export interface IGraphEngine<TState extends GraphState = GraphState> {
 export interface IGraphBuilder<TState extends GraphState = GraphState> {
     addNode(node: IGraphNode<TState>): IGraphBuilder<TState>;
     addEdge(from: string, to: string | GraphEnd): IGraphBuilder<TState>;
-    addConditionalEdge(from: string, router: RouterFn<TState>): IGraphBuilder<TState>;
+    addConditionalEdge(from: string, router: RouterFn<TState> | AsyncRouterFn<TState>): IGraphBuilder<TState>;
+    addParallelEdge(
+        from: string,
+        targets: string[],
+        merge: ParallelMergeFn<TState>,
+        then: string | GraphEnd,
+    ): IGraphBuilder<TState>;
     setEntry(nodeId: string): IGraphBuilder<TState>;
 
     /**

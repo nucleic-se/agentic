@@ -25,6 +25,8 @@ import type {
     IGraphNode,
     IGraphEngine,
     RouterFn,
+    AsyncRouterFn,
+    ParallelMergeFn,
     GraphEnd,
     GraphEngineConfig,
     GraphState,
@@ -50,9 +52,20 @@ export class StateGraphBuilder<TState extends GraphState = GraphState>
         return this;
     }
 
-    addConditionalEdge(from: string, router: RouterFn<TState>): StateGraphBuilder<TState> {
+    addConditionalEdge(from: string, router: RouterFn<TState> | AsyncRouterFn<TState>): StateGraphBuilder<TState> {
         this.assertNotBuilt();
         this.graph.addConditionalEdge(from, router);
+        return this;
+    }
+
+    addParallelEdge(
+        from: string,
+        targets: string[],
+        merge: ParallelMergeFn<TState>,
+        then: string | GraphEnd,
+    ): StateGraphBuilder<TState> {
+        this.assertNotBuilt();
+        this.graph.addParallelEdge(from, targets, merge, then);
         return this;
     }
 
