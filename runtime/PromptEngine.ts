@@ -23,6 +23,11 @@ export class PromptEngine implements IPromptEngine {
             return { text: '', included: [], excluded: [], totalTokens: 0 };
         }
 
+        // Pre-compute scores once — used in phase-group sorting and the final sort.
+        const scoreMap = new Map<string, number>(
+            sections.map(s => [s.id, s.priority * s.weight * (s.contextMultiplier ?? 1)]),
+        );
+
         const sticky = sections.filter(s => s.sticky);
         const nonSticky = sections.filter(s => !s.sticky);
 
@@ -34,7 +39,7 @@ export class PromptEngine implements IPromptEngine {
 
         for (const s of nonSticky) {
             const phase: PromptSectionPhase = s.phase ?? 'task';
-            const score = s.priority * s.weight * (s.contextMultiplier ?? 1);
+            const score = scoreMap.get(s.id)!;
             const group = phaseGroups.get(phase);
             if (group) {
                 group.push({ section: s, score });
@@ -84,13 +89,15 @@ export class PromptEngine implements IPromptEngine {
             const bSticky = stickySet.has(b.id) ? 1 : 0;
             // Sticky sections first
             if (aSticky !== bSticky) return bSticky - aSticky;
-            // Then by phase order
-            const aPhase = PHASE_ORDER.indexOf(a.phase ?? 'task');
-            const bPhase = PHASE_ORDER.indexOf(b.phase ?? 'task');
+            // Normalize unknown phases to 'task' for stable ordering
+            const normPhase = (p: string | undefined): PromptSectionPhase =>
+                (p && PHASE_ORDER.includes(p as PromptSectionPhase)) ? p as PromptSectionPhase : 'task';
+            const aPhase = PHASE_ORDER.indexOf(normPhase(a.phase));
+            const bPhase = PHASE_ORDER.indexOf(normPhase(b.phase));
             if (aPhase !== bPhase) return aPhase - bPhase;
             // Then by score desc within phase
-            const aScore = a.priority * a.weight * (a.contextMultiplier ?? 1);
-            const bScore = b.priority * b.weight * (b.contextMultiplier ?? 1);
+            const aScore = scoreMap.get(a.id) ?? 0;
+            const bScore = scoreMap.get(b.id) ?? 0;
             if (bScore !== aScore) return bScore - aScore;
             return a.id.localeCompare(b.id);
         });

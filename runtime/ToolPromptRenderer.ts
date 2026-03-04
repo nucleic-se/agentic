@@ -24,6 +24,9 @@ const TIER_PRIORITY: Record<ToolTrustTier, number> = {
     untrusted: 4,
 };
 
+/** Canonical rendering order: most-trusted first, untrusted last. */
+const TIER_ORDER: ToolTrustTier[] = ['trusted', 'standard', 'untrusted'];
+
 export class ToolPromptRenderer implements IToolPromptRenderer {
     render(results: ToolResult[]): PromptSection[] {
         // Group by trust tier
@@ -37,7 +40,11 @@ export class ToolPromptRenderer implements IToolPromptRenderer {
 
         const sections: PromptSection[] = [];
 
-        for (const [tier, tierResults] of groups) {
+        // Iterate in canonical order (trusted → standard → untrusted) regardless
+        // of the order results were supplied, to ensure deterministic output.
+        for (const tier of TIER_ORDER) {
+            const tierResults = groups.get(tier);
+            if (!tierResults) continue;
             const label = TIER_LABELS[tier];
             const lines = [label, ''];
 
@@ -65,7 +72,11 @@ export class ToolPromptRenderer implements IToolPromptRenderer {
                 estimatedTokens: estimateTokens(text),
                 text: () => text,
                 tags: ['tool-results', tier],
-                sticky: tier === 'trusted',
+                // trusted sections have the highest priority — they survive budget
+                // trimming relative to lower-tier sections — but are not sticky
+                // (unconditionally included) so the engine can still trim them when
+                // the budget is genuinely exhausted.
+                sticky: false,
                 phase: 'tools',
             });
         }

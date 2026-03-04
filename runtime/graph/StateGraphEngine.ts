@@ -18,6 +18,7 @@
 import type {
     IGraph,
     IGraphEngine,
+    IGraphNode,
     GraphContext,
     GraphRunResult,
     GraphSnapshot,
@@ -30,7 +31,7 @@ import type {
     GraphState,
 } from '../../contracts/graph/index.js';
 import { END } from '../../contracts/graph/index.js';
-import type { ITracer } from '../../contracts/IObservability.js';
+import type { ITracer, ISpanTracer } from '../../contracts/IObservability.js';
 import { randomUUID } from 'node:crypto';
 
 /** Minimal no-op tracer used when none is supplied. */
@@ -38,6 +39,11 @@ const noopTracer: ITracer = {
     trace() {},
     recent() { return []; },
 };
+
+/** Returns true when `tracer` also implements the span-tracing extension. */
+function isSpanTracer(tracer: ITracer): tracer is ISpanTracer {
+    return typeof (tracer as unknown as ISpanTracer).startSpan === 'function';
+}
 
 export class StateGraphEngine<TState extends GraphState = GraphState>
     implements IGraphEngine<TState>
@@ -50,6 +56,12 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
     private readonly limits?: OrchestratorLimits;
     private readonly onBeforeNode?: GraphEngineConfig['onBeforeNode'];
     private readonly onAfterNode?: GraphEngineConfig['onAfterNode'];
+
+    // Per-run accumulators — reset at the start of each run() / resume().
+    private _toolCallCount = 0;
+    private _tokenCount = 0;
+    /** Span ID of the root span opened by the current run(). Undefined outside a run. */
+    private _activeRootSpanId: string | undefined = undefined;
 
     constructor(graph: IGraph<TState>, config?: GraphEngineConfig) {
         if (!graph) {
@@ -103,62 +115,42 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             stepCount,
             tracer: this.tracer,
             correlationId: this.correlationId,
+            reportToolCall: (count = 1) => { this._toolCallCount += count; },
+            reportTokens: (count: number) => { this._tokenCount += count; },
         });
+
+        // Open a child span if the tracer supports it.
+        let nodeSpanId: string | undefined;
+        if (isSpanTracer(this.tracer)) {
+            nodeSpanId = this.tracer.startSpan({
+                correlationId: this.correlationId,
+                parentSpanId: this._activeRootSpanId,
+                type: `node.${nodeId}`,
+                startTime: Date.now(),
+                metadata: { nodeId, stepCount },
+            });
+        }
 
         // Before-hook
         await this.onBeforeNode?.(nodeId, state, stepCount);
 
-        // Execute with retry policy if configured
-        const retryPolicy = node.retryPolicy;
-        const maxAttempts = retryPolicy ? retryPolicy.maxRetries + 1 : 1;
-        let lastError: Error | undefined;
-
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            // Restore state from pre-snapshot on retry (undo partial mutations)
-            if (attempt > 0) {
-                Object.assign(state, structuredClone(preSnapshot));
+        try {
+            await this.executeWithRetryAndTimeout(node, state, context, preSnapshot);
+        } catch (error) {
+            if (nodeSpanId && isSpanTracer(this.tracer)) {
+                this.tracer.endSpan(nodeSpanId, 'error', (error as Error).message);
             }
-
-            try {
-                // Execute with optional timeout
-                if (node.timeoutMs != null && node.timeoutMs > 0) {
-                    await Promise.race([
-                        node.process(state, context),
-                        new Promise<never>((_, reject) =>
-                            setTimeout(() => reject(new Error(`Node '${nodeId}' timed out after ${node.timeoutMs}ms`)), node.timeoutMs),
-                        ),
-                    ]);
-                } else {
-                    await node.process(state, context);
-                }
-                lastError = undefined;
-                break; // Success
-            } catch (error) {
-                lastError = error as Error;
-
-                // Check if this error type is retryable
-                if (retryPolicy?.retryOn && retryPolicy.retryOn.length > 0) {
-                    if (!retryPolicy.retryOn.includes(lastError.name)) {
-                        break; // Not a retryable error type
-                    }
-                }
-
-                // If we have more attempts, wait with backoff
-                if (attempt < maxAttempts - 1) {
-                    const multiplier = retryPolicy?.backoffMultiplier ?? 2.0;
-                    const delay = (retryPolicy?.initialDelayMs ?? 100) * Math.pow(multiplier, attempt);
-                    await new Promise(r => setTimeout(r, delay));
-                }
-            }
-        }
-
-        if (lastError) {
-            this.recordError(nodeId, lastError, preSnapshot, stepCount);
-            throw lastError;
+            this.recordError(nodeId, error as Error, preSnapshot, stepCount);
+            throw error;
         }
 
         // After-hook
         await this.onAfterNode?.(nodeId, state, stepCount);
+
+        // Close the node span.
+        if (nodeSpanId && isSpanTracer(this.tracer)) {
+            this.tracer.endSpan(nodeSpanId, 'ok');
+        }
 
         // Snapshot state after successful execution
         const snapshot: GraphSnapshot<TState> = Object.freeze({
@@ -206,21 +198,62 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         let steps = 0;
         const startTime = Date.now();
 
-        while (currentNodeId !== END) {
-            // Enforce wall-clock limit
-            if (this.limits?.maxTotalMs != null) {
-                const elapsed = Date.now() - startTime;
-                if (elapsed >= this.limits.maxTotalMs) {
+        // Reset per-run accumulators.
+        this._toolCallCount = 0;
+        this._tokenCount = 0;
+
+        // Open a root span if the tracer supports it.
+        if (isSpanTracer(this.tracer)) {
+            this._activeRootSpanId = this.tracer.startSpan({
+                correlationId: this.correlationId,
+                type: 'graph-run',
+                startTime: Date.now(),
+                metadata: { entryId },
+            });
+        }
+
+        try {
+            while (currentNodeId !== END) {
+                // Enforce wall-clock limit
+                if (this.limits?.maxTotalMs != null) {
+                    const elapsed = Date.now() - startTime;
+                    if (elapsed >= this.limits.maxTotalMs) {
+                        throw new Error(
+                            `Orchestrator limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
+                        );
+                    }
+                }
+
+                // Enforce tool-call limit.
+                if (this.limits?.maxToolCalls != null && this._toolCallCount >= this.limits.maxToolCalls) {
                     throw new Error(
-                        `Orchestrator limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
+                        `Orchestrator limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
                     );
                 }
-            }
 
-            const result = await this.step(state, currentNodeId as string, steps);
-            snapshots.push(result.snapshot);
-            currentNodeId = result.nextNodeId;
-            steps++;
+                // Enforce token limit.
+                if (this.limits?.maxTotalTokens != null && this._tokenCount >= this.limits.maxTotalTokens) {
+                    throw new Error(
+                        `Orchestrator limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
+                    );
+                }
+
+                const result = await this.step(state, currentNodeId as string, steps);
+                snapshots.push(result.snapshot);
+                currentNodeId = result.nextNodeId;
+                steps++;
+            }
+        } catch (error) {
+            if (this._activeRootSpanId && isSpanTracer(this.tracer)) {
+                this.tracer.endSpan(this._activeRootSpanId, 'error', (error as Error).message);
+                this._activeRootSpanId = undefined;
+            }
+            throw error;
+        }
+
+        if (this._activeRootSpanId && isSpanTracer(this.tracer)) {
+            this.tracer.endSpan(this._activeRootSpanId, 'ok');
+            this._activeRootSpanId = undefined;
         }
 
         return Object.freeze({ state, snapshots: Object.freeze(snapshots), steps });
@@ -250,10 +283,16 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             throw new Error(`Resume failed: node '${cp.currentNodeId}' not found in graph.`);
         }
 
+        // Reset per-run accumulators. Resume always gets a fresh budget.
+        this._toolCallCount = 0;
+        this._tokenCount = 0;
+
         const state = structuredClone(cp.state);
         const snapshots: GraphSnapshot<TState>[] = [];
         let currentNodeId: string | GraphEnd = cp.currentNodeId;
-        let steps = cp.stepCount;
+        // Step counter starts from 0 so the resumed run gets a full maxSteps
+        // budget, independent of how many steps ran before the checkpoint.
+        let steps = 0;
         const startTime = Date.now();
 
         while (currentNodeId !== END) {
@@ -264,6 +303,18 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                         `Orchestrator limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
                     );
                 }
+            }
+
+            if (this.limits?.maxToolCalls != null && this._toolCallCount >= this.limits.maxToolCalls) {
+                throw new Error(
+                    `Orchestrator limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
+                );
+            }
+
+            if (this.limits?.maxTotalTokens != null && this._tokenCount >= this.limits.maxTotalTokens) {
+                throw new Error(
+                    `Orchestrator limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
+                );
             }
 
             const result = await this.step(state, currentNodeId as string, steps);
@@ -290,17 +341,22 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             const branchStates = await Promise.all(
                 parallel.targets.map(async (targetId) => {
                     const branchState = structuredClone(state);
+                    const node = this.graph.getNode(targetId);
+                    if (!node) {
+                        throw new Error(`Parallel target node '${targetId}' not found.`);
+                    }
                     const context: GraphContext<TState> = Object.freeze({
                         nodeId: targetId,
                         stepCount: -1, // parallel branches don't count as top-level steps
                         tracer: this.tracer,
                         correlationId: this.correlationId,
+                        reportToolCall: (count = 1) => { this._toolCallCount += count; },
+                        reportTokens: (count: number) => { this._tokenCount += count; },
                     });
-                    const node = this.graph.getNode(targetId);
-                    if (!node) {
-                        throw new Error(`Parallel target node '${targetId}' not found.`);
-                    }
-                    await node.process(branchState, context);
+                    // Fire hooks and use the same retry+timeout logic as sequential nodes.
+                    await this.onBeforeNode?.(targetId, branchState, -1);
+                    await this.executeWithRetryAndTimeout(node, branchState, context, branchState);
+                    await this.onAfterNode?.(targetId, branchState, -1);
                     return branchState;
                 }),
             );
@@ -327,6 +383,66 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
 
         // No outbound edge = implicit END
         return END;
+    }
+
+    /**
+     * Execute a node with its retry policy and timeout, restoring state
+     * from `preSnapshot` between retry attempts to undo partial mutations.
+     *
+     * Throws the last error if all attempts fail. Does NOT record to DLQ —
+     * that responsibility stays with the caller.
+     */
+    private async executeWithRetryAndTimeout(
+        node: IGraphNode<TState>,
+        state: TState,
+        context: GraphContext<TState>,
+        preSnapshot: TState,
+    ): Promise<void> {
+        const retryPolicy = node.retryPolicy;
+        const maxAttempts = retryPolicy ? retryPolicy.maxRetries + 1 : 1;
+        let lastError: Error | undefined;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            // Restore state from pre-snapshot on retry to undo partial mutations.
+            if (attempt > 0) {
+                Object.assign(state, structuredClone(preSnapshot));
+            }
+
+            try {
+                if (node.timeoutMs != null && node.timeoutMs > 0) {
+                    await Promise.race([
+                        node.process(state, context),
+                        new Promise<never>((_, reject) =>
+                            setTimeout(
+                                () => reject(new Error(`Node '${node.id}' timed out after ${node.timeoutMs}ms`)),
+                                node.timeoutMs,
+                            ),
+                        ),
+                    ]);
+                } else {
+                    await node.process(state, context);
+                }
+                return; // success
+            } catch (error) {
+                lastError = error as Error;
+
+                // Stop retrying if this error type is not in the allow-list.
+                if (retryPolicy?.retryOn && retryPolicy.retryOn.length > 0) {
+                    if (!retryPolicy.retryOn.includes(lastError.name)) {
+                        break;
+                    }
+                }
+
+                // Backoff before the next attempt.
+                if (attempt < maxAttempts - 1) {
+                    const multiplier = retryPolicy?.backoffMultiplier ?? 2.0;
+                    const delay = (retryPolicy?.initialDelayMs ?? 100) * Math.pow(multiplier, attempt);
+                    await new Promise(r => setTimeout(r, delay));
+                }
+            }
+        }
+
+        throw lastError;
     }
 
     /** Record an error in the DLQ and emit a trace event. */

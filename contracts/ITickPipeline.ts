@@ -11,8 +11,8 @@
 export interface TickContext {
     correlationId: string;
     tick: number;
-    /** Arbitrary per-step state bag for the current tick */
-    stepState: Record<string, unknown>;
+    /** Arbitrary per-step state bag for the current tick. Domain subtypes narrow this. */
+    stepState: object;
 }
 
 export interface ITickStep<TContext extends TickContext = TickContext> {

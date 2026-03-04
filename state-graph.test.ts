@@ -15,6 +15,7 @@ import {
     LlmGraphNode,
     SubGraphNode,
     InMemoryTracer,
+    InMemorySpanTracer,
 } from './index.js';
 import { END } from './contracts/index.js';
 import type { IGraphNode, GraphContext, ILLMProvider, LLMRequest, GraphStepResult } from './index.js';
@@ -913,7 +914,7 @@ describe('Engine Guards', () => {
         await expect(engine.run({ count: 0, log: [] })).rejects.toThrow("node 'loop'");
     });
 
-    it('catches invalid conditional edge return and adds to DLQ', async () => {
+    it('throws when conditional edge returns invalid node ID', async () => {
         const graph = new StateGraph<CounterState>();
         graph.addNode(new CallbackGraphNode<CounterState>('a', async () => {}));
         graph.addNode(new CallbackGraphNode<CounterState>('b', async () => {}));
@@ -1216,5 +1217,580 @@ describe('Execution Hooks', () => {
 
         await engine.run({ count: 0, log: [] });
         expect(log).toEqual(['async-before', 'exec', 'async-after']);
+    });
+});
+// ── Node Retry Policy ─────────────────────────────────────────
+
+describe('Node Retry Policy', () => {
+    it('succeeds on first attempt without retrying', async () => {
+        let calls = 0;
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('work', async (s) => {
+            calls++;
+            s.count = 1;
+        }));
+        graph.setEntry('work');
+
+        const engine = new StateGraphEngine(graph);
+        const result = await engine.run({ count: 0, log: [] });
+        expect(result.state.count).toBe(1);
+        expect(calls).toBe(1);
+    });
+
+    it('retries on failure and succeeds within maxRetries', async () => {
+        let attempts = 0;
+        const flakyNode = new CallbackGraphNode<CounterState>('flaky', async (s) => {
+            attempts++;
+            if (attempts < 3) throw new Error('transient');
+            s.count = 99;
+        });
+        (flakyNode as any).retryPolicy = { maxRetries: 3, initialDelayMs: 1 };
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(flakyNode);
+        graph.setEntry('flaky');
+
+        const engine = new StateGraphEngine(graph);
+        const result = await engine.run({ count: 0, log: [] });
+        expect(result.state.count).toBe(99);
+        expect(attempts).toBe(3);
+    });
+
+    it('exhausts retries and routes to DLQ', async () => {
+        const alwaysFails = new CallbackGraphNode<CounterState>('boom', async () => {
+            throw new Error('permanent');
+        });
+        (alwaysFails as any).retryPolicy = { maxRetries: 2, initialDelayMs: 1 };
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(alwaysFails);
+        graph.setEntry('boom');
+
+        const engine = new StateGraphEngine(graph);
+        await expect(engine.run({ count: 0, log: [] })).rejects.toThrow('permanent');
+        expect(engine.deadLetterQueue).toHaveLength(1);
+        expect(engine.deadLetterQueue[0].nodeId).toBe('boom');
+    });
+
+    it('restores state from pre-snapshot between retries', async () => {
+        let attempts = 0;
+        const node = new CallbackGraphNode<CounterState>('partial', async (s) => {
+            attempts++;
+            s.count += 10; // partial mutation
+            if (attempts < 2) throw new Error('retry me');
+        });
+        (node as any).retryPolicy = { maxRetries: 2, initialDelayMs: 1 };
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(node);
+        graph.setEntry('partial');
+
+        const engine = new StateGraphEngine(graph);
+        const result = await engine.run({ count: 0, log: [] });
+        // Retry restored count=0 before second attempt, so final count is 10 (not 20)
+        expect(result.state.count).toBe(10);
+        expect(attempts).toBe(2);
+    });
+
+    it('only retries on listed error names when retryOn is specified', async () => {
+        let attempts = 0;
+        const node = new CallbackGraphNode<CounterState>('typed', async () => {
+            attempts++;
+            const err = new TypeError('type mismatch');
+            throw err;
+        });
+        (node as any).retryPolicy = {
+            maxRetries: 3,
+            initialDelayMs: 1,
+            retryOn: ['NetworkError'], // TypeError not in list
+        };
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(node);
+        graph.setEntry('typed');
+
+        const engine = new StateGraphEngine(graph);
+        await expect(engine.run({ count: 0, log: [] })).rejects.toThrow('type mismatch');
+        // Should not retry — TypeError not in retryOn list
+        expect(attempts).toBe(1);
+    });
+
+    it('does retry on listed error name', async () => {
+        let attempts = 0;
+        const node = new CallbackGraphNode<CounterState>('typed', async (s) => {
+            attempts++;
+            if (attempts < 2) {
+                const err = new Error('retry me');
+                err.name = 'NetworkError';
+                throw err;
+            }
+            s.count = 5;
+        });
+        (node as any).retryPolicy = {
+            maxRetries: 2,
+            initialDelayMs: 1,
+            retryOn: ['NetworkError'],
+        };
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(node);
+        graph.setEntry('typed');
+
+        const engine = new StateGraphEngine(graph);
+        const result = await engine.run({ count: 0, log: [] });
+        expect(result.state.count).toBe(5);
+        expect(attempts).toBe(2);
+    });
+});
+
+// ── Node Timeout ──────────────────────────────────────────────
+
+describe('Node Timeout', () => {
+    it('aborts a slow node and routes to DLQ', async () => {
+        const slow = new CallbackGraphNode<CounterState>('slow', async () => {
+            await new Promise(r => setTimeout(r, 500));
+        });
+        (slow as any).timeoutMs = 20;
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(slow);
+        graph.setEntry('slow');
+
+        const engine = new StateGraphEngine(graph);
+        await expect(engine.run({ count: 0, log: [] })).rejects.toThrow("timed out after 20ms");
+        expect(engine.deadLetterQueue).toHaveLength(1);
+    });
+
+    it('does not timeout a fast node', async () => {
+        const fast = new CallbackGraphNode<CounterState>('fast', async (s) => {
+            s.count = 7;
+        });
+        (fast as any).timeoutMs = 200;
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(fast);
+        graph.setEntry('fast');
+
+        const engine = new StateGraphEngine(graph);
+        const result = await engine.run({ count: 0, log: [] });
+        expect(result.state.count).toBe(7);
+    });
+});
+
+// ── Parallel Node Execution ───────────────────────────────────
+
+describe('Parallel Node Execution', () => {
+    interface ParallelState extends Record<string, unknown> {
+        a: number;
+        b: number;
+        c: number;
+        merged: number;
+    }
+
+    it('fans out to multiple nodes concurrently and merges', async () => {
+        const engine = new StateGraphBuilder<ParallelState>()
+            .addNode(new CallbackGraphNode<ParallelState>('start', async () => {}))
+            .addNode(new CallbackGraphNode<ParallelState>('branchA', async (s) => { s.a = 1; }))
+            .addNode(new CallbackGraphNode<ParallelState>('branchB', async (s) => { s.b = 2; }))
+            .addNode(new CallbackGraphNode<ParallelState>('branchC', async (s) => { s.c = 3; }))
+            .addNode(new CallbackGraphNode<ParallelState>('finish', async (s) => { s.merged = s.a + s.b + s.c; }))
+            .setEntry('start')
+            .addParallelEdge(
+                'start',
+                ['branchA', 'branchB', 'branchC'],
+                (states) => ({
+                    ...states[0],
+                    a: states[0].a,
+                    b: states[1].b,
+                    c: states[2].c,
+                    merged: 0,
+                }),
+                'finish',
+            )
+            .addEdge('finish', END)
+            .build();
+
+        const result = await engine.run({ a: 0, b: 0, c: 0, merged: 0 });
+        expect(result.state.a).toBe(1);
+        expect(result.state.b).toBe(2);
+        expect(result.state.c).toBe(3);
+        expect(result.state.merged).toBe(6);
+    });
+
+    it('parallel branches each receive independent state clone', async () => {
+        const seen: number[] = [];
+        const engine = new StateGraphBuilder<ParallelState>()
+            .addNode(new CallbackGraphNode<ParallelState>('setup', async (s) => { s.a = 42; }))
+            .addNode(new CallbackGraphNode<ParallelState>('p1', async (s) => { seen.push(s.a); s.b = 10; }))
+            .addNode(new CallbackGraphNode<ParallelState>('p2', async (s) => { seen.push(s.a); s.c = 20; }))
+            .setEntry('setup')
+            .addParallelEdge('setup', ['p1', 'p2'], (states) => ({ ...states[0], c: states[1].c, merged: 0 }), END)
+            .build();
+
+        await engine.run({ a: 0, b: 0, c: 0, merged: 0 });
+        // Both branches should see a=42 from setup, not each other's mutations
+        expect(seen).toEqual([42, 42]);
+    });
+
+    it('parallel branch to END stops graph', async () => {
+        const engine = new StateGraphBuilder<ParallelState>()
+            .addNode(new CallbackGraphNode<ParallelState>('start', async () => {}))
+            .addNode(new CallbackGraphNode<ParallelState>('p1', async (s) => { s.a = 1; }))
+            .addNode(new CallbackGraphNode<ParallelState>('p2', async (s) => { s.b = 2; }))
+            .setEntry('start')
+            .addParallelEdge('start', ['p1', 'p2'], (states) => ({ ...states[0], b: states[1].b, c: 0, merged: 0 }), END)
+            .build();
+
+        const result = await engine.run({ a: 0, b: 0, c: 0, merged: 0 });
+        expect(result.state.a).toBe(1);
+        expect(result.state.b).toBe(2);
+        // Only start + parallel (counts as one step)
+        expect(result.steps).toBe(1);
+    });
+
+    it('addParallelEdge rejects fewer than 2 targets', () => {
+        const b = new StateGraphBuilder<ParallelState>()
+            .addNode(new CallbackGraphNode<ParallelState>('a', async () => {}))
+            .addNode(new CallbackGraphNode<ParallelState>('b', async () => {}));
+        expect(() => (b as any).graph?.addParallelEdge('a', ['b'], () => ({} as any), END))
+            .toThrow();
+    });
+});
+
+// ── Checkpoint & Resume ───────────────────────────────────────
+
+describe('Checkpoint & Resume', () => {
+    it('checkpoint captures current state and node', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }));
+        graph.addNode(new CallbackGraphNode<CounterState>('b', async (s) => { s.count++; }));
+        graph.addEdge('a', 'b');
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 5, log: [] };
+        const cp = engine.checkpoint(state, 'b', 1);
+
+        expect(cp.currentNodeId).toBe('b');
+        expect(cp.stepCount).toBe(1);
+        expect((cp.state as CounterState).count).toBe(5);
+        expect(cp.checkpointId).toBeTruthy();
+        expect(cp.correlationId).toBeTruthy();
+        expect(cp.timestamp).toBeGreaterThan(0);
+    });
+
+    it('checkpoint clones state (does not share reference)', () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async () => {}));
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph);
+        const state: CounterState = { count: 1, log: [] };
+        const cp = engine.checkpoint(state, 'a', 0);
+
+        state.count = 999;
+        expect((cp.state as CounterState).count).toBe(1); // clone, not same ref
+    });
+
+    it('resume continues execution from checkpoint node', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; s.log.push('a'); }));
+        graph.addNode(new CallbackGraphNode<CounterState>('b', async (s) => { s.count++; s.log.push('b'); }));
+        graph.addNode(new CallbackGraphNode<CounterState>('c', async (s) => { s.count++; s.log.push('c'); }));
+        graph.addEdge('a', 'b');
+        graph.addEdge('b', 'c');
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph);
+
+        // Run up to 'b' manually, then checkpoint
+        const runState: CounterState = { count: 0, log: [] };
+        await engine.step(runState, 'a', 0); // executes 'a', count=1
+        const cp = engine.checkpoint(runState, 'b', 1);
+
+        // Resume from checkpoint — should run 'b' and 'c'
+        const result = await engine.resume(cp);
+        expect(result.state.count).toBe(3);
+        expect((result.state as CounterState).log).toEqual(['a', 'b', 'c']);
+    });
+
+    it('resume clones checkpoint state (does not mutate checkpoint)', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('work', async (s) => { s.count = 99; }));
+        graph.setEntry('work');
+
+        const engine = new StateGraphEngine(graph);
+        const cp = engine.checkpoint({ count: 0, log: [] }, 'work', 0);
+        await engine.resume(cp);
+
+        // Original checkpoint state should be unchanged
+        expect((cp.state as CounterState).count).toBe(0);
+    });
+
+    it('resume throws when checkpoint node does not exist', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async () => {}));
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph);
+        const cp = engine.checkpoint({ count: 0, log: [] }, 'missing-node', 0);
+        await expect(engine.resume(cp)).rejects.toThrow("'missing-node' not found");
+    });
+});
+
+// ── Orchestrator Limits ───────────────────────────────────────
+
+describe('Orchestrator Limits', () => {
+    it('maxTotalMs throws when wall-clock exceeded', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('slow', async (s) => {
+            await new Promise(r => setTimeout(r, 50));
+            s.count++;
+        }));
+        graph.addEdge('slow', 'slow');
+        graph.setEntry('slow');
+
+        const engine = new StateGraphEngine(graph, { limits: { maxTotalMs: 30 } });
+        await expect(engine.run({ count: 0, log: [] })).rejects.toThrow('maxTotalMs');
+    });
+
+    it('maxTotalMs is not triggered on a fast run', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('fast', async (s) => { s.count = 1; }));
+        graph.setEntry('fast');
+
+        const engine = new StateGraphEngine(graph, { limits: { maxTotalMs: 5000 } });
+        const result = await engine.run({ count: 0, log: [] });
+        expect(result.state.count).toBe(1);
+    });
+
+    it('maxToolCalls is enforced at runtime via reportToolCall()', async () => {
+        const graph = new StateGraph<CounterState>();
+        // Node reports one tool call each time it runs.
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (_s, ctx) => {
+            ctx.reportToolCall();
+        }));
+        graph.addEdge('a', 'a'); // infinite loop
+        graph.setEntry('a');
+        // maxToolCalls: 2 — third call should throw.
+        const engine = new StateGraphEngine(graph, { limits: { maxToolCalls: 2 } });
+        await expect(engine.run({ count: 0, log: [] }))
+            .rejects.toThrow('maxToolCalls');
+    });
+
+    it('maxTotalTokens is enforced at runtime via reportTokens()', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (_s, ctx) => {
+            ctx.reportTokens(600);
+        }));
+        graph.addEdge('a', 'a'); // infinite loop
+        graph.setEntry('a');
+        const engine = new StateGraphEngine(graph, { limits: { maxTotalTokens: 1000 } });
+        await expect(engine.run({ count: 0, log: [] }))
+            .rejects.toThrow('maxTotalTokens');
+    });
+});
+
+// ── Correlation ID ────────────────────────────────────────────
+
+describe('Correlation ID', () => {
+    it('propagates configured correlationId to node context', async () => {
+        let seenId: string | undefined;
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('check', async (_s, ctx) => {
+            seenId = ctx.correlationId;
+        }));
+        graph.setEntry('check');
+
+        const engine = new StateGraphEngine(graph, { correlationId: 'my-run-id' });
+        await engine.run({ count: 0, log: [] });
+        expect(seenId).toBe('my-run-id');
+    });
+
+    it('uses a random UUID when correlationId is not configured', async () => {
+        let seenId: string | undefined;
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('check', async (_s, ctx) => {
+            seenId = ctx.correlationId;
+        }));
+        graph.setEntry('check');
+
+        const engine = new StateGraphEngine(graph);
+        await engine.run({ count: 0, log: [] });
+        expect(seenId).toBeTruthy();
+        expect(seenId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('all trace events carry the correlationId', async () => {
+        const tracer = new InMemoryTracer(50);
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }));
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph, { tracer, correlationId: 'trace-test' });
+        await engine.run({ count: 0, log: [] });
+        const events = tracer.recent('trace-test', 10);
+        expect(events.length).toBeGreaterThan(0);
+        expect(events.every(e => e.correlationId === 'trace-test')).toBe(true);
+    });
+});
+
+// ── ISpanTracer Integration ───────────────────────────────────
+
+describe('ISpanTracer Integration', () => {
+    it('emits a root span wrapping the entire run', async () => {
+        const tracer = new InMemorySpanTracer();
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }));
+        graph.setEntry('a');
+
+        const engine = new StateGraphEngine(graph, { tracer, correlationId: 'span-run' });
+        await engine.run({ count: 0, log: [] });
+
+        const spans = tracer.spans('span-run');
+        const rootSpan = spans.find(s => s.type === 'graph-run');
+        expect(rootSpan).toBeDefined();
+        expect(rootSpan!.status).toBe('ok');
+        expect(rootSpan!.endTime).toBeGreaterThan(0);
+    });
+
+    it('emits a child span for each node execution', async () => {
+        const tracer = new InMemorySpanTracer();
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('step1', async (s) => { s.count++; }));
+        graph.addNode(new CallbackGraphNode<CounterState>('step2', async (s) => { s.count++; }));
+        graph.addEdge('step1', 'step2');
+        graph.setEntry('step1');
+
+        const engine = new StateGraphEngine(graph, { tracer, correlationId: 'span-nodes' });
+        await engine.run({ count: 0, log: [] });
+
+        const spans = tracer.spans('span-nodes');
+        const nodeSpans = spans.filter(s => s.type.startsWith('node.'));
+        expect(nodeSpans.map(s => s.type)).toEqual(['node.step1', 'node.step2']);
+        expect(nodeSpans.every(s => s.status === 'ok')).toBe(true);
+        // Node spans are children of the root span.
+        const rootSpan = spans.find(s => s.type === 'graph-run')!;
+        expect(nodeSpans.every(s => s.parentSpanId === rootSpan.spanId)).toBe(true);
+    });
+
+    it('closes root span with error status when a node throws', async () => {
+        const tracer = new InMemorySpanTracer();
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('boom', async () => {
+            throw new Error('kaboom');
+        }));
+        graph.setEntry('boom');
+
+        const engine = new StateGraphEngine(graph, { tracer, correlationId: 'span-err' });
+        await expect(engine.run({ count: 0, log: [] })).rejects.toThrow('kaboom');
+
+        const spans = tracer.spans('span-err');
+        const rootSpan = spans.find(s => s.type === 'graph-run');
+        const nodeSpan = spans.find(s => s.type === 'node.boom');
+        expect(nodeSpan!.status).toBe('error');
+        expect(nodeSpan!.error).toBe('kaboom');
+        expect(rootSpan!.status).toBe('error');
+    });
+
+    it('falls back to flat trace events when tracer is not an ISpanTracer', async () => {
+        const tracer = new InMemoryTracer(50);
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }));
+        graph.setEntry('a');
+
+        // Should not throw — the engine gracefully degrades.
+        const engine = new StateGraphEngine(graph, { tracer, correlationId: 'flat-trace' });
+        await engine.run({ count: 0, log: [] });
+        const events = tracer.recent('flat-trace', 10);
+        expect(events.some(e => e.type === 'graph.step')).toBe(true);
+    });
+});
+
+// ── GraphContext reportToolCall / reportTokens ─────────────────
+
+describe('GraphContext — reportToolCall / reportTokens', () => {
+    it('reportToolCall() is available on context and counted towards maxToolCalls', async () => {
+        let ctxCapture: GraphContext<CounterState> | undefined;
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (_s, ctx) => {
+            ctxCapture = ctx;
+            ctx.reportToolCall(3);
+        }));
+        graph.setEntry('a');
+        // 4 allowed — reporting 3 should not throw.
+        const engine = new StateGraphEngine(graph, { limits: { maxToolCalls: 4 } });
+        await engine.run({ count: 0, log: [] });
+        expect(ctxCapture).toBeDefined();
+        expect(typeof ctxCapture!.reportToolCall).toBe('function');
+    });
+
+    it('reportTokens() is available on context and counted towards maxTotalTokens', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (_s, ctx) => {
+            ctx.reportTokens(999);
+        }));
+        graph.addEdge('a', 'a');
+        graph.setEntry('a');
+        // 1000 limit — second pass (2×1998 cumulative, but checked pre-step) should fail.
+        const engine = new StateGraphEngine(graph, { limits: { maxTotalTokens: 1000 } });
+        await expect(engine.run({ count: 0, log: [] })).rejects.toThrow('maxTotalTokens');
+    });
+});
+
+// ── resume() fresh step budget ────────────────────────────────
+
+describe('resume() fresh step budget', () => {
+    it('resumed run gets a full maxSteps budget regardless of checkpoint stepCount', async () => {
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('a', async (s) => { s.count++; }));
+        graph.addNode(new CallbackGraphNode<CounterState>('b', async (s) => { s.count++; }));
+        graph.addEdge('a', 'b');
+        graph.setEntry('a');
+
+        // Engine with maxSteps: 2
+        const engine = new StateGraphEngine(graph, { maxSteps: 2 });
+
+        // Checkpoint at stepCount: 99 (close to a hypothetical limit).
+        // The old behaviour would have let resume() start at step 99, leaving
+        // only 1 step — not enough to finish a→b. With the fix, it starts at 0.
+        const cp = engine.checkpoint({ count: 0, log: [] }, 'a', 99);
+        const result = await engine.resume(cp);
+        expect(result.state.count).toBe(2); // both nodes ran
+        expect(result.steps).toBe(2);
+    });
+});
+
+// ── Parallel branches fire hooks ──────────────────────────────
+
+describe('Parallel branch hooks', () => {
+    it('onBeforeNode and onAfterNode fire for each parallel branch', async () => {
+        const beforeCalls: string[] = [];
+        const afterCalls: string[] = [];
+
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(new CallbackGraphNode<CounterState>('fan', async () => {}));
+        graph.addNode(new CallbackGraphNode<CounterState>('brA', async (s) => { s.count += 1; }));
+        graph.addNode(new CallbackGraphNode<CounterState>('brB', async (s) => { s.count += 10; }));
+        graph.addParallelEdge(
+            'fan',
+            ['brA', 'brB'],
+            (states) => ({ count: states.reduce((sum, s) => sum + s.count, 0), log: [] }),
+            END,
+        );
+        graph.setEntry('fan');
+
+        const engine = new StateGraphEngine(graph, {
+            onBeforeNode: (id) => { beforeCalls.push(id); },
+            onAfterNode:  (id) => { afterCalls.push(id); },
+        });
+        await engine.run({ count: 0, log: [] });
+
+        // fan is the sequential node, brA/brB are parallel branches.
+        expect(beforeCalls).toContain('fan');
+        expect(beforeCalls).toContain('brA');
+        expect(beforeCalls).toContain('brB');
+        expect(afterCalls).toContain('brA');
+        expect(afterCalls).toContain('brB');
     });
 });

@@ -65,6 +65,8 @@ export class InMemoryStore implements IMemoryStore {
     async write(
         item: Omit<MemoryItem, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
     ): Promise<MemoryItem> {
+        // Lazy TTL eviction before writing, as documented.
+        await this.evictExpired();
         const now = Date.now();
         const committed: MemoryItem = {
             ...item,

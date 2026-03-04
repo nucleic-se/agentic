@@ -82,6 +82,19 @@ export interface GraphContext<TState extends GraphState = GraphState> {
 
     /** Correlation ID propagated from engine config. */
     readonly correlationId: string;
+
+    /**
+     * Report tool call(s) made during this node's execution.
+     * The engine uses this to enforce `OrchestratorLimits.maxToolCalls`.
+     * Defaults to 1 if called with no argument.
+     */
+    readonly reportToolCall: (count?: number) => void;
+
+    /**
+     * Report token usage consumed during this node's execution.
+     * The engine uses this to enforce `OrchestratorLimits.maxTotalTokens`.
+     */
+    readonly reportTokens: (count: number) => void;
 }
 
 // ── Edges ──────────────────────────────────────────────────────
@@ -90,8 +103,8 @@ export interface GraphContext<TState extends GraphState = GraphState> {
  * Router function for conditional edges.
  * Inspects the current state and returns the next node ID, or END to stop.
  *
- * Must be pure (no side effects) and synchronous — routing decisions
- * should be trivial reads of state, not async operations.
+ * Prefer keeping routers as simple state reads. Use `AsyncRouterFn` only
+ * when the routing decision genuinely requires I/O.
  */
 export type RouterFn<TState extends GraphState = GraphState> =
     (state: Readonly<TState>) => string | GraphEnd;

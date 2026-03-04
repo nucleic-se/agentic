@@ -10,6 +10,9 @@ export class ToolRegistry implements IToolRegistry {
     private readonly tools = new Map<string, ITool>();
 
     register(tool: ITool): void {
+        if (typeof tool.name !== 'string' || tool.name.trim().length === 0) {
+            throw new Error('ToolRegistry: Tool name must be a non-empty string.');
+        }
         if (this.tools.has(tool.name)) {
             throw new Error(`ToolRegistry: Tool '${tool.name}' is already registered.`);
         }

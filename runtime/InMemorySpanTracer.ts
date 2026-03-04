@@ -1,40 +1,20 @@
 /**
  * In-memory span tracer with hierarchical span support.
  *
- * Extends InMemoryTracer with span lifecycle management.
- * Open spans are tracked and finalized via endSpan().
+ * Extends InMemoryTracer (inheriting ring-buffered trace() / recent())
+ * with span lifecycle management: open spans are tracked in-flight and
+ * finalised via endSpan().
  *
  * @module runtime
  */
 
-import type { ISpanTracer, TraceEvent, TraceSpan } from '../contracts/IObservability.js';
+import type { ISpanTracer, TraceSpan } from '../contracts/IObservability.js';
+import { InMemoryTracer } from './InMemoryTracer.js';
 import { randomUUID } from 'node:crypto';
 
-export class InMemorySpanTracer implements ISpanTracer {
-    private readonly events: TraceEvent[] = [];
+export class InMemorySpanTracer extends InMemoryTracer implements ISpanTracer {
     private readonly spanStore: TraceSpan[] = [];
     private readonly openSpans = new Map<string, TraceSpan>();
-    private readonly maxEvents: number;
-
-    constructor(maxEvents = 10000) {
-        this.maxEvents = maxEvents;
-    }
-
-    // ── ITracer ────────────────────────────────────────────────
-
-    trace(event: TraceEvent): void {
-        this.events.push(event);
-        if (this.events.length > this.maxEvents) {
-            this.events.shift();
-        }
-    }
-
-    recent(correlationId: string, limit: number): TraceEvent[] {
-        return this.events
-            .filter(e => e.correlationId === correlationId)
-            .slice(-limit)
-            .reverse();
-    }
 
     // ── ISpanTracer ────────────────────────────────────────────
 
@@ -64,7 +44,7 @@ export class InMemorySpanTracer implements ISpanTracer {
         this.openSpans.delete(spanId);
         this.spanStore.push(finalized);
 
-        // Also emit as a flat trace event for backward compatibility
+        // Also emit as a flat trace event for backward compatibility.
         this.trace({
             correlationId: finalized.correlationId,
             type: `span.${finalized.type}`,
