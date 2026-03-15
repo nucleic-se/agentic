@@ -15,7 +15,13 @@ export class InMemoryStore implements IMemoryStore {
     private readonly items = new Map<string, MemoryItem>();
 
     async get(id: string): Promise<MemoryItem | undefined> {
-        return this.items.get(id);
+        const item = this.items.get(id);
+        if (!item) return undefined;
+        if (this.isExpired(item, Date.now())) {
+            this.items.delete(id);
+            return undefined;
+        }
+        return item;
     }
 
     async query(query: MemoryQuery): Promise<MemoryItem[]> {

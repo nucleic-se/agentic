@@ -1,5 +1,5 @@
 /**
- * Migration orchestrator.
+ * Pack migration runner.
  *
  * Runs pack migrations in dependency order.
  * Tracks applied migrations to avoid re-running.

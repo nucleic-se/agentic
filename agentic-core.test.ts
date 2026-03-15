@@ -30,7 +30,8 @@ import type {
     ITickStep,
     IPackManifest,
     ILLMProvider,
-    LLMRequest,
+    StructuredRequest,
+    TurnRequest,
     ITool,
     ToolResult,
 } from './index.js';
@@ -54,11 +55,20 @@ function manifest(id: string, provides: string[] = [], requires: string[] = []):
 }
 
 const fakeLLM: ILLMProvider = {
-    async process<T>(req: LLMRequest<T>): Promise<T> {
-        return { response: `echo: ${req.text}` } as unknown as T;
+    async structured(req: StructuredRequest) {
+        const text = req.messages.map(m => typeof m.content === 'string' ? m.content : '').join('');
+        return { value: `echo: ${text}`, usage: { inputTokens: 0, outputTokens: 0 } };
     },
-    async embed(_text: string): Promise<number[]> {
-        return [0.1, 0.2, 0.3];
+    async turn(req: TurnRequest) {
+        const text = req.messages.map(m => typeof m.content === 'string' ? m.content : '').join('');
+        return {
+            message:    { role: 'assistant' as const, content: `echo: ${text}`, toolCalls: [] },
+            stopReason: 'end_turn' as const,
+            usage:      { inputTokens: 0, outputTokens: 0 },
+        };
+    },
+    async embed(_texts: string[]): Promise<number[][]> {
+        return [[0.1, 0.2, 0.3]];
     },
 };
 
@@ -301,11 +311,18 @@ describe('AIPromptService', () => {
     });
 
     it('stacks system and user messages', async () => {
-        const calls: LLMRequest[] = [];
+        const calls: TurnRequest[] = [];
         const spyLLM: ILLMProvider = {
-            async process<T>(req: LLMRequest<T>): Promise<T> {
+            async structured(req: StructuredRequest) {
+                return { value: 'ok', usage: { inputTokens: 0, outputTokens: 0 } };
+            },
+            async turn(req: TurnRequest) {
                 calls.push(req);
-                return { response: 'ok' } as unknown as T;
+                return {
+                    message:    { role: 'assistant' as const, content: 'ok', toolCalls: [] },
+                    stopReason: 'end_turn' as const,
+                    usage:      { inputTokens: 0, outputTokens: 0 },
+                };
             },
             async embed() { return []; },
         };
@@ -313,8 +330,8 @@ describe('AIPromptService', () => {
         const svc = new AIPromptService(spyLLM);
         await svc.use().system('sys1').system('sys2').user('u1').user('u2').run();
 
-        expect(calls[0].instructions).toBe('sys1\n\nsys2');
-        expect(calls[0].text).toBe('u1\n\nu2');
+        expect(calls[0].system).toBe('sys1\n\nsys2');
+        expect(calls[0].messages[0]).toMatchObject({ role: 'user', content: 'u1\n\nu2' });
     });
 });
 
@@ -626,6 +643,12 @@ describe('InMemoryStore', () => {
         const results = await store.query({ limit: 10 });
         expect(results).toHaveLength(1);
         expect(results[0].key).toBe('live');
+    });
+
+    it('get() does not return expired items', async () => {
+        const store = new InMemoryStore();
+        const expired = await store.write({ ...baseItem(), ttlDays: -1, key: 'expired' });
+        expect(await store.get(expired.id)).toBeUndefined();
     });
 
     it('tokenBudget limits total tokens in query', async () => {

@@ -4,15 +4,15 @@
  * Decoupled from any DI container — takes an ILLMProvider directly.
  */
 
-import type { ILLMProvider } from '../contracts/ILLMProvider.js';
+import type { ILLMProvider } from '../contracts/llm.js';
 import type { IAIPromptBuilder, IAIPromptService, IAIPipeline } from '../contracts/IAIBuilder.js';
 import { AIPipeline } from './AIPipeline.js';
 
 export class AIPromptService implements IAIPromptService {
     constructor(private llmProvider: ILLMProvider) {}
 
-    use(model?: string): IAIPromptBuilder {
-        return new AIPromptBuilder(this.llmProvider, model);
+    use(_model?: string): IAIPromptBuilder {
+        return new AIPromptBuilder(this.llmProvider);
     }
 
     pipeline<T>(start: T): IAIPipeline<T> {
@@ -22,10 +22,10 @@ export class AIPromptService implements IAIPromptService {
 
 export class AIPromptBuilder implements IAIPromptBuilder {
     private systemMessage?: string;
-    private userMessage?: string;
-    private schemaValue?: Record<string, unknown>;
+    private userMessage?:   string;
+    private schemaValue?:   Record<string, unknown>;
 
-    constructor(private llmProvider: ILLMProvider, private model?: string) {}
+    constructor(private llmProvider: ILLMProvider) {}
 
     system(message: string): IAIPromptBuilder {
         this.systemMessage = this.systemMessage
@@ -47,22 +47,23 @@ export class AIPromptBuilder implements IAIPromptBuilder {
     }
 
     async run<T = string>(): Promise<T> {
-        const instructions = this.systemMessage ?? '';
-        const text = this.userMessage ?? '';
-        const schema = this.schemaValue ?? { response: 'string' };
+        const system  = this.systemMessage;
+        const content = this.userMessage ?? '';
 
-        const result = await this.llmProvider.process<any>({
-            instructions,
-            text,
-            schema,
-            model: this.model,
-        });
-
-        // If using default schema, unwrap the response
-        if (!this.schemaValue) {
-            return result.response as T;
+        if (this.schemaValue) {
+            const result = await this.llmProvider.structured<T>({
+                system,
+                messages: [{ role: 'user', content }],
+                schema:   { type: 'object', ...this.schemaValue },
+            });
+            return result.value;
         }
 
-        return result as T;
+        // No schema — return plain text from a single turn.
+        const result = await this.llmProvider.turn({
+            system,
+            messages: [{ role: 'user', content }],
+        });
+        return result.message.content as unknown as T;
     }
 }

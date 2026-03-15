@@ -21,7 +21,8 @@
  */
 
 import type { IGraphNode, GraphContext, GraphState } from '../../../contracts/graph/index.js';
-import type { ILLMProvider } from '../../../contracts/ILLMProvider.js';
+import type { ILLMProvider } from '../../../contracts/llm.js';
+import type { JsonSchema } from '../../../contracts/shared.js';
 
 /** Configuration for an LLM graph node. */
 export interface LlmGraphNodeConfig<TState extends GraphState> {
@@ -34,10 +35,10 @@ export interface LlmGraphNodeConfig<TState extends GraphState> {
     /** State key to write the LLM output to. */
     outputKey: keyof TState & string;
     /** Optional JSON Schema for structured output. */
-    schema?: Record<string, unknown>;
-    /** Optional model override. */
+    schema?: JsonSchema;
+    /** Optional model hint (provider-specific). */
     model?: string;
-    /** Optional temperature override (0–2). */
+    /** Optional temperature hint (provider-specific). */
     temperature?: number;
 }
 
@@ -51,8 +52,8 @@ export class LlmGraphNode<TState extends GraphState = GraphState>
         if (!config.id || config.id.trim().length === 0) {
             throw new Error('LlmGraphNode: id must be a non-empty string.');
         }
-        if (!config.provider || typeof config.provider.process !== 'function') {
-            throw new Error('LlmGraphNode: provider with a process() method is required.');
+        if (!config.provider || typeof config.provider.structured !== 'function') {
+            throw new Error('LlmGraphNode: provider with a structured() method is required.');
         }
         if (typeof config.prompt !== 'function') {
             throw new Error('LlmGraphNode: prompt must be a function.');
@@ -67,14 +68,12 @@ export class LlmGraphNode<TState extends GraphState = GraphState>
     async process(state: TState, _context: GraphContext<TState>): Promise<void> {
         const { instructions, text } = this.config.prompt(state);
 
-        const result = await this.config.provider.process({
-            instructions,
-            text,
-            schema: this.config.schema,
-            model: this.config.model,
-            temperature: this.config.temperature,
+        const response = await this.config.provider.structured({
+            system: instructions,
+            messages: [{ role: 'user', content: text }],
+            schema: this.config.schema ?? { type: 'object' },
         });
 
-        (state as Record<string, unknown>)[this.config.outputKey] = result;
+        (state as Record<string, unknown>)[this.config.outputKey] = response.value;
     }
 }

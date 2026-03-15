@@ -134,8 +134,14 @@ export class StateGraph<TState extends GraphState = GraphState>
      * - Entry node is set and exists.
      * - All static edge targets exist (or are END).
      * - No orphan nodes (unreachable from entry).
+     *
+     * Pass `{ allowCycles: true }` to document that back-edges are
+     * intentional. The BFS reachability check already handles cycles
+     * correctly (it never marks a node unreachable merely because it
+     * is the target of a back-edge), so this flag is advisory only.
      */
-    validate(): string[] {
+    validate(options?: { allowCycles?: boolean }): string[] {
+        void options; // advisory only — no behaviour change
         const errors: string[] = [];
 
         // Entry check

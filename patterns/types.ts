@@ -4,7 +4,8 @@
  * @module patterns
  */
 
-import type { GraphState, ILLMProvider, ITracer, IGraphEngine } from '../index.js';
+import type { GraphState, ITracer, IGraphEngine } from '../index.js';
+import type { ILLMProvider } from '../contracts/llm.js';
 
 /**
  * Base configuration for all pattern factories.

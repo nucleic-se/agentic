@@ -1,3 +1,9 @@
 dist/
 node_modules/
+.npm-cache/
 *.tsbuildinfo
+.DS_Store
+.env
+.claude
+runs/
+docs/company/

@@ -82,12 +82,16 @@ export class StateGraphBuilder<TState extends GraphState = GraphState>
      * - No entry node is set.
      * - Any edge target references a non-existent node.
      *
+     * Pass `allowCycles: true` to document that the graph intentionally
+     * contains back-edges (e.g. a replan loop). The validator handles
+     * cycles correctly regardless; this flag is advisory documentation.
+     *
      * The builder is consumed — further mutations throw.
      */
-    build(config?: GraphEngineConfig): IGraphEngine<TState> {
+    build(config?: GraphEngineConfig & { allowCycles?: boolean }): IGraphEngine<TState> {
         this.assertNotBuilt();
 
-        const errors = this.graph.validate();
+        const errors = this.graph.validate({ allowCycles: config?.allowCycles });
         if (errors.length > 0) {
             throw new Error(`Graph validation failed:\n  - ${errors.join('\n  - ')}`);
         }

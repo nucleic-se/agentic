@@ -410,15 +410,20 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
 
             try {
                 if (node.timeoutMs != null && node.timeoutMs > 0) {
-                    await Promise.race([
-                        node.process(state, context),
-                        new Promise<never>((_, reject) =>
-                            setTimeout(
-                                () => reject(new Error(`Node '${node.id}' timed out after ${node.timeoutMs}ms`)),
-                                node.timeoutMs,
-                            ),
-                        ),
-                    ]);
+                    let timeoutId: NodeJS.Timeout | undefined;
+                    try {
+                        await Promise.race([
+                            node.process(state, context),
+                            new Promise<never>((_, reject) => {
+                                timeoutId = setTimeout(
+                                    () => reject(new Error(`Node '${node.id}' timed out after ${node.timeoutMs}ms`)),
+                                    node.timeoutMs,
+                                );
+                            }),
+                        ]);
+                    } finally {
+                        if (timeoutId) clearTimeout(timeoutId);
+                    }
                 } else {
                     await node.process(state, context);
                 }

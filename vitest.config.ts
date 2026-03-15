@@ -4,6 +4,10 @@ export default defineConfig({
     test: {
         globals: true,
         environment: 'node',
-        include: ['**/*.test.ts'],
+        include: [
+            'agentic-core.test.ts',
+            'patterns.test.ts',
+            'state-graph.test.ts',
+        ],
     },
 });

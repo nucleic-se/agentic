@@ -18,7 +18,7 @@ import {
     InMemorySpanTracer,
 } from './index.js';
 import { END } from './contracts/index.js';
-import type { IGraphNode, GraphContext, ILLMProvider, LLMRequest, GraphStepResult } from './index.js';
+import type { IGraphNode, GraphContext, ILLMProvider, StructuredRequest, GraphStepResult } from './index.js';
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -37,10 +37,18 @@ interface ResearchState extends Record<string, unknown> {
 }
 
 const fakeLLM: ILLMProvider = {
-    async process<T>(req: LLMRequest<T>): Promise<T> {
-        return `llm:${req.text}` as unknown as T;
+    async structured(req: StructuredRequest) {
+        const text = req.messages.map(m => typeof m.content === 'string' ? m.content : '').join('');
+        return { value: `llm:${text}`, usage: { inputTokens: 0, outputTokens: 0 } };
     },
-    async embed() { return [0.1, 0.2]; },
+    async turn() {
+        return {
+            message: { role: 'assistant' as const, content: 'ok', toolCalls: [] },
+            stopReason: 'end_turn' as const,
+            usage: { inputTokens: 0, outputTokens: 0 },
+        };
+    },
+    async embed() { return [[0.1, 0.2]]; },
 };
 
 // ── StateGraph (structure) ─────────────────────────────────────
@@ -502,12 +510,19 @@ describe('LlmGraphNode', () => {
         expect(result.state.sources).toBe('llm:quantum computing');
     });
 
-    it('supports model and temperature overrides', async () => {
-        const calls: LLMRequest[] = [];
+    it('passes system and message content to structured()', async () => {
+        const calls: StructuredRequest[] = [];
         const spyLLM: ILLMProvider = {
-            async process(req: LLMRequest) {
+            async structured(req: StructuredRequest) {
                 calls.push(req);
-                return 'result';
+                return { value: 'result', usage: { inputTokens: 0, outputTokens: 0 } };
+            },
+            async turn() {
+                return {
+                    message: { role: 'assistant' as const, content: 'ok', toolCalls: [] },
+                    stopReason: 'end_turn' as const,
+                    usage: { inputTokens: 0, outputTokens: 0 },
+                };
             },
             async embed() { return []; },
         };
@@ -515,10 +530,8 @@ describe('LlmGraphNode', () => {
         const node = new LlmGraphNode<ResearchState>({
             id: 'llm',
             provider: spyLLM,
-            prompt: (s) => ({ instructions: 'go', text: s.topic }),
+            prompt: (s) => ({ instructions: 'be helpful', text: s.topic }),
             outputKey: 'plan',
-            model: 'gpt-4o',
-            temperature: 0.2,
         });
 
         const graph = new StateGraph<ResearchState>();
@@ -535,8 +548,8 @@ describe('LlmGraphNode', () => {
             draft: '',
         });
 
-        expect(calls[0].model).toBe('gpt-4o');
-        expect(calls[0].temperature).toBe(0.2);
+        expect(calls[0].system).toBe('be helpful');
+        expect(calls[0].messages[0]).toMatchObject({ role: 'user', content: 'test' });
     });
 });
 

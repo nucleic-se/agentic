@@ -10,12 +10,29 @@
  * The sub-graph runs with its own `maxSteps` budget and DLQ,
  * fully isolated from the parent engine.
  *
+ * `engine` may be either a pre-built engine instance or a factory
+ * function that receives the current parent state and returns an
+ * engine. Use the factory form when the sub-graph topology must be
+ * derived from data written to parent state at runtime (e.g. a
+ * compiled plan produced by an earlier node).
+ *
+ * Pre-built form:
  * ```ts
  * const subNode = new SubGraphNode<ArticleState, ResearchState>({
  *     id: 'research',
  *     engine: researchEngine,
  *     input:  (parent) => ({ query: parent.topic, sources: '', summary: '' }),
  *     output: (sub, parent) => { parent.summary = sub.summary; },
+ * });
+ * ```
+ *
+ * Factory form (engine built from parent state at execution time):
+ * ```ts
+ * const subNode = new SubGraphNode<SolverState, ExecuteState>({
+ *     id: 'execute',
+ *     engine: (parent) => buildExecuteEngine(parent.compiledPlan),
+ *     input:  (parent) => ({ plan: parent.compiledPlan, results: new Map() }),
+ *     output: (sub, parent) => { parent.executeResults = sub.results; },
  * });
  * ```
  *
@@ -37,8 +54,12 @@ export interface SubGraphNodeConfig<
 > {
     /** Unique node ID in the parent graph. Must be non-empty. */
     id: string;
-    /** Pre-built engine for the sub-graph. */
-    engine: IGraphEngine<TSub>;
+    /**
+     * Pre-built engine for the sub-graph, or a factory function that
+     * receives the current parent state and returns an engine.
+     * The factory is called once at the start of `process()`.
+     */
+    engine: IGraphEngine<TSub> | ((parentState: Readonly<TParent>) => IGraphEngine<TSub>);
     /** Map parent state → sub-graph initial state. Must be a pure function. */
     input: (parent: Readonly<TParent>) => TSub;
     /** Write sub-graph results back to parent state. */
@@ -60,8 +81,11 @@ export class SubGraphNode<
         if (!config.id || config.id.trim().length === 0) {
             throw new Error('SubGraphNode: id must be a non-empty string.');
         }
-        if (!config.engine || typeof config.engine.run !== 'function') {
-            throw new Error('SubGraphNode: engine with a run() method is required.');
+        if (!config.engine) {
+            throw new Error('SubGraphNode: engine is required.');
+        }
+        if (typeof config.engine !== 'function' && typeof (config.engine as IGraphEngine<TSub>).run !== 'function') {
+            throw new Error('SubGraphNode: engine must be an IGraphEngine or a factory function.');
         }
         if (typeof config.input !== 'function') {
             throw new Error('SubGraphNode: input must be a function.');
@@ -74,8 +98,11 @@ export class SubGraphNode<
     }
 
     async process(state: TParent, _context: GraphContext<TParent>): Promise<void> {
+        const engine = typeof this.config.engine === 'function'
+            ? this.config.engine(state)
+            : this.config.engine;
         const subInitial = this.config.input(state);
-        const result = await this.config.engine.run(subInitial);
+        const result = await engine.run(subInitial);
         this.lastRunResult = result;
         this.config.output(result.state, state);
     }

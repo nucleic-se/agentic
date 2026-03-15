@@ -39,8 +39,8 @@ export interface RateLimit {
 /**
  * A typed, schema-governed tool that an agent can invoke.
  *
- * Tools are narrow and single-purpose. The orchestrator mediates
- * all calls — the LLM never calls tools directly.
+ * Tools are narrow and single-purpose. A host runtime mediates
+ * all calls; the model never executes tools directly.
  *
  * @typeParam TInput  - The shape of the tool's input.
  * @typeParam TOutput - The shape of the tool's output.

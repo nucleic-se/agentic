@@ -1,8 +1,16 @@
 {
-  "name": "@nucleic/agentic",
+  "name": "@nucleic-se/agentic",
   "version": "0.1.0",
-  "description": "Domain-agnostic agentic toolbox — reusable primitives for prompt composition, tick pipelines, LLM abstraction, capability/pack management, migration orchestration, and tracing.",
+  "description": "Lean domain-agnostic agent primitives for prompts, graphs, tools, providers, and runtime composition.",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:nucleic-se/agentic.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nucleic-se/agentic/issues"
+  },
+  "homepage": "https://github.com/nucleic-se/agentic#readme",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -18,11 +26,26 @@
     "./runtime": {
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js"
+    },
+    "./patterns": {
+      "types": "./dist/patterns/index.d.ts",
+      "import": "./dist/patterns/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "import": "./dist/tools/index.js"
+    },
+    "./providers": {
+      "types": "./dist/providers/index.d.ts",
+      "import": "./dist/providers/index.js"
     }
   },
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",

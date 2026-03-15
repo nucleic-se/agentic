@@ -11,58 +11,61 @@ import {
     createChainOfThoughtAgent,
     createHumanInLoopAgent,
 } from './patterns/index.js';
-import type { ILLMProvider, LLMRequest } from './contracts/index.js';
+import type { ILLMProvider, StructuredRequest } from './contracts/index.js';
 
 // Mock LLM provider for testing
 class MockLLMProvider implements ILLMProvider {
-    private responses: Map<string, any> = new Map();
-
-    setResponse(key: string, response: any): void {
-        this.responses.set(key, response);
-    }
-
-    async process<T>(request: LLMRequest<T>): Promise<T> {
-        // Return canned responses based on instructions
-        if (request.instructions.includes('Think step-by-step')) {
-            return {
+    async structured(request: StructuredRequest) {
+        const system = request.system ?? '';
+        // Return canned responses based on system instructions
+        if (system.includes('Think step-by-step')) {
+            return { value: {
                 thought: 'I need to use the calculate tool',
                 action: 'calculate',
                 actionInput: '240 * 0.15',
-            } as T;
+            }, usage: { inputTokens: 0, outputTokens: 0 } };
         }
 
-        if (request.instructions.includes('Break down the problem')) {
-            return {
+        if (system.includes('Break down the problem')) {
+            return { value: {
                 steps: ['Step 1: Understand the problem', 'Step 2: Solve it'],
-            } as T;
+            }, usage: { inputTokens: 0, outputTokens: 0 } };
         }
 
-        if (request.instructions.includes('Critique the draft')) {
-            return {
+        if (system.includes('Critique the draft')) {
+            return { value: {
                 quality: 9,
                 feedback: 'Looks good!',
-            } as T;
+            }, usage: { inputTokens: 0, outputTokens: 0 } };
         }
 
-        if (request.instructions.includes('Create a detailed step-by-step plan')) {
-            return {
+        if (system.includes('Create a detailed step-by-step plan')) {
+            return { value: {
                 steps: ['Research the topic', 'Write the content', 'Review and edit'],
-            } as T;
+            }, usage: { inputTokens: 0, outputTokens: 0 } };
         }
 
-        if (request.instructions.includes('Review the execution progress')) {
-            return {
+        if (system.includes('Review the execution progress')) {
+            return { value: {
                 decision: 'FINISH',
                 reasoning: 'All steps complete',
-            } as T;
+            }, usage: { inputTokens: 0, outputTokens: 0 } };
         }
 
         // Default response
-        return 'Mock response' as T;
+        return { value: 'Mock response', usage: { inputTokens: 0, outputTokens: 0 } };
     }
 
-    async embed(text: string): Promise<number[]> {
-        return [0.1, 0.2, 0.3];
+    async turn() {
+        return {
+            message: { role: 'assistant' as const, content: 'ok', toolCalls: [] },
+            stopReason: 'end_turn' as const,
+            usage: { inputTokens: 0, outputTokens: 0 },
+        };
+    }
+
+    async embed(_texts: string[]): Promise<number[][]> {
+        return [[0.1, 0.2, 0.3]];
     }
 }
 

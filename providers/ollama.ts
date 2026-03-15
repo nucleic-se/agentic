@@ -1,0 +1,62 @@
+/**
+ * Ollama provider — a thin OpenAI-compatible wrapper for Ollama's `/v1` API.
+ */
+
+import { OpenAICompatibleProvider, type OpenAICompatibleConfig } from './openai-compatible.js'
+import type { RetryConfig } from './resilient-fetch.js'
+
+export interface OllamaConfig {
+    /**
+     * API key for Ollama Cloud. Falls back to AGENTIC_OLLAMA_API_KEY if omitted.
+     * Not required for local Ollama instances.
+     */
+    apiKey?: string
+    /** Chat model ID, e.g. `qwen3-coder:480b` or `deepseek-v3.1:671b`. */
+    model: string
+    /** Embedding model ID. Defaults to the chat model when omitted. */
+    embeddingModel?: string
+    /** Base URL including `/v1`. Falls back to AGENTIC_OLLAMA_BASE_URL, then the local default. */
+    baseUrl?: string
+    /**
+     * Override the model's default context window size (in tokens).
+     * Maps to Ollama's `options.num_ctx` in the request body.
+     * Useful when the model's default is too small (e.g. gemma3 defaults to 8k).
+     */
+    numCtx?: number
+    /** Retry configuration for transient HTTP errors (429, 502, 503, 529). */
+    retry?: RetryConfig
+}
+
+export const OLLAMA_LOCAL_API_BASE = 'http://localhost:11434/v1'
+export const OLLAMA_CLOUD_API_BASE = 'https://ollama.com/v1'
+
+/**
+ * Current cloud model defaults chosen from the live Ollama Cloud tags list.
+ * Tier rationale:
+ *   fast     — classify, acknowledge, summarize: tiny prompts (<1k tokens), 8k context ok
+ *   balanced — respond (chat), plan, compress: needs ~6k grove context + chat history; must
+ *              use a model with large native context since Ollama Cloud ignores num_ctx
+ *   capable  — tool execution: needs best reasoning + tool calling
+ */
+export const OLLAMA_CLOUD_MODEL_DEFAULTS = {
+    fast:     'gemma3:12b',
+    balanced: 'qwen3-next:80b',
+    capable:  'deepseek-v3.1:671b',
+} as const satisfies Record<'fast' | 'balanced' | 'capable', string>
+
+export class OllamaProvider extends OpenAICompatibleProvider {
+    constructor(config: OllamaConfig) {
+        const baseConfig: OpenAICompatibleConfig = {
+            apiKey:        config.apiKey ?? process.env['AGENTIC_OLLAMA_API_KEY'],
+            model:         config.model,
+            embeddingModel: config.embeddingModel,
+            baseUrl:       config.baseUrl ?? process.env['AGENTIC_OLLAMA_BASE_URL'] ?? OLLAMA_LOCAL_API_BASE,
+            providerName:  'OllamaProvider',
+            retry:         config.retry,
+            ...(config.numCtx != null
+                ? { extraBody: { options: { num_ctx: config.numCtx } } }
+                : {}),
+        }
+        super(baseConfig)
+    }
+}

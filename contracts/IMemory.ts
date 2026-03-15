@@ -3,7 +3,7 @@
  *
  * Four memory types (working, episodic, semantic, procedural) with
  * TTL, confidence, provenance, and versioning. The LLM proposes
- * writes; the orchestrator validates and commits.
+ * writes; the host runtime validates and commits.
  *
  * @module contracts
  */

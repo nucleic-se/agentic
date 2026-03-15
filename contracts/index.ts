@@ -78,11 +78,30 @@ export type { IToolPromptRenderer } from './IToolPromptRenderer.js';
 // Context assembly
 export type { AssemblyInput, IContextAssembler } from './IContextAssembler.js';
 
-// LLM provider
+// LLM provider v2 — message threading, tool calls, token usage
 export type {
     ILLMProvider,
-    LLMRequest,
-} from './ILLMProvider.js';
+    IModelRouter,
+    ModelTier,
+    Message,
+    UserMessage,
+    AssistantMessage,
+    ToolResultMessage,
+    ToolCall,
+    ToolDefinition,
+    TokenUsage,
+    StructuredRequest,
+    StructuredResponse,
+    TurnRequest,
+    TurnResponse,
+    StopReason,
+} from './llm.js';
+
+// Tool runtime
+export type {
+    IToolRuntime,
+    ToolCallResult,
+} from './tool-runtime.js';
 
 // Fluent AI builders
 export type {
