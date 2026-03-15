@@ -1,6 +1,6 @@
 {
   "name": "@nucleic-se/agentic",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Lean domain-agnostic agent primitives for prompts, graphs, tools, providers, and runtime composition.",
   "license": "ISC",
   "repository": {
