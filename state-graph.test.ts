@@ -18,7 +18,7 @@ import {
     InMemorySpanTracer,
 } from './index.js';
 import { END } from './contracts/index.js';
-import type { IGraphNode, GraphContext, ILLMProvider, StructuredRequest, GraphStepResult } from './index.js';
+import type { IGraphNode, GraphContext, ILLMProvider, StructuredRequest, TurnRequest, GraphStepResult } from './index.js';
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -41,9 +41,10 @@ const fakeLLM: ILLMProvider = {
         const text = req.messages.map(m => typeof m.content === 'string' ? m.content : '').join('');
         return { value: `llm:${text}`, usage: { inputTokens: 0, outputTokens: 0 } };
     },
-    async turn() {
+    async turn(req) {
+        const text = req.messages.map(m => typeof m.content === 'string' ? m.content : '').join('');
         return {
-            message: { role: 'assistant' as const, content: 'ok', toolCalls: [] },
+            message: { role: 'assistant' as const, content: `llm:${text}`, toolCalls: [] },
             stopReason: 'end_turn' as const,
             usage: { inputTokens: 0, outputTokens: 0 },
         };
@@ -530,7 +531,7 @@ describe('LlmGraphNode', () => {
         const node = new LlmGraphNode<ResearchState>({
             id: 'llm',
             provider: spyLLM,
-            prompt: (s) => ({ instructions: 'be helpful', text: s.topic }),
+            prompt: (s) => ({ instructions: 'be helpful', text: s.topic, schema: { type: 'object' } }),
             outputKey: 'plan',
         });
 
@@ -550,6 +551,92 @@ describe('LlmGraphNode', () => {
 
         expect(calls[0].system).toBe('be helpful');
         expect(calls[0].messages[0]).toMatchObject({ role: 'user', content: 'test' });
+    });
+
+    it('calls turn() and not structured() when no schema is present', async () => {
+        const turnCalls: TurnRequest[] = [];
+        const structuredCalls: StructuredRequest[] = [];
+        const spyLLM: ILLMProvider = {
+            async structured(req) {
+                structuredCalls.push(req);
+                return { value: 'structured', usage: { inputTokens: 0, outputTokens: 0 } };
+            },
+            async turn(req) {
+                turnCalls.push(req);
+                return {
+                    message: { role: 'assistant' as const, content: 'plain text result', toolCalls: [] },
+                    stopReason: 'end_turn' as const,
+                    usage: { inputTokens: 0, outputTokens: 0 },
+                };
+            },
+            async embed() { return []; },
+        };
+
+        const node = new LlmGraphNode<ResearchState>({
+            id: 'llm',
+            provider: spyLLM,
+            prompt: (s) => ({ instructions: 'be helpful', text: s.topic }),
+            outputKey: 'sources',
+        });
+
+        const graph = new StateGraph<ResearchState>();
+        graph.addNode(node);
+        graph.setEntry('llm');
+
+        const engine = new StateGraphEngine(graph);
+        const result = await engine.run({
+            topic: 'test topic',
+            plan: '', sources: '', critique: '', approved: false, draft: '',
+        });
+
+        expect(structuredCalls).toHaveLength(0);
+        expect(turnCalls).toHaveLength(1);
+        expect(turnCalls[0].system).toBe('be helpful');
+        expect(turnCalls[0].messages[0]).toMatchObject({ role: 'user', content: 'test topic' });
+        expect(result.state.sources).toBe('plain text result');
+    });
+
+    it('forwards prompt-level schema to structured()', async () => {
+        const calls: StructuredRequest[] = [];
+        const spyLLM: ILLMProvider = {
+            async structured(req) {
+                calls.push(req);
+                return { value: { answer: 42 }, usage: { inputTokens: 0, outputTokens: 0 } };
+            },
+            async turn() {
+                return {
+                    message: { role: 'assistant' as const, content: 'text', toolCalls: [] },
+                    stopReason: 'end_turn' as const,
+                    usage: { inputTokens: 0, outputTokens: 0 },
+                };
+            },
+            async embed() { return []; },
+        };
+
+        const promptSchema = {
+            type: 'object' as const,
+            properties: { answer: { type: 'number' } },
+            required: ['answer'],
+        };
+
+        const node = new LlmGraphNode<ResearchState>({
+            id: 'llm',
+            provider: spyLLM,
+            prompt: () => ({ instructions: 'answer', text: 'q', schema: promptSchema }),
+            outputKey: 'plan',
+        });
+
+        const graph = new StateGraph<ResearchState>();
+        graph.addNode(node);
+        graph.setEntry('llm');
+
+        const engine = new StateGraphEngine(graph);
+        await engine.run({
+            topic: '', plan: '', sources: '', critique: '', approved: false, draft: '',
+        });
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0].schema).toBe(promptSchema);
     });
 });
 

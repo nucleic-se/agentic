@@ -192,7 +192,9 @@ Respond with JSON:
         .addNode(executor)
         .setEntry('plan')
         .addEdge('plan', 'parse_plan')
-        .addEdge('parse_plan', 'execute');
+        .addConditionalEdge('parse_plan', (state) =>
+            state.plan.length === 0 ? END : 'execute',
+        );
 
     if (enableReview) {
         builder

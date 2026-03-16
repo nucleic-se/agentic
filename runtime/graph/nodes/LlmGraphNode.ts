@@ -30,11 +30,21 @@ export interface LlmGraphNodeConfig<TState extends GraphState> {
     id: string;
     /** LLM provider (structurally compatible with ILLMProvider). */
     provider: ILLMProvider;
-    /** Build the prompt from current state. Returns { instructions, text }. */
-    prompt: (state: Readonly<TState>) => { instructions: string; text: string };
+    /**
+     * Build the prompt from current state.
+     * When `schema` is included, the node calls `provider.structured()` and
+     * the output is the parsed JSON value.  When omitted (here and in the
+     * top-level `schema` field), the node calls `provider.turn()` and the
+     * output is the assistant's plain-text content string.
+     */
+    prompt: (state: Readonly<TState>) => { instructions: string; text: string; schema?: JsonSchema };
     /** State key to write the LLM output to. */
     outputKey: keyof TState & string;
-    /** Optional JSON Schema for structured output. */
+    /**
+     * Optional JSON Schema for structured output — applies to every call.
+     * A schema returned by `prompt()` takes precedence over this field,
+     * allowing per-call schema variation.
+     */
     schema?: JsonSchema;
     /** Optional model hint (provider-specific). */
     model?: string;
@@ -52,8 +62,12 @@ export class LlmGraphNode<TState extends GraphState = GraphState>
         if (!config.id || config.id.trim().length === 0) {
             throw new Error('LlmGraphNode: id must be a non-empty string.');
         }
-        if (!config.provider || typeof config.provider.structured !== 'function') {
-            throw new Error('LlmGraphNode: provider with a structured() method is required.');
+        if (
+            !config.provider ||
+            typeof config.provider.structured !== 'function' ||
+            typeof config.provider.turn !== 'function'
+        ) {
+            throw new Error('LlmGraphNode: provider must implement structured() and turn().');
         }
         if (typeof config.prompt !== 'function') {
             throw new Error('LlmGraphNode: prompt must be a function.');
@@ -66,14 +80,25 @@ export class LlmGraphNode<TState extends GraphState = GraphState>
     }
 
     async process(state: TState, _context: GraphContext<TState>): Promise<void> {
-        const { instructions, text } = this.config.prompt(state);
+        const { instructions, text, schema: promptSchema } = this.config.prompt(state);
+        const schema = promptSchema ?? this.config.schema;
 
-        const response = await this.config.provider.structured({
-            system: instructions,
-            messages: [{ role: 'user', content: text }],
-            schema: this.config.schema ?? { type: 'object' },
-        });
+        let value: unknown;
+        if (schema) {
+            const response = await this.config.provider.structured({
+                system: instructions,
+                messages: [{ role: 'user', content: text }],
+                schema,
+            });
+            value = response.value;
+        } else {
+            const response = await this.config.provider.turn({
+                system: instructions,
+                messages: [{ role: 'user', content: text }],
+            });
+            value = response.message.content;
+        }
 
-        (state as Record<string, unknown>)[this.config.outputKey] = response.value;
+        (state as Record<string, unknown>)[this.config.outputKey] = value;
     }
 }

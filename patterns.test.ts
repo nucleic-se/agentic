@@ -100,6 +100,35 @@ describe('Agentic Patterns', () => {
     });
 
     describe('Plan-Execute Pattern', () => {
+        it('handles empty plan without calling executor', async () => {
+            const llm = new MockLLMProvider();
+            // Override structured() to return an empty plan
+            llm.structured = async () => ({ value: { steps: [] }, usage: { inputTokens: 0, outputTokens: 0 } });
+
+            let executorCallCount = 0;
+            const agent = createPlanExecuteAgent({
+                llm,
+                executor: async (step) => {
+                    executorCallCount++;
+                    return `Completed: ${step}`;
+                },
+                enableReview: false,
+            });
+
+            const result = await agent.run({
+                objective: 'Do something',
+                plan: [],
+                currentStep: 0,
+                results: [],
+                review: '',
+                shouldReplan: false,
+            });
+
+            expect(executorCallCount).toBe(0);
+            expect(result.state.plan).toHaveLength(0);
+            expect(result.state.currentStep).toBe(0);
+        });
+
         it('should create and execute a plan', async () => {
             const llm = new MockLLMProvider();
 
@@ -179,6 +208,28 @@ describe('Agentic Patterns', () => {
     });
 
     describe('Chain-of-Thought Pattern', () => {
+        it('skips reasoning and synthesizes directly when steps is empty', async () => {
+            const llm = new MockLLMProvider();
+            // Override structured() to return empty steps from the decomposer
+            llm.structured = async () => ({ value: { steps: [] }, usage: { inputTokens: 0, outputTokens: 0 } });
+
+            const agent = createChainOfThoughtAgent({ llm });
+
+            const result = await agent.run({
+                problem: 'trivial',
+                steps: [],
+                currentStep: 0,
+                stepReasoning: [],
+                answer: '',
+            });
+
+            // No reasoning steps should have been recorded
+            expect(result.state.stepReasoning).toHaveLength(0);
+            expect(result.state.currentStep).toBe(0);
+            // Synthesizer still ran and produced an answer
+            expect(result.state.answer).toBeDefined();
+        });
+
         it('should decompose and reason through steps', async () => {
             const llm = new MockLLMProvider();
 

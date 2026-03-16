@@ -173,7 +173,9 @@ Provide a concise final answer.`,
         .addNode(synthesizer)
         .setEntry('decompose')
         .addEdge('decompose', 'parse_steps')
-        .addEdge('parse_steps', 'reason_step')
+        .addConditionalEdge('parse_steps', (state) =>
+            state.steps.length === 0 ? 'synthesize' : 'reason_step',
+        )
         .addEdge('reason_step', 'save_reasoning')
         .addConditionalEdge('save_reasoning', (state) => {
             // Continue to next step or synthesize

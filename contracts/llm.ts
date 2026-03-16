@@ -72,8 +72,8 @@ export interface StructuredRequest {
      */
     messages:  Message[]
     /**
-     * JSON Schema the response must conform to. Required — the provider
-     * must enforce this; callers must not pass `unknown` as T without a schema.
+     * JSON Schema forwarded to the backing API/model to shape the response.
+     * Enforcement is best-effort and depends on provider capabilities.
      */
     schema:    JsonSchema
 }
@@ -111,7 +111,9 @@ export interface TurnResponse {
 export interface ILLMProvider {
     /**
      * Single-call structured completion. The model must not call tools.
-     * The response value is validated against schema before returning.
+     * The provider forwards the supplied JSON Schema to the backing API/model
+     * and returns the parsed result. Schema enforcement depends on provider
+     * capabilities; implementations may not perform client-side validation.
      */
     structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>>
 
