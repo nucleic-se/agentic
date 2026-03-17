@@ -9,6 +9,7 @@ export default defineConfig({
             'patterns.test.ts',
             'state-graph.test.ts',
             'demo/agent/kernel.test.ts',
+            'demo/agent/CodingAgent.test.ts',
         ],
     },
 });
