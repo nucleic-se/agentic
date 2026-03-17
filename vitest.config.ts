@@ -8,6 +8,7 @@ export default defineConfig({
             'agentic-core.test.ts',
             'patterns.test.ts',
             'state-graph.test.ts',
+            'demo/agent/kernel.test.ts',
         ],
     },
 });
