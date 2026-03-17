@@ -285,11 +285,19 @@ async function runInteractive(
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  // Load .env before full arg parsing so AGENT_PROVIDER (and friends) are
+  // available as defaults. Pre-scan argv for -C/--cwd to find the right dir.
+  const pkgRoot = path.resolve(import.meta.dirname, '../..')
+  loadEnv(pkgRoot)  // package .env first (AGENT_PROVIDER, API keys)
+  const cwdArgIdx = process.argv.findIndex(a => a === '-C' || a === '--cwd')
+  if (cwdArgIdx !== -1 && process.argv[cwdArgIdx + 1]) {
+    loadEnv(path.resolve(process.argv[cwdArgIdx + 1]))  // project .env overrides
+  }
+
   const args = parseArgs(process.argv)
 
-  // Load .env — check cwd first, then the agentic package root.
+  // Load project .env now that cwd is fully resolved (covers the no-C case).
   loadEnv(args.cwd)
-  loadEnv(path.resolve(import.meta.dirname, '../..'))
 
   if (!args.interactive && !args.instruction) {
     showHelp()
