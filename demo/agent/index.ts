@@ -7,8 +7,10 @@
  */
 
 export { CodingAgent }                       from './CodingAgent.js'
-export { createCodingTools }                 from './tools.js'
+export { createCodingTools, createCodingRegistry } from './tools.js'
 export type { CreateCodingToolsOptions }     from './tools.js'
+export { DefaultToolPolicy }                 from './tool-policy.js'
+export type { ExternalArtifact }             from './artifact.js'
 export type { AgentConfig }                  from './config.js'
 
 import { CodingAgent }                       from './CodingAgent.js'

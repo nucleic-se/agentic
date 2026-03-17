@@ -5,8 +5,9 @@
  * mutable `conversation` array passed in. Drives the deliberate → plan →
  * execute → reconcile loop with explicit turn records.
  *
- * Phase A: no policy, no context broker, no memory, no observability.
- * Those are layered on by CodingAgent before calling this function.
+ * Phase A: core loop.
+ * Phase B: policy gate + trust tier assignment + ExternalArtifact normalization.
+ * Phase C+: context broker, observability, memory layered on by CodingAgent.
  */
 
 import { randomUUID }                  from 'node:crypto'
@@ -20,6 +21,7 @@ import type {
   ToolExecutionStatus,
   Failure,
 } from '../../contracts/agent.js'
+import { normalizeArtifact, labeledContent } from './artifact.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -186,10 +188,12 @@ export async function runKernel(
       return true
     })
 
+    // Phase B: resolve trust tier from registry at plan time.
     const plan: ToolPlan[] = uniqueCalls.map(c => ({
-      callId: c.id,
-      name:   c.name,
-      input:  c.args,
+      callId:    c.id,
+      name:      c.name,
+      input:     c.args,
+      trustTier: config.registry?.resolve(c.name)?.trustTier ?? 'standard',
     }))
 
     // ────────────────────────────────────────────────────────────────────────
@@ -211,7 +215,35 @@ export async function runKernel(
         break
       }
 
-      // Phase B inserts policy gate here.
+      // Phase B: policy gate — evaluate before each call.
+      if (config.policy) {
+        const decision = await config.policy.evaluate({
+          callId:    p.callId,
+          name:      p.name,
+          args:      p.input as Record<string, unknown>,
+          trustTier: p.trustTier ?? 'standard',
+        })
+        if (decision.kind === 'deny' || decision.kind === 'confirm') {
+          // 'confirm' → 'deny' in Phase B (Phase F wires up the confirmation channel).
+          const reason = decision.kind === 'confirm'
+            ? `Pending confirmation: ${decision.reason}`
+            : decision.reason
+          const execution: ToolExecution = {
+            callId: p.callId,
+            plan:   p,
+            status: 'policy_denied',
+            error:  reason,
+          }
+          executions.push(execution)
+          await emit({ type: 'tool_end', turnId, callId: p.callId, name: p.name, execution })
+          continue  // next planned call — denial is not a turn-level failure
+        }
+        if (decision.kind === 'rewrite') {
+          // Execute with rewritten args. Original args preserved in p.input (ToolPlan).
+          (p as { input: unknown }).input = decision.args
+        }
+        // decision.kind === 'allow' → fall through
+      }
 
       await emit({ type: 'tool_start', turnId, callId: p.callId, name: p.name, input: p.input })
 
@@ -220,13 +252,28 @@ export async function runKernel(
 
       try {
         const raw = await config.tools.call(p.name, p.input as Record<string, unknown>, { signal })
-        execution = {
-          callId:    p.callId,
-          plan:      p,
-          status:    raw.ok ? 'success' : 'runtime_failure',
-          result:    raw,
-          latencyMs: Date.now() - callT0,
-          ...(!raw.ok ? { error: raw.content } : {}),
+
+        // Phase B: normalize untrusted results into ExternalArtifact.
+        const isUntrusted = (p.trustTier ?? 'standard') === 'untrusted'
+        if (isUntrusted && raw.ok) {
+          const artifact = normalizeArtifact(p.name, raw)
+          execution = {
+            callId:    p.callId,
+            plan:      p,
+            status:    'success',
+            result:    { ...raw, content: labeledContent(artifact) },
+            latencyMs: Date.now() - callT0,
+            artifact,
+          }
+        } else {
+          execution = {
+            callId:    p.callId,
+            plan:      p,
+            status:    raw.ok ? 'success' : 'runtime_failure',
+            result:    raw,
+            latencyMs: Date.now() - callT0,
+            ...(!raw.ok ? { error: raw.content } : {}),
+          }
         }
       } catch (e) {
         // tools.call() should never throw (contract), but handle defensively.

@@ -120,6 +120,7 @@ export type {
 
 // Agent runtime contracts
 export type {
+    ExternalArtifact,
     AgentState,
     ToolPlan,
     ToolExecutionStatus,

@@ -11,6 +11,7 @@
 
 import type { Message, AssistantMessage, TokenUsage, TurnRequest } from './llm.js'
 import type { ToolCallResult } from './tool-runtime.js'
+import type { ToolTrustTier } from './ITool.js'
 
 // ── State machine ─────────────────────────────────────────────────────────────
 
@@ -28,6 +29,28 @@ export type AgentState =
   | { kind: 'failed';        failure: Failure }
   | { kind: 'aborted' }
 
+// ── External artifact ─────────────────────────────────────────────────────────
+
+/**
+ * Typed external content from an untrusted tool result.
+ * Implementation helpers (normalizeArtifact, labeledContent) live in demo/agent/artifact.ts.
+ */
+export interface ExternalArtifact {
+  id:                   string
+  source:               'fetch' | 'search' | 'shell' | 'fs'
+  trustTier:            ToolTrustTier
+  /** Possibly clipped content — this is what entered context. */
+  content:              string
+  /** Byte offset at which content was clipped, if truncation occurred. */
+  clippedAt?:           number
+  /** Phase F: path to a temp file holding the full response body. */
+  fullContentPath?:     string
+  metadata:             Record<string, unknown>
+  /** Heuristic: content appears to contain imperative instructions. */
+  containsInstructions: boolean
+  timestamp:            number
+}
+
 // ── Tool plan and execution ───────────────────────────────────────────────────
 
 /**
@@ -35,10 +58,11 @@ export type AgentState =
  * ran — the execution store is authoritative for what actually happened.
  */
 export interface ToolPlan {
-  callId: string
-  name:   string
-  input:  unknown
-  // Phase B adds: trustTier: ToolTrustTier
+  callId:     string
+  name:       string
+  input:      unknown
+  /** Phase B: trust tier resolved from IToolRegistry at plan time. */
+  trustTier?: ToolTrustTier
 }
 
 export type ToolExecutionStatus =
@@ -57,6 +81,12 @@ export interface ToolExecution {
   latencyMs?: number
   /** Error message for runtime_failure / timeout; denial reason for policy_denied. */
   error?:     string
+  /**
+   * Phase B: set for untrusted tool results. Carries provenance metadata,
+   * clipping info, and the containsInstructions flag. The ToolResultMessage
+   * in conversation uses labeledContent(artifact) — not the raw result string.
+   */
+  artifact?:  ExternalArtifact
 }
 
 // ── Failure ───────────────────────────────────────────────────────────────────

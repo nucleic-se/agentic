@@ -21,7 +21,8 @@
 import * as fs       from 'node:fs'
 import * as path     from 'node:path'
 import * as readline from 'node:readline'
-import { createCodingAgent, createCodingTools } from './index.js'
+import { createCodingAgent, createCodingTools, createCodingRegistry } from './index.js'
+import { DefaultToolPolicy }                   from './tool-policy.js'
 import { OllamaProvider, AnthropicProvider, OLLAMA_CLOUD_MODEL_DEFAULTS } from '../../providers/index.js'
 import type { ILLMProvider, ModelTier } from '../../contracts/llm.js'
 import type { AgentEvent, TurnRecord } from '../../contracts/agent.js'
@@ -304,8 +305,10 @@ async function main(): Promise<void> {
     die('Provide an instruction or use -i for interactive mode.')
   }
 
-  const router = buildRouter(args.provider)
-  const tools  = createCodingTools({ cwd: args.cwd })
+  const router   = buildRouter(args.provider)
+  const tools    = createCodingTools({ cwd: args.cwd })
+  const registry = createCodingRegistry(tools)
+  const policy   = new DefaultToolPolicy(registry)
 
   const defaultSystem = [
     'You are a coding assistant with access to the filesystem and shell.',
@@ -318,6 +321,8 @@ async function main(): Promise<void> {
   const agent = createCodingAgent({
     router,
     tools,
+    registry,
+    policy,
     systemPrompt: args.system ?? defaultSystem,
     maxTurns:     args.maxTurns,
   })
