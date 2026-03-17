@@ -20,7 +20,8 @@
         "runtime/**/*.ts",
         "patterns/**/*.ts",
         "tools/**/*.ts",
-        "providers/**/*.ts"
+        "providers/**/*.ts",
+        "demo/**/*.ts"
     ],
     "exclude": [
         "**/*.test.ts",

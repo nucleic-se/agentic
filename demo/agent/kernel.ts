@@ -1,0 +1,341 @@
+/**
+ * CodingAgent execution kernel.
+ *
+ * Pure function — no class state, no side effects beyond appending to the
+ * mutable `conversation` array passed in. Drives the deliberate → plan →
+ * execute → reconcile loop with explicit turn records.
+ *
+ * Phase A: no policy, no context broker, no memory, no observability.
+ * Those are layered on by CodingAgent before calling this function.
+ */
+
+import { randomUUID }                  from 'node:crypto'
+import type { Message, AssistantMessage, ToolResultMessage } from '../../contracts/llm.js'
+import type { AgentConfig }            from './config.js'
+import type {
+  AgentEventSink,
+  TurnRecord,
+  ToolPlan,
+  ToolExecution,
+  ToolExecutionStatus,
+  Failure,
+} from '../../contracts/agent.js'
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function syntheticResult(callId: string, content: string): ToolResultMessage {
+  return { role: 'tool_result', toolCallId: callId, content, isError: true }
+}
+
+function realResult(callId: string, content: string, isError: boolean): ToolResultMessage {
+  return { role: 'tool_result', toolCallId: callId, content, isError }
+}
+
+// ── Kernel ────────────────────────────────────────────────────────────────────
+
+/**
+ * Run the deliberate → plan → execute → reconcile loop.
+ *
+ * @param conversation  Mutable transcript. Kernel appends messages at reconcile.
+ * @param config        Agent configuration.
+ * @param context       What the model sees this turn. In Phase A: system = config.systemPrompt,
+ *                      messages = full conversation. Phase C+ passes broker-assembled output.
+ * @param emit          Event sink — called for every agent event.
+ * @param signal        Optional cancellation signal.
+ * @returns             All TurnRecords produced during this run.
+ */
+export async function runKernel(
+  conversation: Message[],
+  config:       AgentConfig,
+  context: {
+    system?:  string
+    messages: Message[]
+  },
+  emit:         AgentEventSink,
+  signal?:      AbortSignal,
+): Promise<TurnRecord[]> {
+  const records: TurnRecord[] = []
+  const maxTurns = config.maxTurns ?? 20
+
+  // Outer turn loop — each iteration is one model call + execution cycle.
+  while (true) {
+    // ── Max-turns guard ───────────────────────────────────────────────────────
+    // Fires between turns, before turn_start is emitted — no TurnRecord created.
+    if (records.length >= maxTurns) {
+      const failure: Failure = { kind: 'max_turns_exceeded', message: `Reached turn limit of ${maxTurns}` }
+      await emit({ type: 'error', failure })
+      return records
+    }
+
+    // ── Abort guard ───────────────────────────────────────────────────────────
+    if (signal?.aborted) {
+      const failure: Failure = { kind: 'abort', message: 'AbortSignal fired before turn started' }
+      await emit({ type: 'error', failure })
+      return records
+    }
+
+    const turnId = randomUUID()
+    const t0     = Date.now()
+
+    await emit({ type: 'turn_start', turnId })
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Step 1: Deliberate — call the provider
+    // ────────────────────────────────────────────────────────────────────────
+    const provider = config.router.select('balanced')
+
+    let turnResponse: Awaited<ReturnType<typeof provider.turn>>
+    try {
+      turnResponse = await provider.turn({
+        system:   context.system,
+        messages: context.messages,
+        tools:    config.tools.tools(),
+      })
+    } catch (e) {
+      // llm_transport_error or llm_protocol_error — terminal
+      const isProtocol = e instanceof Error && e.message.includes('protocol')
+      const kind = isProtocol ? 'llm_protocol_error' : 'llm_transport_error'
+      const failure: Failure = {
+        kind,
+        message: e instanceof Error ? e.message : String(e),
+      }
+      // Commit a TurnRecord — turn_start was emitted so a record is required.
+      const record: TurnRecord = {
+        turnId,
+        userInput:     null,
+        modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+        modelResponse: { role: 'assistant', content: '' },
+        plan:          [],
+        executions:    [],
+        outcome:       'failed',
+        failure,
+        durationMs:    Date.now() - t0,
+        tokenUsage:    { inputTokens: 0, outputTokens: 0 },
+      }
+      records.push(record)
+      await emit({ type: 'turn_end', record })
+      await emit({ type: 'error', failure })
+      return records
+    }
+
+    const { message: response, stopReason, usage } = turnResponse
+    await emit({ type: 'message_end', message: response })
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Step 2: Plan — interpret stop reason
+    // ────────────────────────────────────────────────────────────────────────
+
+    if (stopReason === 'max_tokens') {
+      const failure: Failure = { kind: 'max_tokens_stop', message: 'Model output truncated at token limit' }
+      const record: TurnRecord = {
+        turnId,
+        userInput:     null,
+        modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+        modelResponse: response,
+        plan:          [],
+        executions:    [],
+        outcome:       'partial',
+        failure,
+        durationMs:    Date.now() - t0,
+        tokenUsage:    usage,
+      }
+      records.push(record)
+      await emit({ type: 'turn_end', record })
+      await emit({ type: 'error', failure })
+      return records
+    }
+
+    if (stopReason === 'end_turn' || stopReason === 'stop_sequence') {
+      // Natural stop — commit turn, then check for follow-ups.
+      conversation.push(response)
+      const record: TurnRecord = {
+        turnId,
+        userInput:     null,
+        modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+        modelResponse: response,
+        plan:          [],
+        executions:    [],
+        outcome:       'answered',
+        durationMs:    Date.now() - t0,
+        tokenUsage:    usage,
+      }
+      records.push(record)
+      await emit({ type: 'turn_end', record })
+
+      // Check for follow-up messages — each response is a separate turn.
+      const followUps = config.getFollowUpMessages ? await config.getFollowUpMessages() : []
+      if (followUps.length > 0) {
+        for (const msg of followUps) conversation.push(msg)
+        // Update context.messages for next iteration — in Phase A this is the same array.
+        // Phase C+ reassembles context before each turn via CodingAgent.
+        context = { ...context, messages: conversation }
+        continue
+      }
+
+      return records
+    }
+
+    // stopReason === 'tool_use'
+
+    // Deduplicate tool calls by callId within this response (protocol safety).
+    const seen    = new Set<string>()
+    const rawCalls = response.toolCalls ?? []
+    const uniqueCalls = rawCalls.filter(c => {
+      if (seen.has(c.id)) return false
+      seen.add(c.id)
+      return true
+    })
+
+    const plan: ToolPlan[] = uniqueCalls.map(c => ({
+      callId: c.id,
+      name:   c.name,
+      input:  c.args,
+    }))
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Step 3: Execute — run each planned tool call
+    // ────────────────────────────────────────────────────────────────────────
+    const executions: ToolExecution[] = []
+    let interruptReason: 'abort' | 'steering' | null = null
+    let steeringMessages: Message[] = []
+
+    for (const p of plan) {
+      // Abort check before each call.
+      if (signal?.aborted) {
+        // Mark this and all remaining as cancelled.
+        const remaining = plan.slice(executions.length)
+        for (const rem of remaining) {
+          executions.push({ callId: rem.callId, plan: rem, status: 'cancelled' })
+        }
+        interruptReason = 'abort'
+        break
+      }
+
+      // Phase B inserts policy gate here.
+
+      await emit({ type: 'tool_start', turnId, callId: p.callId, name: p.name, input: p.input })
+
+      const callT0 = Date.now()
+      let execution: ToolExecution
+
+      try {
+        const raw = await config.tools.call(p.name, p.input as Record<string, unknown>, { signal })
+        execution = {
+          callId:    p.callId,
+          plan:      p,
+          status:    raw.ok ? 'success' : 'runtime_failure',
+          result:    raw,
+          latencyMs: Date.now() - callT0,
+          ...(!raw.ok ? { error: raw.content } : {}),
+        }
+      } catch (e) {
+        // tools.call() should never throw (contract), but handle defensively.
+        execution = {
+          callId:    p.callId,
+          plan:      p,
+          status:    'runtime_failure',
+          latencyMs: Date.now() - callT0,
+          error:     e instanceof Error ? e.message : String(e),
+        }
+      }
+
+      executions.push(execution)
+      await emit({ type: 'tool_end', turnId, callId: p.callId, name: p.name, execution })
+
+      // Check for steering interruption after each tool call.
+      if (config.getSteeringMessages) {
+        const steering = await config.getSteeringMessages()
+        if (steering.length > 0) {
+          // Mark remaining planned calls as skipped.
+          const remaining = plan.slice(executions.length)
+          for (const rem of remaining) {
+            executions.push({ callId: rem.callId, plan: rem, status: 'skipped' })
+          }
+          steeringMessages = steering
+          interruptReason = 'steering'
+          break
+        }
+      }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Step 4: Reconcile — commit turn atomically
+    //
+    // Protocol rule: every tool_use in an AssistantMessage MUST have a
+    // corresponding ToolResultMessage. Cancelled/skipped calls get synthetic
+    // results. This is a protocol requirement, not a design choice.
+    // ────────────────────────────────────────────────────────────────────────
+
+    // Build ToolResultMessages for all planned calls.
+    const toolResults: ToolResultMessage[] = executions.map(ex => {
+      switch (ex.status) {
+        case 'success':
+        case 'runtime_failure':
+          return realResult(
+            ex.callId,
+            ex.result?.content ?? (ex.error ?? 'Tool returned no content'),
+            ex.status === 'runtime_failure',
+          )
+        case 'cancelled':
+          return syntheticResult(ex.callId, 'Cancelled: AbortSignal fired before this call ran.')
+        case 'skipped':
+          return syntheticResult(ex.callId, 'Skipped: steering interrupted before this call ran.')
+        case 'policy_denied':
+          return syntheticResult(ex.callId, `Denied by policy: ${ex.error ?? 'no reason given'}.`)
+        case 'timeout':
+          return syntheticResult(ex.callId, `Timeout: tool did not return within the time budget.`)
+      }
+    })
+
+    const plannedCallIds  = plan.map(p => p.callId)
+    const executedCallIds = executions.filter(e => e.status === 'success' || e.status === 'runtime_failure').map(e => e.callId)
+
+    let outcome: TurnRecord['outcome']
+    if (interruptReason === 'abort') {
+      outcome = 'aborted'
+    } else if (interruptReason === 'steering') {
+      outcome = 'interrupted'
+    } else {
+      outcome = 'answered'
+    }
+
+    // Append to conversation atomically (AssistantMessage + all ToolResultMessages).
+    conversation.push(response)
+    for (const tr of toolResults) conversation.push(tr)
+    if (interruptReason === 'steering') {
+      for (const msg of steeringMessages) conversation.push(msg)
+    }
+
+    const record: TurnRecord = {
+      turnId,
+      userInput:     null,
+      modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+      modelResponse: response,
+      plan,
+      executions,
+      outcome,
+      ...(interruptReason ? {
+        interrupted: {
+          plannedCalls:  plannedCallIds,
+          executedCalls: executedCallIds,
+          reason:        interruptReason,
+        },
+      } : {}),
+      durationMs: Date.now() - t0,
+      tokenUsage:  usage,
+    }
+
+    records.push(record)
+    await emit({ type: 'turn_end', record })
+
+    if (interruptReason === 'abort') {
+      const failure: Failure = { kind: 'abort', message: 'AbortSignal fired during tool execution' }
+      await emit({ type: 'error', failure })
+      return records
+    }
+
+    // If steering interrupted, loop continues — steering messages are now in conversation.
+    // Update context for the next iteration (Phase A: raw conversation).
+    context = { ...context, messages: conversation }
+  }
+}

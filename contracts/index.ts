@@ -75,8 +75,15 @@ export type {
 // Tool prompt rendering
 export type { IToolPromptRenderer } from './IToolPromptRenderer.js';
 
-// Context assembly
+// Context assembly (section-level)
 export type { AssemblyInput, IContextAssembler } from './IContextAssembler.js';
+
+// Agent context assembly (turn-level: produces system + messages for TurnRequest)
+export type {
+    AgentContextInput,
+    AgentContextOutput,
+    IAgentContextAssembler,
+} from './IAgentContextAssembler.js';
 
 // LLM provider v2 — message threading, tool calls, token usage
 export type {
@@ -101,7 +108,30 @@ export type {
 export type {
     IToolRuntime,
     ToolCallResult,
+    ToolCallOptions,
 } from './tool-runtime.js';
+
+// Tool policy
+export type {
+    PolicyContext,
+    PolicyDecision,
+    IToolPolicy,
+} from './IToolPolicy.js'
+
+// Agent runtime contracts
+export type {
+    AgentState,
+    ToolPlan,
+    ToolExecutionStatus,
+    ToolExecution,
+    FailureKind,
+    Failure,
+    TurnOutcome,
+    TurnRecord,
+    AgentEvent,
+    AgentEventSink,
+    IAgent,
+} from './agent.js';
 
 // Fluent AI builders
 export type {
