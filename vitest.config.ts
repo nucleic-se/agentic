@@ -10,6 +10,7 @@ export default defineConfig({
             'state-graph.test.ts',
             'demo/agent/kernel.test.ts',
             'demo/agent/CodingAgent.test.ts',
+            'providers/openai-compatible.test.ts',
         ],
     },
 });

@@ -249,6 +249,202 @@ describe('OllamaProvider', () => {
     })
 })
 
+describe('OllamaProvider structured override', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    it('uses json_object format instead of json_schema', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: '{"name":"test","value":42}' },
+            }],
+            usage: { prompt_tokens: 20, completion_tokens: 10 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OllamaProvider({ model: 'gemma3:12b' })
+        const result = await provider.structured<{ name: string; value: number }>({
+            messages: [{ role: 'user', content: 'extract data' }],
+            schema: {
+                type: 'object',
+                properties: { name: { type: 'string' }, value: { type: 'number' } },
+                required: ['name', 'value'],
+            },
+        })
+
+        expect(result.value).toEqual({ name: 'test', value: 42 })
+        expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 10 })
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        const body = JSON.parse(String(init.body))
+        // Should use json_object, NOT json_schema
+        expect(body.response_format).toEqual({ type: 'json_object' })
+        // Schema should be injected as a user message hint
+        const lastMsg = body.messages[body.messages.length - 1]
+        expect(lastMsg.role).toBe('user')
+        expect(lastMsg.content).toContain('JSON object')
+    })
+
+    it('strips code fences from structured response', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: '```json\n{"status":"ok"}\n```' },
+            }],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OllamaProvider({ model: 'gemma3:12b' })
+        const result = await provider.structured<{ status: string }>({
+            messages: [{ role: 'user', content: 'status?' }],
+            schema: { type: 'object', properties: { status: { type: 'string' } } },
+        })
+
+        expect(result.value).toEqual({ status: 'ok' })
+    })
+
+    it('throws on empty structured response', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: '' },
+            }],
+            usage: { prompt_tokens: 5, completion_tokens: 0 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OllamaProvider({ model: 'gemma3:12b' })
+        await expect(provider.structured({
+            messages: [{ role: 'user', content: 'hi' }],
+            schema: { type: 'object' },
+        })).rejects.toThrow('structured response was empty')
+    })
+
+    it('throws on malformed JSON in structured response', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: 'not valid json at all' },
+            }],
+            usage: { prompt_tokens: 5, completion_tokens: 3 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OllamaProvider({ model: 'gemma3:12b' })
+        await expect(provider.structured({
+            messages: [{ role: 'user', content: 'hi' }],
+            schema: { type: 'object' },
+        })).rejects.toThrow()
+    })
+})
+
+describe('OpenAICompatibleProvider streamTurn', () => {
+    afterEach(() => { vi.restoreAllMocks() })
+
+    function sseResponse(events: string[]): Response {
+        const text = events.map(e => `data: ${e}\n\n`).join('') + 'data: [DONE]\n\n'
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue(encoder.encode(text))
+                controller.close()
+            },
+        })
+        return new Response(stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+        })
+    }
+
+    it('streams text content deltas and returns complete response', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+            JSON.stringify({ choices: [{ index: 0, delta: { content: 'Hello ' }, finish_reason: null }] }),
+            JSON.stringify({ choices: [{ index: 0, delta: { content: 'world' }, finish_reason: 'stop' }] }),
+            JSON.stringify({ usage: { prompt_tokens: 5, completion_tokens: 2 } }),
+        ]))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1',
+            model: 'test-model',
+        })
+
+        const deltas: string[] = []
+        const result = await provider.streamTurn(
+            { messages: [{ role: 'user', content: 'hi' }] },
+            (text) => deltas.push(text),
+        )
+
+        expect(deltas).toEqual(['Hello ', 'world'])
+        expect(result.message.content).toBe('Hello world')
+        expect(result.stopReason).toBe('end_turn')
+        expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 2 })
+    })
+
+    it('accumulates tool call deltas from stream', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(sseResponse([
+            JSON.stringify({
+                choices: [{
+                    index: 0,
+                    delta: {
+                        tool_calls: [{
+                            index: 0,
+                            id: 'call_1',
+                            function: { name: 'search', arguments: '{"q' },
+                        }],
+                    },
+                    finish_reason: null,
+                }],
+            }),
+            JSON.stringify({
+                choices: [{
+                    index: 0,
+                    delta: {
+                        tool_calls: [{
+                            index: 0,
+                            function: { arguments: 'uery":"test"}' },
+                        }],
+                    },
+                    finish_reason: 'tool_calls',
+                }],
+            }),
+        ]))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1',
+            model: 'test-model',
+        })
+
+        const result = await provider.streamTurn(
+            { messages: [{ role: 'user', content: 'search' }] },
+            () => {},
+        )
+
+        expect(result.stopReason).toBe('tool_use')
+        expect(result.message.toolCalls).toHaveLength(1)
+        expect(result.message.toolCalls![0]!.name).toBe('search')
+        expect(result.message.toolCalls![0]!.args).toEqual({ query: 'test' })
+    })
+
+    it('throws on HTTP error during stream', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(
+            new Response('Internal Server Error', { status: 500, statusText: 'Internal Server Error' }),
+        )
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1',
+            model: 'test-model',
+        })
+
+        await expect(
+            provider.streamTurn({ messages: [{ role: 'user', content: 'hi' }] }, () => {}),
+        ).rejects.toThrow('HTTP 500')
+    })
+})
+
 describe('resilient-fetch', () => {
     describe('retryDelay', () => {
         it('produces exponential delays capped at maxDelayMs', () => {
