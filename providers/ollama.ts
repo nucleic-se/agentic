@@ -40,7 +40,7 @@ export const OLLAMA_CLOUD_API_BASE = 'https://ollama.com/v1'
  */
 export const OLLAMA_CLOUD_MODEL_DEFAULTS = {
     fast:     'gemma3:12b',
-    balanced: 'qwen3-next:80b',
+    balanced: 'glm-5:cloud',
     capable:  'deepseek-v3.1:671b',
 } as const satisfies Record<'fast' | 'balanced' | 'capable', string>
 

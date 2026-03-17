@@ -125,6 +125,13 @@ export interface ILLMProvider {
     turn(request: TurnRequest): Promise<TurnResponse>
 
     /**
+     * Streaming variant of turn(). Calls onDelta with text chunks as they
+     * arrive, then resolves with the complete TurnResponse. Optional —
+     * callers should fall back to turn() when not implemented.
+     */
+    streamTurn?(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse>
+
+    /**
      * Embed one or more texts. Returns one vector per input.
      */
     embed(texts: string[]): Promise<number[][]>

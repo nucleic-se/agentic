@@ -45,6 +45,7 @@ const DEFINITIONS: ToolDefinition[] = [
         description: [
             'Run a shell command. Returns exit code, stdout, and stderr.',
             'Commands run in a subprocess — no persistent state between calls.',
+            `Default timeout: ${DEFAULT_TIMEOUT / 1000}s, max: ${MAX_TIMEOUT / 1000}s. Background processes (&) block until timeout.`,
             'Use for: compiling, running tests, git operations, file processing.',
         ].join(' '),
         parameters: {
@@ -78,6 +79,7 @@ function runCommand(
             cwd,
             env: { ...process.env, ...env },
             stdio: ['ignore', 'pipe', 'pipe'],
+            detached: true,
         })
 
         function onData(chunk: Buffer) {
@@ -95,7 +97,7 @@ function runCommand(
         proc.stderr.on('data', onData)
 
         const timer = setTimeout(() => {
-            proc.kill('SIGKILL')
+            try { process.kill(-proc.pid!, 'SIGKILL') } catch {}
         }, timeoutMs)
 
         proc.on('close', (code) => {

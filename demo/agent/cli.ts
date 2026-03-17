@@ -16,6 +16,8 @@
  *   -i, --interactive         Multi-turn interactive session
  *   -v, --verbose             Show raw event stream (tool results, turn metadata)
  *   -t, --trace               Dump hierarchical span trace after run
+ *   -d, --debug-log           Write full debug log (all turns, tool I/O) to .agent-logs/
+ *   -a, --auto-stop           Skip follow-up LLM call when all tools succeed
  *   -h, --help                Show this help
  */
 
@@ -114,13 +116,24 @@ function buildRouter(providerName: string): IModelRouter {
 // ── Event display ─────────────────────────────────────────────────────────────
 
 function makeEventHandler(verbose: boolean): (event: AgentEvent) => void {
+  let streamedContent = false
   return (event) => {
     switch (event.type) {
+      case 'message_delta':
+        streamedContent = true
+        process.stdout.write(event.text)
+        break
+
       case 'message_end':
-        if (event.message.content) {
+        // If streaming was active, deltas already printed the content.
+        // Only print here if no deltas were emitted (non-streaming provider).
+        if (!streamedContent && event.message.content) {
           process.stdout.write(event.message.content)
+        }
+        if (streamedContent || event.message.content) {
           process.stdout.write('\n')
         }
+        streamedContent = false
         break
 
       case 'tool_start':
@@ -197,6 +210,8 @@ ${c(C.bold, 'Options:')}
   -i, --interactive      Multi-turn REPL session
   -v, --verbose          Show turn metadata
   -t, --trace            Dump span trace after run
+  -d, --debug-log        Write full debug log to .agent-logs/
+  -a, --auto-stop        Skip follow-up LLM call when all tools succeed
   -h, --help             Show this help
 
 ${c(C.bold, 'Examples:')}
@@ -222,6 +237,8 @@ interface CliArgs {
   interactive:  boolean
   verbose:      boolean
   trace:        boolean
+  debugLog:     boolean
+  autoStop:     boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -233,6 +250,8 @@ function parseArgs(argv: string[]): CliArgs {
     interactive: false,
     verbose:     false,
     trace:       false,
+    debugLog:    false,
+    autoStop:    false,
   }
 
   for (let i = 0; i < args.length; i++) {
@@ -242,6 +261,8 @@ function parseArgs(argv: string[]): CliArgs {
       case '-i': case '--interactive': result.interactive = true;   break
       case '-v': case '--verbose':     result.verbose = true;       break
       case '-t': case '--trace':       result.trace = true;         break
+      case '-d': case '--debug-log':  result.debugLog = true;      break
+      case '-a': case '--auto-stop': result.autoStop = true;      break
       case '-C': case '--cwd':         result.cwd = path.resolve(args[++i] ?? '.'); break
       case '-p': case '--provider':    result.provider = args[++i] ?? result.provider; break
       case '-s': case '--system':      result.system = args[++i]; break
@@ -321,7 +342,9 @@ async function main(): Promise<void> {
     'You are a coding assistant with access to the filesystem and shell.',
     `Working directory: ${args.cwd}`,
     'Read files before editing them.',
-    'Use shell_run to run tests, compile, or verify your changes.',
+    'When multiple independent actions are needed, call ALL tools in a single response instead of one at a time. For example, to read 3 files, return 3 fs_read tool calls in one message.',
+    'Use shell_run to run tests, compile, or verify changes. Background processes (&) block until timeout (default 30s).',
+    'After tool calls complete, respond with the answer directly. Do not narrate which tools you called.',
     'Be concise. Show only relevant output.',
   ].join('\n')
 
@@ -333,6 +356,7 @@ async function main(): Promise<void> {
     tracer,
     systemPrompt: args.system ?? defaultSystem,
     maxTurns:     args.maxTurns,
+    autoStop:     args.autoStop,
   })
 
   const handler = makeEventHandler(args.verbose)
@@ -363,6 +387,28 @@ async function main(): Promise<void> {
         )
       }
     }
+  }
+
+  // Debug log: write full turn records + trace spans to disk.
+  if (args.debugLog) {
+    const logDir = path.join(args.cwd, '.agent-logs')
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true })
+
+    const ts = new Date().toISOString().replace(/[:.]/g, '-')
+    const logFile = path.join(logDir, `run-${ts}.json`)
+    const records = agent.getExecutionHistory()
+    const payload = {
+      timestamp: new Date().toISOString(),
+      provider:  args.provider,
+      cwd:       args.cwd,
+      system:    args.system ?? '(default)',
+      maxTurns:  args.maxTurns,
+      instruction: args.instruction ?? '(interactive)',
+      turns:     records,
+      spans:     tracer?.export() ?? [],
+    }
+    fs.writeFileSync(logFile, JSON.stringify(payload, null, 2))
+    process.stderr.write(c(C.dim, `\nDebug log: ${logFile}`) + '\n')
   }
 }
 

@@ -205,6 +205,7 @@ export type AgentEvent =
   | { type: 'agent_end';   records: TurnRecord[] }
   | { type: 'turn_start';  turnId: string }
   | { type: 'turn_end';    record: TurnRecord }
+  | { type: 'message_delta'; text: string }
   | { type: 'message_end'; message: AssistantMessage }
   | { type: 'tool_start';  turnId: string; callId: string; name: string; input: unknown }
   | { type: 'tool_end';    turnId: string; callId: string; name: string; execution: ToolExecution }

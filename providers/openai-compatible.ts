@@ -72,7 +72,8 @@ interface OpenAIMessage {
 interface OpenAIChatRequest {
     model: string
     messages: OpenAIMessage[]
-    stream: false
+    stream: boolean
+    stream_options?: { include_usage: boolean }
     tools?: OpenAIFunctionTool[]
     tool_choice?: 'auto' | { type: 'function'; function: { name: string } }
     response_format?: {
@@ -85,6 +86,25 @@ interface OpenAIChatRequest {
     }
     stop?: string[]
     max_tokens?: number
+}
+
+interface OpenAIStreamDelta {
+    choices?: Array<{
+        delta?: {
+            content?: string | null
+            tool_calls?: Array<{
+                index?: number
+                id?: string
+                type?: 'function'
+                function?: {
+                    name?: string
+                    arguments?: string
+                }
+            }>
+        }
+        finish_reason?: string | null
+    }>
+    usage?: OpenAIChatResponse['usage']
 }
 
 interface OpenAIChatResponse {
@@ -281,6 +301,115 @@ export class OpenAICompatibleProvider implements ILLMProvider {
 
         const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody })
         return fromOpenAIResponse(res)
+    }
+
+    async streamTurn(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse> {
+        const body: OpenAIChatRequest = {
+            model:      this.model,
+            messages:   toOpenAIMessages(request.system, request.messages),
+            stream:     true,
+            stream_options: { include_usage: true },
+            ...(request.tools?.length
+                ? {
+                    tools: toOpenAITools(request.tools),
+                    tool_choice: 'auto' as const,
+                }
+                : {}),
+            ...(request.stopSequences?.length ? { stop: request.stopSequences } : {}),
+            ...(request.maxTokens != null ? { max_tokens: request.maxTokens } : {}),
+        }
+
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            ...this.headers,
+        }
+        if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`
+
+        const res = await fetch(`${this.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ ...body, ...this.extraBody }),
+        })
+        if (!res.ok) {
+            const text = await res.text().catch(() => '(no body)')
+            throw new Error(`${this.providerName}: HTTP ${res.status} ${res.statusText} — ${text}`)
+        }
+        if (!res.body) throw new Error(`${this.providerName}: streaming response has no body`)
+
+        // Accumulate content + tool calls from SSE deltas.
+        let content = ''
+        let finishReason: string | null = null
+        let usage: OpenAIChatResponse['usage'] = undefined
+        const toolCallAccum = new Map<number, { id: string; name: string; args: string }>()
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() ?? ''
+
+            for (const line of lines) {
+                const trimmed = line.trim()
+                if (!trimmed || !trimmed.startsWith('data: ')) continue
+                const payload = trimmed.slice(6)
+                if (payload === '[DONE]') continue
+
+                let chunk: OpenAIStreamDelta
+                try { chunk = JSON.parse(payload) } catch { continue }
+
+                const choice = chunk.choices?.[0]
+                if (choice?.delta?.content) {
+                    content += choice.delta.content
+                    onDelta(choice.delta.content)
+                }
+
+                // Accumulate tool call deltas by index.
+                if (choice?.delta?.tool_calls) {
+                    for (const tc of choice.delta.tool_calls) {
+                        const idx = tc.index ?? 0
+                        const existing = toolCallAccum.get(idx)
+                        if (!existing) {
+                            toolCallAccum.set(idx, {
+                                id:   tc.id ?? `tool-call-${idx}`,
+                                name: tc.function?.name ?? '',
+                                args: tc.function?.arguments ?? '',
+                            })
+                        } else {
+                            if (tc.id) existing.id = tc.id
+                            if (tc.function?.name) existing.name += tc.function.name
+                            existing.args += tc.function?.arguments ?? ''
+                        }
+                    }
+                }
+
+                if (choice?.finish_reason) finishReason = choice.finish_reason
+                if (chunk.usage) usage = chunk.usage
+            }
+        }
+
+        const toolCalls: ToolCall[] = [...toolCallAccum.values()].map(tc => ({
+            id:   tc.id,
+            name: tc.name,
+            args: normalizeToolArgs(tc.args || undefined, tc.name),
+        }))
+
+        const assistant: AssistantMessage = {
+            role:      'assistant',
+            content,
+            toolCalls: toolCalls.length ? toolCalls : undefined,
+        }
+
+        return {
+            message:    assistant,
+            stopReason: mapStopReason(finishReason, toolCalls),
+            usage:      extractUsage(usage),
+        }
     }
 
     async embed(texts: string[]): Promise<number[][]> {

@@ -112,13 +112,21 @@ export async function runKernel(
       llmMessages = await config.onBeforeLlmCall(context.messages)
     }
 
+    const turnRequest: import('../../contracts/llm.js').TurnRequest = {
+      system:   context.system,
+      messages: llmMessages,
+      tools:    config.tools.tools(),
+    }
+
     let turnResponse: Awaited<ReturnType<typeof provider.turn>>
     try {
-      turnResponse = await provider.turn({
-        system:   context.system,
-        messages: llmMessages,
-        tools:    config.tools.tools(),
-      })
+      if (provider.streamTurn) {
+        turnResponse = await provider.streamTurn(turnRequest, (text) => {
+          emit({ type: 'message_delta', text })
+        })
+      } else {
+        turnResponse = await provider.turn(turnRequest)
+      }
     } catch (e) {
       // llm_transport_error or llm_protocol_error — terminal
       const isProtocol = e instanceof Error && e.message.includes('protocol')
@@ -447,6 +455,16 @@ export async function runKernel(
 
     records.push(record)
     await emit({ type: 'turn_end', record })
+
+    // Auto-stop: skip follow-up LLM call when all tools succeeded and model
+    // produced no text content (tool results are already visible via tool_end).
+    if (config.autoStop && !interruptReason) {
+      const allOk  = executions.every(e => e.status === 'success')
+      const noText = !response.content?.trim()
+      if (allOk && noText) {
+        return records
+      }
+    }
 
     if (interruptReason === 'abort') {
       const failure: Failure = { kind: 'abort', message: 'AbortSignal fired during tool execution' }

@@ -26,6 +26,7 @@ export interface AgentConfig {
   // Optional
   systemPrompt?:        string
   maxTurns?:            number                    // default: 20
+  autoStop?:            boolean                   // skip follow-up LLM call when all tools succeed and model produced no text
   getSteeringMessages?: () => Promise<Message[]>  // polled after each tool call
   getFollowUpMessages?: () => Promise<Message[]>  // polled after end_turn
 
