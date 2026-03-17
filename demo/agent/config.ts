@@ -40,7 +40,7 @@ export interface AgentConfig {
   tailTurns?:     number         // raw conversation turns in tail lane; default: 3
 
   // ── Phase D ─────────────────────────────────────────────────────────────────
-  // tracer?: ISpanTracer
+  tracer?: import('../../contracts/IObservability.js').ISpanTracer
 
   // ── Phase E ─────────────────────────────────────────────────────────────────
   // factStore?: FactStore           // scratchpad + facts

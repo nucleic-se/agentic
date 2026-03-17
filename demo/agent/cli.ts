@@ -15,6 +15,7 @@
  *       --max-turns <n>       Turn limit                               (default: 20)
  *   -i, --interactive         Multi-turn interactive session
  *   -v, --verbose             Show raw event stream (tool results, turn metadata)
+ *   -t, --trace               Dump hierarchical span trace after run
  *   -h, --help                Show this help
  */
 
@@ -24,6 +25,7 @@ import * as readline from 'node:readline'
 import { createCodingAgent, createCodingTools, createCodingRegistry } from './index.js'
 import { DefaultToolPolicy }                   from './tool-policy.js'
 import { OllamaProvider, AnthropicProvider, OLLAMA_CLOUD_MODEL_DEFAULTS } from '../../providers/index.js'
+import { InMemorySpanTracer }                  from '../../runtime/InMemorySpanTracer.js'
 import type { ILLMProvider, ModelTier } from '../../contracts/llm.js'
 import type { AgentEvent, TurnRecord } from '../../contracts/agent.js'
 import type { IModelRouter } from '../../contracts/llm.js'
@@ -194,6 +196,7 @@ ${c(C.bold, 'Options:')}
       --max-turns <n>    Max turns                        ${c(C.dim, '(default: 20)')}
   -i, --interactive      Multi-turn REPL session
   -v, --verbose          Show turn metadata
+  -t, --trace            Dump span trace after run
   -h, --help             Show this help
 
 ${c(C.bold, 'Examples:')}
@@ -218,6 +221,7 @@ interface CliArgs {
   maxTurns:     number
   interactive:  boolean
   verbose:      boolean
+  trace:        boolean
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -228,6 +232,7 @@ function parseArgs(argv: string[]): CliArgs {
     maxTurns:    20,
     interactive: false,
     verbose:     false,
+    trace:       false,
   }
 
   for (let i = 0; i < args.length; i++) {
@@ -236,6 +241,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '-h': case '--help':        showHelp(); process.exit(0); break
       case '-i': case '--interactive': result.interactive = true;   break
       case '-v': case '--verbose':     result.verbose = true;       break
+      case '-t': case '--trace':       result.trace = true;         break
       case '-C': case '--cwd':         result.cwd = path.resolve(args[++i] ?? '.'); break
       case '-p': case '--provider':    result.provider = args[++i] ?? result.provider; break
       case '-s': case '--system':      result.system = args[++i]; break
@@ -309,6 +315,7 @@ async function main(): Promise<void> {
   const tools    = createCodingTools({ cwd: args.cwd })
   const registry = createCodingRegistry(tools)
   const policy   = new DefaultToolPolicy(registry)
+  const tracer   = args.trace ? new InMemorySpanTracer() : undefined
 
   const defaultSystem = [
     'You are a coding assistant with access to the filesystem and shell.',
@@ -323,6 +330,7 @@ async function main(): Promise<void> {
     tools,
     registry,
     policy,
+    tracer,
     systemPrompt: args.system ?? defaultSystem,
     maxTurns:     args.maxTurns,
   })
@@ -338,6 +346,23 @@ async function main(): Promise<void> {
     await runInteractive(agent, handler)
   } else {
     await agent.prompt(args.instruction!, handler)
+  }
+
+  // Phase D: dump spans after run.
+  if (tracer) {
+    const spans = tracer.export()
+    if (spans.length > 0) {
+      process.stderr.write('\n' + c(C.bold, 'Trace spans:') + '\n')
+      for (const s of spans) {
+        const dur = s.endTime ? `${s.endTime - s.startTime}ms` : 'open'
+        const indent = s.parentSpanId ? '  ' : ''
+        const icon = s.status === 'ok' ? '✓' : s.status === 'error' ? '✗' : '○'
+        process.stderr.write(
+          c(C.dim, `${indent}${icon} ${s.type}  ${dur}`) +
+          (s.error ? c(C.yellow, `  ${s.error.slice(0, 80)}`) : '') + '\n'
+        )
+      }
+    }
   }
 }
 
