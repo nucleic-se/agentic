@@ -106,11 +106,17 @@ export async function runKernel(
     // ────────────────────────────────────────────────────────────────────────
     const provider = config.router.select('balanced')
 
+    // Phase F: onBeforeLlmCall hook — transform messages before provider call.
+    let llmMessages = context.messages
+    if (config.onBeforeLlmCall) {
+      llmMessages = await config.onBeforeLlmCall(context.messages)
+    }
+
     let turnResponse: Awaited<ReturnType<typeof provider.turn>>
     try {
       turnResponse = await provider.turn({
         system:   context.system,
-        messages: context.messages,
+        messages: llmMessages,
         tools:    config.tools.tools(),
       })
     } catch (e) {
@@ -244,26 +250,59 @@ export async function runKernel(
           args:      p.input as Record<string, unknown>,
           trustTier: p.trustTier ?? 'standard',
         })
-        if (decision.kind === 'deny' || decision.kind === 'confirm') {
-          // 'confirm' → 'deny' in Phase B (Phase F wires up the confirmation channel).
-          const reason = decision.kind === 'confirm'
-            ? `Pending confirmation: ${decision.reason}`
-            : decision.reason
+        if (decision.kind === 'deny') {
           const execution: ToolExecution = {
-            callId: p.callId,
-            plan:   p,
-            status: 'policy_denied',
-            error:  reason,
+            callId: p.callId, plan: p, status: 'policy_denied', error: decision.reason,
           }
           executions.push(execution)
           await emit({ type: 'tool_end', turnId, callId: p.callId, name: p.name, execution })
-          continue  // next planned call — denial is not a turn-level failure
+          continue
+        }
+        if (decision.kind === 'confirm') {
+          // Phase F: real confirmation channel. Falls back to deny if no hook.
+          const confirmed = config.confirmToolCall
+            ? await config.confirmToolCall({
+                callId: p.callId, name: p.name,
+                args: p.input as Record<string, unknown>,
+                trustTier: p.trustTier ?? 'standard',
+                reason: decision.reason,
+              })
+            : false
+          if (!confirmed) {
+            const execution: ToolExecution = {
+              callId: p.callId, plan: p, status: 'policy_denied',
+              error: `Confirmation denied: ${decision.reason}`,
+            }
+            executions.push(execution)
+            await emit({ type: 'tool_end', turnId, callId: p.callId, name: p.name, execution })
+            continue
+          }
+          // Confirmed — fall through to execution.
         }
         if (decision.kind === 'rewrite') {
-          // Execute with rewritten args. Original args preserved in p.input (ToolPlan).
           (p as { input: unknown }).input = decision.args
         }
-        // decision.kind === 'allow' → fall through
+        // decision.kind === 'allow' or confirmed → fall through
+      }
+
+      // Phase F: beforeToolCall hook — runs after policy, can skip or modify args.
+      if (config.beforeToolCall) {
+        const hookResult = await config.beforeToolCall({
+          callId: p.callId, name: p.name,
+          args: p.input as Record<string, unknown>,
+          trustTier: p.trustTier ?? 'standard',
+        })
+        if (hookResult.action === 'skip') {
+          const execution: ToolExecution = {
+            callId: p.callId, plan: p, status: 'skipped', error: hookResult.reason,
+          }
+          executions.push(execution)
+          await emit({ type: 'tool_end', turnId, callId: p.callId, name: p.name, execution })
+          continue
+        }
+        if ('args' in hookResult && hookResult.args) {
+          (p as { input: unknown }).input = hookResult.args
+        }
       }
 
       await emit({ type: 'tool_start', turnId, callId: p.callId, name: p.name, input: p.input })
@@ -297,13 +336,25 @@ export async function runKernel(
           }
         }
       } catch (e) {
-        // tools.call() should never throw (contract), but handle defensively.
         execution = {
           callId:    p.callId,
           plan:      p,
           status:    'runtime_failure',
           latencyMs: Date.now() - callT0,
           error:     e instanceof Error ? e.message : String(e),
+        }
+      }
+
+      // Phase F: afterToolCall hook — can modify the result.
+      if (config.afterToolCall && execution.result) {
+        const hookResult = await config.afterToolCall({
+          callId: p.callId, name: p.name,
+          args: p.input as Record<string, unknown>,
+          result: execution.result,
+          latencyMs: execution.latencyMs ?? 0,
+        })
+        if (hookResult && 'result' in hookResult) {
+          execution = { ...execution, result: hookResult.result }
         }
       }
 

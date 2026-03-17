@@ -20,6 +20,11 @@ export type { TurnSummary }                  from './turn-summarizer.js'
 export { FactStore }                         from './fact-store.js'
 export type { FactEntry }                    from './fact-store.js'
 export { extractFacts, shouldExtractFacts }  from './fact-extractor.js'
+export type {
+  BeforeToolCallContext, BeforeToolCallResult,
+  AfterToolCallContext, AfterToolCallResult,
+  ConfirmToolCallContext, OnBeforeLlmCallHook,
+} from './hooks.js'
 
 import { CodingAgent }                       from './CodingAgent.js'
 import type { AgentConfig }                  from './config.js'

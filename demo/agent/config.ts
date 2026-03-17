@@ -46,10 +46,9 @@ export interface AgentConfig {
   factStore?: import('./fact-store.js').FactStore
 
   // ── Phase F ─────────────────────────────────────────────────────────────────
-  // beforeToolCall?:    (ctx: BeforeToolCallContext)  => Promise<BeforeToolCallResult>
-  // afterToolCall?:     (ctx: AfterToolCallContext)   => Promise<AfterToolCallResult | void>
-  // transformMessages?: (messages: Message[])         => Promise<Message[]>
-  // onBeforeLlmCall?:   (messages: Message[])         => Promise<Message[]>
-  // steeringMode?:      'all' | 'one-at-a-time'       // default: 'all'
-  // followUpMode?:      'all' | 'one-at-a-time'       // default: 'one-at-a-time'
+  beforeToolCall?:   (ctx: import('./hooks.js').BeforeToolCallContext) => Promise<import('./hooks.js').BeforeToolCallResult> | import('./hooks.js').BeforeToolCallResult
+  afterToolCall?:    (ctx: import('./hooks.js').AfterToolCallContext) => Promise<import('./hooks.js').AfterToolCallResult> | import('./hooks.js').AfterToolCallResult
+  /** Called when IToolPolicy returns 'confirm'. Return true to proceed, false to deny. */
+  confirmToolCall?:  (ctx: import('./hooks.js').ConfirmToolCallContext) => Promise<boolean> | boolean
+  onBeforeLlmCall?:  import('./hooks.js').OnBeforeLlmCallHook
 }
