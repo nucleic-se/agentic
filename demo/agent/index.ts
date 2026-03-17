@@ -17,6 +17,9 @@ export type { ContextBroker, AssembledContext, AgentContextQuery } from './conte
 export { SessionFileTracker }                from './session-file-tracker.js'
 export { summarizeTurn, formatSummary, truncateSummary, shouldSummarize } from './turn-summarizer.js'
 export type { TurnSummary }                  from './turn-summarizer.js'
+export { FactStore }                         from './fact-store.js'
+export type { FactEntry }                    from './fact-store.js'
+export { extractFacts, shouldExtractFacts }  from './fact-extractor.js'
 
 import { CodingAgent }                       from './CodingAgent.js'
 import type { AgentConfig }                  from './config.js'

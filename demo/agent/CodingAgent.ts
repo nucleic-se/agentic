@@ -25,6 +25,8 @@ import { DefaultContextBroker } from './context-broker.js'
 import type { ContextBroker }   from './context-broker.js'
 import { summarizeTurn, shouldSummarize } from './turn-summarizer.js'
 import type { TurnSummary }     from './turn-summarizer.js'
+import { FactStore }            from './fact-store.js'
+import { extractFacts, shouldExtractFacts } from './fact-extractor.js'
 
 const noop: AgentEventSink = () => {}
 
@@ -33,9 +35,12 @@ export class CodingAgent implements IAgent {
   private executions:   TurnRecord[]                 = []
   private summaries:    Map<string, TurnSummary>     = new Map()
   private fileTracker:  SessionFileTracker           = new SessionFileTracker()
+  private factStore:    FactStore
   private broker:       ContextBroker | null         = null
 
-  constructor(private readonly config: AgentConfig) {}
+  constructor(private readonly config: AgentConfig) {
+    this.factStore = config.factStore ?? new FactStore()
+  }
 
   async prompt(input: string, sink?: AgentEventSink): Promise<TurnRecord[]> {
     this.conversation.push({ role: 'user', content: input })
@@ -53,6 +58,7 @@ export class CodingAgent implements IAgent {
         this.fileTracker,
         this.config.tailTurns,
         this.config.promptEngine,
+        this.factStore,
       )
     }
     return this.broker
@@ -165,6 +171,11 @@ export class CodingAgent implements IAgent {
             .then(summary => this.summaries.set(summary.turnId, summary))
             .catch(() => { /* ignore — summaries are best-effort */ })
         }
+        // Phase E: fire-and-forget fact extraction.
+        if (shouldExtractFacts(event.record)) {
+          extractFacts(event.record, this.config.router, this.factStore)
+            .catch(() => { /* ignore — facts are best-effort */ })
+        }
       }
     }
 
@@ -210,6 +221,7 @@ export class CodingAgent implements IAgent {
     this.executions   = []
     this.summaries    = new Map()
     this.fileTracker  = new SessionFileTracker()
-    this.broker       = null
+    this.factStore    = this.config.factStore ?? new FactStore()
+    this.broker       = null  // force re-init with fresh fileTracker + factStore
   }
 }

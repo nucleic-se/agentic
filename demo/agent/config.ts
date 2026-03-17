@@ -43,7 +43,7 @@ export interface AgentConfig {
   tracer?: import('../../contracts/IObservability.js').ISpanTracer
 
   // ── Phase E ─────────────────────────────────────────────────────────────────
-  // factStore?: FactStore           // scratchpad + facts
+  factStore?: import('./fact-store.js').FactStore
 
   // ── Phase F ─────────────────────────────────────────────────────────────────
   // beforeToolCall?:    (ctx: BeforeToolCallContext)  => Promise<BeforeToolCallResult>

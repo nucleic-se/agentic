@@ -20,6 +20,7 @@ import type { ContextCandidate, ContextScore }  from '../../contracts/agent.js'
 import { formatSummary, truncateSummary }       from './turn-summarizer.js'
 import type { TurnSummary }       from './turn-summarizer.js'
 import type { SessionFileTracker } from './session-file-tracker.js'
+import type { FactStore }         from './fact-store.js'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,7 @@ export class DefaultContextBroker implements ContextBroker {
     private readonly fileTracker:  SessionFileTracker,
     private readonly tailTurns:    number = 3,
     engine?: IPromptEngine,
+    private readonly factStore?: FactStore,
   ) {
     this.engine = engine ?? new PromptEngine()
   }
@@ -203,6 +205,25 @@ export class DefaultContextBroker implements ContextBroker {
 
       // Track composite for diagnostics (unused at runtime, useful for debugging).
       void composite
+    }
+
+    // ── Tier 3: Memory — facts from FactStore (Phase E) ───────────────────
+
+    if (this.factStore) {
+      // Reserve ~15% of budget for memory sections.
+      const memBudget = Math.floor(query.tokenBudget * 0.15)
+      const factSections = await this.factStore.queryForContext(query.userInput, memBudget)
+      for (const fs of factSections) {
+        sections.push(fs)
+        candidates.push({
+          source:      'fact',
+          content:     fs.text(),
+          lane:        fs.sticky ? 'working_state' : 'semantic',
+          mustInclude: fs.sticky ?? false,
+          score:       { recency: 0.5, relevance: 0.7, authority: (fs.priority ?? 0) / 100 },
+          metadata:    { tokens: fs.estimatedTokens },
+        })
+      }
     }
 
     // ── Budget enforcement ───────────────────────────────────────────────────
