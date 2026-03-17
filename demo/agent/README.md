@@ -202,6 +202,20 @@ Both flush before `agent_end` — guaranteed to complete before `prompt()` retur
 | `getSteeringMessages` | After each tool call | Inject steering mid-turn |
 | `getFollowUpMessages` | After end_turn | Inject follow-up prompts |
 
+Execution order per turn (all hooks are awaited sequentially):
+
+```
+1. onBeforeLlmCall()        — before every LLM call
+2. [LLM call]
+3. policy.evaluate()        — built-in; before beforeToolCall
+4. confirmToolCall()        — only when policy returns 'confirm'
+5. beforeToolCall()         — after policy, before execution
+6. [tool execution]
+7. afterToolCall()          — may mutate result content or isError
+8. getSteeringMessages()    — polled after each tool; non-empty interrupts the loop
+9. getFollowUpMessages()    — polled after end_turn; non-empty continues the loop
+```
+
 ### Observability
 
 Optional `ISpanTracer` produces hierarchical spans:
@@ -243,10 +257,11 @@ demo/agent/
   fact-extractor.ts          Post-turn fact extraction via structured LLM call
 
   docs/
-    roadmap.md               Maturity roadmap — 16 workstreams, 4 phases
+    roadmap.md               Maturity roadmap — workstreams, phases, open design questions
     three-stores.md          Why conversation/execution/context are separate
     context-broker.md        Scoring, selection, and budget enforcement details
     failure-model.md         Every failure category with recovery policy
+    memory.md                Fact write policy, tier routing, and context assembly
 ```
 
 ---

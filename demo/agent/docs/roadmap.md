@@ -478,6 +478,29 @@ foundations.
 
 ---
 
+## Open design questions
+
+These are unresolved decisions that will affect future implementation. Noted here
+so they inform design work rather than being rediscovered.
+
+- **Embedding-based retrieval.** `FactStore` and `ContextBroker` currently use
+  keyword overlap for relevance scoring. Using `ILLMProvider.embed()` for vector
+  similarity on the facts tier would produce genuine semantic relevance. The
+  contract already supports this — it is an implementation extension, not a
+  structural change.
+
+- **Disk-backed fact store.** `InMemoryStore` is lost on process exit. A
+  `JsonlFactStore` with append-only flush and versioned migrations would give
+  cross-session memory. The migration format should be designed from day one,
+  not retrofitted.
+
+- **Dynamic token budget.** `ILLMProvider.turn()` returns `usage.inputTokens`.
+  Feeding this back into `ContextBroker` each turn allows the budget to adapt to
+  actual model behaviour rather than a fixed constant — useful for models that
+  count tokens differently than the estimator assumes.
+
+---
+
 ## Non-goals
 
 The runtime should avoid these traps:

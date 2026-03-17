@@ -211,7 +211,6 @@ execution records the operational reality.
 interface IAgent {
   getConversation():       readonly Message[]       // protocol transcript
   getExecutionHistory():   readonly TurnRecord[]    // operational truth
-  getAllMessages():        readonly AgentMessage[]  // full application layer (Phase F)
 }
 ```
 
