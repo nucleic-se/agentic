@@ -85,14 +85,14 @@ export interface GraphContext<TState extends GraphState = GraphState> {
 
     /**
      * Report tool call(s) made during this node's execution.
-     * The engine uses this to enforce `OrchestratorLimits.maxToolCalls`.
+     * The engine uses this to enforce `GraphRunLimits.maxToolCalls`.
      * Defaults to 1 if called with no argument.
      */
     readonly reportToolCall: (count?: number) => void;
 
     /**
      * Report token usage consumed during this node's execution.
-     * The engine uses this to enforce `OrchestratorLimits.maxTotalTokens`.
+     * The engine uses this to enforce `GraphRunLimits.maxTotalTokens`.
      */
     readonly reportTokens: (count: number) => void;
 }
@@ -248,7 +248,7 @@ export interface ParallelEdge<TState extends GraphState = GraphState> {
 // ── Limits ─────────────────────────────────────────────────────
 
 /** Hard limits enforced across an entire graph run. */
-export interface OrchestratorLimits {
+export interface GraphRunLimits {
     /** Max total tool executions across the entire run. */
     maxToolCalls?: number;
     /** Max total wall-clock ms for the entire run. */
@@ -266,7 +266,7 @@ export interface GraphEngineConfig {
     /** Correlation ID for all trace events emitted during this engine's runs. Defaults to a random UUID. */
     correlationId?: string;
     /** Hard limits for the entire run (tools, time, tokens). */
-    limits?: OrchestratorLimits;
+    limits?: GraphRunLimits;
     /** Called before a node executes. */
     onBeforeNode?: (nodeId: string, state: Readonly<GraphState>, stepCount: number) => void | Promise<void>;
     /** Called after a node executes successfully. */

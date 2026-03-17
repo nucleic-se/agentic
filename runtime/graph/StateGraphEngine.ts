@@ -26,7 +26,7 @@ import type {
     GraphDeadLetter,
     GraphCheckpoint,
     GraphEngineConfig,
-    OrchestratorLimits,
+    GraphRunLimits,
     GraphEnd,
     GraphState,
 } from '../../contracts/graph/index.js';
@@ -53,7 +53,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
     private readonly maxSteps: number;
     private readonly tracer: ITracer;
     private readonly correlationId: string;
-    private readonly limits?: OrchestratorLimits;
+    private readonly limits?: GraphRunLimits;
     private readonly onBeforeNode?: GraphEngineConfig['onBeforeNode'];
     private readonly onAfterNode?: GraphEngineConfig['onAfterNode'];
 
@@ -219,7 +219,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                     const elapsed = Date.now() - startTime;
                     if (elapsed >= this.limits.maxTotalMs) {
                         throw new Error(
-                            `Orchestrator limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
+                            `Graph run limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
                         );
                     }
                 }
@@ -227,14 +227,14 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                 // Enforce tool-call limit.
                 if (this.limits?.maxToolCalls != null && this._toolCallCount >= this.limits.maxToolCalls) {
                     throw new Error(
-                        `Orchestrator limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
+                        `Graph run limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
                     );
                 }
 
                 // Enforce token limit.
                 if (this.limits?.maxTotalTokens != null && this._tokenCount >= this.limits.maxTotalTokens) {
                     throw new Error(
-                        `Orchestrator limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
+                        `Graph run limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
                     );
                 }
 
@@ -300,20 +300,20 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                 const elapsed = Date.now() - startTime;
                 if (elapsed >= this.limits.maxTotalMs) {
                     throw new Error(
-                        `Orchestrator limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
+                        `Graph run limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
                     );
                 }
             }
 
             if (this.limits?.maxToolCalls != null && this._toolCallCount >= this.limits.maxToolCalls) {
                 throw new Error(
-                    `Orchestrator limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
+                    `Graph run limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
                 );
             }
 
             if (this.limits?.maxTotalTokens != null && this._tokenCount >= this.limits.maxTotalTokens) {
                 throw new Error(
-                    `Orchestrator limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
+                    `Graph run limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
                 );
             }
 

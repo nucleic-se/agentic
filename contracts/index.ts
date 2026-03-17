@@ -163,7 +163,7 @@ export type {
     GraphRunResult,
     GraphCheckpoint,
     GraphDeadLetter,
-    OrchestratorLimits,
+    GraphRunLimits,
     GraphEngineConfig,
     GraphStepResult,
     IGraphEngine,

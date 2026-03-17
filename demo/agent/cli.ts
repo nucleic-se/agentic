@@ -38,7 +38,9 @@ import type { IModelRouter } from '../../contracts/llm.js'
 const C = {
   reset:  '\x1b[0m',
   bold:   '\x1b[1m',
+  italic: '\x1b[3m',
   dim:    '\x1b[2m',
+  underline: '\x1b[4m',
   red:    '\x1b[31m',
   green:  '\x1b[32m',
   yellow: '\x1b[33m',
@@ -49,6 +51,81 @@ const noColour = !process.stdout.isTTY
 
 function c(code: string, text: string): string {
   return noColour ? text : `${code}${text}${C.reset}`
+}
+
+// ── Markdown rendering ───────────────────────────────────────────────────────
+
+function renderInlineMarkdown(text: string): string {
+  let rendered = text
+
+  rendered = rendered.replace(/`([^`]+)`/g, (_, code: string) => c(C.cyan, code))
+  rendered = rendered.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label: string, url: string) =>
+    `${c(C.underline, label)} ${c(C.gray, `<${url}>`)}`,
+  )
+  rendered = rendered.replace(/\*\*([^*]+)\*\*/g, (_, bold: string) => c(C.bold, bold))
+  rendered = rendered.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, (_, italic: string) => c(C.italic, italic))
+
+  return rendered
+}
+
+function renderMarkdownToAnsi(markdown: string): string {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const rendered: string[] = []
+  let inCodeBlock = false
+  let codeFence = ''
+
+  for (const line of lines) {
+    const fenceMatch = line.match(/^```(\S*)\s*$/)
+    if (fenceMatch) {
+      if (!inCodeBlock) {
+        inCodeBlock = true
+        codeFence = fenceMatch[1] ?? ''
+        rendered.push(c(C.dim, codeFence ? `[${codeFence}]` : '[code]'))
+      } else {
+        inCodeBlock = false
+        codeFence = ''
+      }
+      continue
+    }
+
+    if (inCodeBlock) {
+      rendered.push(c(C.cyan, line))
+      continue
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
+    if (headingMatch) {
+      rendered.push(c(C.bold, renderInlineMarkdown(headingMatch[2].trim()).toUpperCase()))
+      continue
+    }
+
+    const quoteMatch = line.match(/^>\s?(.*)$/)
+    if (quoteMatch) {
+      rendered.push(c(C.gray, `│ ${renderInlineMarkdown(quoteMatch[1])}`))
+      continue
+    }
+
+    const bulletMatch = line.match(/^(\s*)[-*+]\s+(.*)$/)
+    if (bulletMatch) {
+      rendered.push(`${bulletMatch[1]}• ${renderInlineMarkdown(bulletMatch[2])}`)
+      continue
+    }
+
+    const orderedMatch = line.match(/^(\s*)(\d+)\.\s+(.*)$/)
+    if (orderedMatch) {
+      rendered.push(`${orderedMatch[1]}${orderedMatch[2]}. ${renderInlineMarkdown(orderedMatch[3])}`)
+      continue
+    }
+
+    if (/^\s*---+\s*$/.test(line) || /^\s*\*\*\*+\s*$/.test(line)) {
+      rendered.push(c(C.dim, '────────────────────'))
+      continue
+    }
+
+    rendered.push(renderInlineMarkdown(line))
+  }
+
+  return rendered.join('\n')
 }
 
 // ── Env loading ───────────────────────────────────────────────────────────────
@@ -118,23 +195,24 @@ function buildRouter(providerName: string, modelOverride?: string): IModelRouter
 
 function makeEventHandler(verbose: boolean): (event: AgentEvent) => void {
   let streamedContent = false
+  let bufferedMarkdown = ''
   return (event) => {
     switch (event.type) {
       case 'message_delta':
         streamedContent = true
-        process.stdout.write(event.text)
+        bufferedMarkdown += event.text
         break
 
       case 'message_end':
-        // If streaming was active, deltas already printed the content.
-        // Only print here if no deltas were emitted (non-streaming provider).
         if (!streamedContent && event.message.content) {
-          process.stdout.write(event.message.content)
+          bufferedMarkdown = event.message.content
         }
-        if (streamedContent || event.message.content) {
+        if (bufferedMarkdown) {
+          process.stdout.write(renderMarkdownToAnsi(bufferedMarkdown))
           process.stdout.write('\n')
         }
         streamedContent = false
+        bufferedMarkdown = ''
         break
 
       case 'tool_start':
@@ -356,10 +434,16 @@ async function main(): Promise<void> {
     `Working directory: ${args.cwd}`,
     'Read files before editing them.',
     'When multiple independent actions are needed, call ALL tools in a single response instead of one at a time. For example, to read 3 files, return 3 fs_read tool calls in one message.',
-    'Use shell_run to run tests, compile, or verify changes. Background processes (&) block until timeout (default 30s).',
-    'If a tool call fails, diagnose the error and try an alternative approach.',
-    'Never delete files or directories without first listing their contents. Do not run destructive shell commands (rm -rf, git reset --hard) unless the user explicitly asks.',
+    'Use shell_run for exploration, testing, compilation, and verification.',
+    'Each shell call is a fresh subprocess — no env vars, aliases, or working directory persist between calls. Use the cwd parameter instead of cd.',
+    'stdin is not available. Never run interactive commands (npm init without -y, python REPL, editors, git rebase -i) — they will hang until timeout.',
+    'Background processes (&) return immediately with no output from the background process. Avoid them.',
+    'Output is capped at 64 KB. For commands that produce large output, pipe through head, tail, or grep.',
+    'Prefer targeted commands: rg <pattern> for content search, rg --files for listing files. Avoid broad scans.',
+    'Chain related commands with && or ; to reduce round trips.',
+    'Never run destructive commands (rm -rf, git reset --hard, git push --force) unless the user explicitly asks.',
     'After tool calls complete, respond with the answer directly. Do not narrate which tools you called.',
+    'Respond in Markdown. Use fenced code blocks for code and concise Markdown structure for explanations.',
     'Be concise. Show only relevant output.',
   ].join('\n')
 

@@ -32,7 +32,7 @@ export class InMemoryMigrationState implements MigrationState {
     }
 }
 
-export class MigrationOrchestrator {
+export class PackMigrationRunner {
     constructor(
         private state: MigrationState,
         private db: unknown

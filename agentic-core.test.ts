@@ -14,7 +14,7 @@ import {
     InMemoryTracer,
     InMemorySpanTracer,
     CapabilityRegistry,
-    MigrationOrchestrator,
+    PackMigrationRunner,
     InMemoryMigrationState,
     AIPromptService,
     AIPipeline,
@@ -264,13 +264,13 @@ describe('CapabilityRegistry', () => {
     });
 });
 
-// ── MigrationOrchestrator ──────────────────────────────────────
+// ── PackMigrationRunner ──────────────────────────────────────
 
-describe('MigrationOrchestrator', () => {
+describe('PackMigrationRunner', () => {
     it('runs unapplied migrations and skips applied ones', async () => {
         const state = new InMemoryMigrationState();
         const log: string[] = [];
-        const orch = new MigrationOrchestrator(state, null);
+        const orch = new PackMigrationRunner(state, null);
 
         const m: IPackManifest = {
             ...manifest('pack1'),

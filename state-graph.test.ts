@@ -1638,9 +1638,9 @@ describe('Checkpoint & Resume', () => {
     });
 });
 
-// ── Orchestrator Limits ───────────────────────────────────────
+// ── Graph Run Limits ──────────────────────────────────────────
 
-describe('Orchestrator Limits', () => {
+describe('Graph Run Limits', () => {
     it('maxTotalMs throws when wall-clock exceeded', async () => {
         const graph = new StateGraph<CounterState>();
         graph.addNode(new CallbackGraphNode<CounterState>('slow', async (s) => {
