@@ -231,8 +231,25 @@ export class DefaultContextBroker implements ContextBroker {
     const result = this.engine.compose(sections, query.tokenBudget)
 
     // ── Tail selection (messages — not rendered into system) ─────────────────
+    // Reserve remaining budget for tail messages. If they exceed budget,
+    // reduce tailTurns until they fit.
 
-    const tailMessages = selectTailMessages(query.conversation, this.tailTurns)
+    const systemTokens = result.totalTokens
+    const tailBudget = Math.max(0, query.tokenBudget - systemTokens)
+
+    let tailMessages: Message[] = []
+    for (let t = this.tailTurns; t > 0; t--) {
+      const candidate = selectTailMessages(query.conversation, t)
+      const tokens = estimateTokens(candidate.map(m => ('content' in m ? m.content : '')).join('\n'))
+      if (tokens <= tailBudget) {
+        tailMessages = candidate
+        break
+      }
+    }
+    // Always include at least the last message (the user's prompt).
+    if (tailMessages.length === 0 && query.conversation.length > 0) {
+      tailMessages = query.conversation.slice(-1)
+    }
 
     // Track tail message candidates for contextUsed metadata.
     if (tailMessages.length > 0) {

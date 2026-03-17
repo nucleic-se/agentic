@@ -313,14 +313,14 @@ async function runInteractive(
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  // Load .env before full arg parsing so AGENT_PROVIDER (and friends) are
-  // available as defaults. Pre-scan argv for -C/--cwd to find the right dir.
+  // Load .env files. Project-level overrides package-level — loadEnv() only
+  // sets keys not already in process.env, so load project .env first.
   const pkgRoot = path.resolve(import.meta.dirname, '../..')
-  loadEnv(pkgRoot)  // package .env first (AGENT_PROVIDER, API keys)
   const cwdArgIdx = process.argv.findIndex(a => a === '-C' || a === '--cwd')
   if (cwdArgIdx !== -1 && process.argv[cwdArgIdx + 1]) {
-    loadEnv(path.resolve(process.argv[cwdArgIdx + 1]))  // project .env overrides
+    loadEnv(path.resolve(process.argv[cwdArgIdx + 1]))  // project .env first (overrides)
   }
+  loadEnv(pkgRoot)  // package .env second (fallback defaults)
 
   const args = parseArgs(process.argv)
 

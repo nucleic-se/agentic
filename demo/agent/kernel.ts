@@ -146,7 +146,7 @@ export async function runKernel(
       const record: TurnRecord = {
         turnId,
         userInput:     null,
-        modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+        modelRequest:  turnRequest,
         modelResponse: { role: 'assistant', content: '' },
         plan:          [],
         executions:    [],
@@ -174,7 +174,7 @@ export async function runKernel(
       const record: TurnRecord = {
         turnId,
         userInput:     null,
-        modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+        modelRequest:  turnRequest,
         modelResponse: response,
         plan:          [],
         executions:    [],
@@ -196,7 +196,7 @@ export async function runKernel(
       const record: TurnRecord = {
         turnId,
         userInput:     null,
-        modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+        modelRequest:  turnRequest,
         modelResponse: response,
         plan:          [],
         executions:    [],
@@ -443,7 +443,7 @@ export async function runKernel(
     const record: TurnRecord = {
       turnId,
       userInput:     null,
-      modelRequest:  { system: context.system, messages: context.messages, tools: config.tools.tools() },
+      modelRequest:  turnRequest,
       modelResponse: response,
       plan,
       executions,

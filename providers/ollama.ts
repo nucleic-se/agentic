@@ -3,6 +3,7 @@
  */
 
 import { OpenAICompatibleProvider, type OpenAICompatibleConfig } from './openai-compatible.js'
+import type { StructuredRequest, StructuredResponse } from '../contracts/llm.js'
 import type { RetryConfig } from './resilient-fetch.js'
 
 export interface OllamaConfig {
@@ -58,5 +59,42 @@ export class OllamaProvider extends OpenAICompatibleProvider {
                 : {}),
         }
         super(baseConfig)
+    }
+
+    /**
+     * Override structured() to use json_object format instead of json_schema.
+     * Ollama Cloud doesn't reliably support json_schema — many models ignore it
+     * and return plain text. json_object works with schema in the prompt.
+     */
+    async structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>> {
+        const schemaHint = `You MUST respond with ONLY a JSON object (no markdown, no code fences) matching this schema:\n${JSON.stringify(request.schema)}`
+        const messages: StructuredRequest['messages'] = [
+            ...request.messages,
+            { role: 'user', content: schemaHint },
+        ]
+
+        const res = await this.post<{
+            choices?: Array<{ message?: { content?: string | null } }>
+            usage?: { prompt_tokens?: number; completion_tokens?: number }
+        }>('/chat/completions', {
+            model:    this.model,
+            messages: messages.map(m => ({ role: m.role, content: m.content })),
+            stream:   false,
+            response_format: { type: 'json_object' },
+            ...this.extraBody,
+        })
+
+        const content = res.choices?.[0]?.message?.content
+        if (!content) throw new Error('OllamaProvider: structured response was empty')
+
+        // Strip code fences if model wraps the JSON.
+        const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+        return {
+            value: JSON.parse(cleaned) as T,
+            usage: {
+                inputTokens:  res.usage?.prompt_tokens ?? 0,
+                outputTokens: res.usage?.completion_tokens ?? 0,
+            },
+        }
     }
 }

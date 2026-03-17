@@ -117,6 +117,7 @@ export class CodingAgent implements IAgent {
   private fileTracker:  SessionFileTracker           = new SessionFileTracker()
   private factStore:    FactStore
   private broker:       ContextBroker | null         = null
+  private pendingTasks: Promise<void>[]              = []
 
   constructor(private readonly config: AgentConfig) {
     this.factStore = config.factStore ?? new FactStore()
@@ -166,20 +167,17 @@ export class CodingAgent implements IAgent {
       }
     }
 
-    // Summaries and facts are only useful when older turns fall outside the
-    // tail window (raw messages). Below that threshold the raw conversation
-    // is already in context and the extra LLM calls are wasted.
-    const tailTurns = this.config.tailTurns ?? 3
-    if (this.executions.length < tailTurns) return
-
     if (shouldSummarize(record)) {
-      summarizeTurn(record, this.config.router)
-        .then(summary => this.summaries.set(summary.turnId, summary))
+      const task = summarizeTurn(record, this.config.router)
+        .then(summary => { this.summaries.set(summary.turnId, summary) })
         .catch(() => { /* best-effort */ })
+      this.pendingTasks.push(task)
     }
     if (shouldExtractFacts(record)) {
-      extractFacts(record, this.config.router, this.factStore)
+      const task = extractFacts(record, this.config.router, this.factStore)
+        .then(() => {})
         .catch(() => { /* best-effort */ })
+      this.pendingTasks.push(task)
     }
   }
 
@@ -226,6 +224,11 @@ export class CodingAgent implements IAgent {
       await emit({ type: 'error', failure })
       return this.executions.slice(before)
     } finally {
+      // Flush background tasks (summarization, fact extraction) before declaring done.
+      if (this.pendingTasks.length > 0) {
+        await Promise.allSettled(this.pendingTasks)
+        this.pendingTasks = []
+      }
       await emit({ type: 'agent_end', records: this.executions })
     }
   }
@@ -240,5 +243,6 @@ export class CodingAgent implements IAgent {
     this.fileTracker  = new SessionFileTracker()
     this.factStore    = this.config.factStore ?? new FactStore()
     this.broker       = null
+    this.pendingTasks = []
   }
 }
