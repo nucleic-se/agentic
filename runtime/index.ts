@@ -14,6 +14,8 @@ export { ToolRegistry } from './ToolRegistry.js';
 export { InMemoryStore } from './InMemoryStore.js';
 export { ToolPromptRenderer } from './ToolPromptRenderer.js';
 export { ContextAssembler } from './ContextAssembler.js';
+export { PassThroughContextAssembler } from './PassThroughContextAssembler.js';
+export { PassThroughToolPolicy, TrustTierToolPolicy } from './ToolPolicy.js';
 export { AIPromptService, AIPromptBuilder } from './AIPromptService.js';
 export { AIPipeline } from './AIPipeline.js';
 export { StateGraph } from './graph/index.js';

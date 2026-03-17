@@ -18,6 +18,9 @@
  *
  *   - Tools are registered, not injected per call. The runtime is constructed
  *     once and reused across turns or workflow steps.
+ *
+ *   - `signal` and `onUpdate` in ToolCallOptions are optional and additive.
+ *     Runtimes that do not support cancellation or streaming silently ignore them.
  */
 
 import type { ToolDefinition } from './llm.js'
@@ -32,6 +35,23 @@ export interface ToolCallResult {
     data?:    unknown
 }
 
+// ── Options ───────────────────────────────────────────────────────────────────
+
+export interface ToolCallOptions {
+    /**
+     * Cancellation signal. If fired before the tool returns, the runtime
+     * should abort in-progress work and return ok: false with an appropriate
+     * content message. Runtimes that cannot honour cancellation may ignore this.
+     */
+    signal?: AbortSignal
+    /**
+     * Progress callback for streaming or long-running tools. Called zero or
+     * more times before the final result. `details` is tool-defined; callers
+     * should treat it as opaque unless they own the tool implementation.
+     */
+    onUpdate?: (details: unknown) => void
+}
+
 // ── Runtime ───────────────────────────────────────────────────────────────────
 
 export interface IToolRuntime {
@@ -44,6 +64,7 @@ export interface IToolRuntime {
     /**
      * Execute a named tool call. Never throws.
      * Unknown tool name → ok: false, content: 'Unknown tool: <name>'.
+     * Options are additive: runtimes that do not support signal or onUpdate ignore them.
      */
-    call(name: string, args: Record<string, unknown>): Promise<ToolCallResult>
+    call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult>
 }
