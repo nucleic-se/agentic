@@ -13,6 +13,8 @@ import type { IModelRouter }   from '../../contracts/llm.js'
 import type { IToolRuntime }   from '../../contracts/tool-runtime.js'
 import type { IToolPolicy }    from '../../contracts/IToolPolicy.js'
 import type { IToolRegistry }  from '../../contracts/ITool.js'
+import type { IPromptEngine }  from '../../contracts/IPromptEngine.js'
+import type { ContextBroker }  from './context-broker.js'
 
 // ── Phase A ───────────────────────────────────────────────────────────────────
 
@@ -32,10 +34,10 @@ export interface AgentConfig {
   registry?: IToolRegistry  // required for DefaultToolPolicy trust-tier resolution
 
   // ── Phase C ─────────────────────────────────────────────────────────────────
-  // contextBroker?: ContextBroker   // default: DefaultContextBroker(promptEngine, tracer?)
-  // promptEngine?:  IPromptEngine   // used inside ContextBroker; absent = no budget trimming
-  tokenBudget?:   number          // default: 28_000
-  tailTurns?:     number          // raw conversation turns in tail lane; default: 3
+  contextBroker?: ContextBroker  // default: DefaultContextBroker
+  promptEngine?:  IPromptEngine  // injected into DefaultContextBroker when provided
+  tokenBudget?:   number         // default: 28_000
+  tailTurns?:     number         // raw conversation turns in tail lane; default: 3
 
   // ── Phase D ─────────────────────────────────────────────────────────────────
   // tracer?: ISpanTracer

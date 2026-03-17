@@ -20,6 +20,7 @@ import type {
   ToolExecution,
   ToolExecutionStatus,
   Failure,
+  ContextCandidate,
 } from '../../contracts/agent.js'
 import { normalizeArtifact, labeledContent } from './artifact.js'
 
@@ -33,6 +34,14 @@ function realResult(callId: string, content: string, isError: boolean): ToolResu
   return { role: 'tool_result', toolCallId: callId, content, isError }
 }
 
+// ── Kernel context ────────────────────────────────────────────────────────────
+
+interface KernelContext {
+  system?:      string
+  messages:     Message[]
+  contextUsed?: ContextCandidate[]
+}
+
 // ── Kernel ────────────────────────────────────────────────────────────────────
 
 /**
@@ -40,8 +49,8 @@ function realResult(callId: string, content: string, isError: boolean): ToolResu
  *
  * @param conversation  Mutable transcript. Kernel appends messages at reconcile.
  * @param config        Agent configuration.
- * @param context       What the model sees this turn. In Phase A: system = config.systemPrompt,
- *                      messages = full conversation. Phase C+ passes broker-assembled output.
+ * @param getContext    Called before each turn to assemble model-visible context.
+ *                      Throwing here emits context_error and stops — no TurnRecord.
  * @param emit          Event sink — called for every agent event.
  * @param signal        Optional cancellation signal.
  * @returns             All TurnRecords produced during this run.
@@ -49,10 +58,7 @@ function realResult(callId: string, content: string, isError: boolean): ToolResu
 export async function runKernel(
   conversation: Message[],
   config:       AgentConfig,
-  context: {
-    system?:  string
-    messages: Message[]
-  },
+  getContext:   () => Promise<KernelContext> | KernelContext,
   emit:         AgentEventSink,
   signal?:      AbortSignal,
 ): Promise<TurnRecord[]> {
@@ -72,6 +78,20 @@ export async function runKernel(
     // ── Abort guard ───────────────────────────────────────────────────────────
     if (signal?.aborted) {
       const failure: Failure = { kind: 'abort', message: 'AbortSignal fired before turn started' }
+      await emit({ type: 'error', failure })
+      return records
+    }
+
+    // ── Context assembly ─────────────────────────────────────────────────────
+    // Fires before turn_start — context_error produces no TurnRecord.
+    let context: KernelContext
+    try {
+      context = await getContext()
+    } catch (e) {
+      const failure: Failure = {
+        kind:    'context_error',
+        message: e instanceof Error ? e.message : String(e),
+      }
       await emit({ type: 'error', failure })
       return records
     }
@@ -113,6 +133,7 @@ export async function runKernel(
         failure,
         durationMs:    Date.now() - t0,
         tokenUsage:    { inputTokens: 0, outputTokens: 0 },
+        contextUsed:   context.contextUsed,
       }
       records.push(record)
       await emit({ type: 'turn_end', record })
@@ -140,6 +161,7 @@ export async function runKernel(
         failure,
         durationMs:    Date.now() - t0,
         tokenUsage:    usage,
+        contextUsed:   context.contextUsed,
       }
       records.push(record)
       await emit({ type: 'turn_end', record })
@@ -160,6 +182,7 @@ export async function runKernel(
         outcome:       'answered',
         durationMs:    Date.now() - t0,
         tokenUsage:    usage,
+        contextUsed:   context.contextUsed,
       }
       records.push(record)
       await emit({ type: 'turn_end', record })
@@ -168,9 +191,7 @@ export async function runKernel(
       const followUps = config.getFollowUpMessages ? await config.getFollowUpMessages() : []
       if (followUps.length > 0) {
         for (const msg of followUps) conversation.push(msg)
-        // Update context.messages for next iteration — in Phase A this is the same array.
-        // Phase C+ reassembles context before each turn via CodingAgent.
-        context = { ...context, messages: conversation }
+        // getContext() will be called at the start of the next iteration.
         continue
       }
 
@@ -368,8 +389,9 @@ export async function runKernel(
           reason:        interruptReason,
         },
       } : {}),
-      durationMs: Date.now() - t0,
+      durationMs:  Date.now() - t0,
       tokenUsage:  usage,
+      contextUsed: context.contextUsed,
     }
 
     records.push(record)
@@ -381,8 +403,6 @@ export async function runKernel(
       return records
     }
 
-    // If steering interrupted, loop continues — steering messages are now in conversation.
-    // Update context for the next iteration (Phase A: raw conversation).
-    context = { ...context, messages: conversation }
+    // If steering interrupted, loop continues — getContext() called at next iteration start.
   }
 }

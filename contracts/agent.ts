@@ -89,6 +89,39 @@ export interface ToolExecution {
   artifact?:  ExternalArtifact
 }
 
+// ── Context selection ─────────────────────────────────────────────────────────
+
+export type ContextSource =
+  | 'system_prompt'
+  | 'session_file_tracker'
+  | 'turn_summary'
+  | 'raw_turn'
+  | 'fact'
+  | 'semantic'
+
+export type CandidateLane =
+  | 'sticky'
+  | 'must_include'
+  | 'historical'
+  | 'semantic'
+  | 'tail'
+  | 'working_state'
+
+export interface ContextScore {
+  recency:   number  // 0–1
+  relevance: number  // 0–1
+  authority: number  // 0–1
+}
+
+export interface ContextCandidate {
+  source:      ContextSource
+  content:     string
+  lane:        CandidateLane
+  mustInclude: boolean
+  score:       ContextScore
+  metadata:    Record<string, unknown>
+}
+
 // ── Failure ───────────────────────────────────────────────────────────────────
 
 export type FailureKind =
@@ -148,9 +181,10 @@ export interface TurnRecord {
     // Note: policy denials (status='policy_denied') do NOT set interrupted —
     // they mark individual calls and execution continues for remaining calls.
   }
-  durationMs:  number
-  tokenUsage:  TokenUsage
-  // Phase C adds: contextUsed?: ContextCandidate[]
+  durationMs:   number
+  tokenUsage:   TokenUsage
+  /** Phase C: which context candidates were assembled for this turn. */
+  contextUsed?: ContextCandidate[]
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────

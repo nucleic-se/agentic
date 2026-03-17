@@ -132,6 +132,10 @@ export type {
     AgentEvent,
     AgentEventSink,
     IAgent,
+    ContextSource,
+    CandidateLane,
+    ContextScore,
+    ContextCandidate,
 } from './agent.js';
 
 // Fluent AI builders
