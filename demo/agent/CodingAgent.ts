@@ -16,7 +16,7 @@
 
 import { randomUUID }           from 'node:crypto'
 import type { Message }         from '../../contracts/llm.js'
-import type { IAgent, AgentEventSink, TurnRecord, Failure } from '../../contracts/agent.js'
+import type { IAgent, AgentEvent, AgentEventSink, TurnRecord, Failure } from '../../contracts/agent.js'
 import type { ISpanTracer }     from '../../contracts/IObservability.js'
 import type { AgentConfig }     from './config.js'
 import { runKernel }            from './kernel.js'
@@ -27,6 +27,86 @@ import { summarizeTurn, shouldSummarize } from './turn-summarizer.js'
 import type { TurnSummary }     from './turn-summarizer.js'
 import { FactStore }            from './fact-store.js'
 import { extractFacts, shouldExtractFacts } from './fact-extractor.js'
+
+// ── Tracing sink ─────────────────────────────────────────────────────────────
+
+function createTracingSink(
+  tracer: ISpanTracer,
+  correlationId: string,
+  next: AgentEventSink,
+): AgentEventSink {
+  let agentSpanId: string | undefined
+  let turnSpanId:  string | undefined
+  const toolSpans = new Map<string, string>()
+
+  return async (event: AgentEvent) => {
+    switch (event.type) {
+      case 'agent_start':
+        agentSpanId = tracer.startSpan({
+          correlationId, type: 'agent-run',
+          startTime: Date.now(), metadata: {},
+        })
+        break
+
+      case 'turn_start':
+        turnSpanId = tracer.startSpan({
+          correlationId, type: 'agent-turn',
+          parentSpanId: agentSpanId,
+          startTime: Date.now(),
+          metadata: { turnId: event.turnId },
+        })
+        break
+
+      case 'tool_start': {
+        const sid = tracer.startSpan({
+          correlationId, type: `agent-tool.${event.name}`,
+          parentSpanId: turnSpanId,
+          startTime: Date.now(),
+          metadata: { callId: event.callId, name: event.name },
+        })
+        toolSpans.set(event.callId, sid)
+        break
+      }
+
+      case 'tool_end': {
+        const sid = toolSpans.get(event.callId)
+        if (sid) {
+          const ok = event.execution.status === 'success'
+          tracer.endSpan(sid, ok ? 'ok' : 'error', ok ? undefined : event.execution.error)
+          toolSpans.delete(event.callId)
+        }
+        break
+      }
+
+      case 'turn_end':
+        if (turnSpanId) {
+          const ok = event.record.outcome === 'answered' || event.record.outcome === 'partial'
+          tracer.endSpan(turnSpanId, ok ? 'ok' : 'error',
+            ok ? undefined : event.record.failure?.message)
+          turnSpanId = undefined
+        }
+        break
+
+      case 'error':
+        if (turnSpanId) {
+          tracer.endSpan(turnSpanId, 'error', event.failure.message)
+          turnSpanId = undefined
+        }
+        break
+
+      case 'agent_end':
+        if (agentSpanId) {
+          tracer.endSpan(agentSpanId, 'ok')
+          agentSpanId = undefined
+        }
+        break
+    }
+
+    await next(event)
+  }
+}
+
+// ── Agent ────────────────────────────────────────────────────────────────────
 
 const noop: AgentEventSink = () => {}
 
@@ -78,108 +158,38 @@ export class CodingAgent implements IAgent {
       .map(r => this.summaries.get(r.turnId)!)
   }
 
-  private async _run(emit: AgentEventSink): Promise<TurnRecord[]> {
-    const before = this.executions.length
-    const tracer = this.config.tracer
-    const correlationId = randomUUID()
-
-    // Active span IDs for hierarchical tracing.
-    let agentSpanId: string | undefined
-    let turnSpanId:  string | undefined
-    const toolSpans = new Map<string, string>()  // callId → spanId
-
-    // Wrap emit for Phase C (file tracking, summarization) and Phase D (tracing).
-    const wrappedEmit: AgentEventSink = async (event) => {
-      // ── Phase D: open/close spans ──────────────────────────────────────
-      if (tracer) {
-        switch (event.type) {
-          case 'agent_start':
-            agentSpanId = tracer.startSpan({
-              correlationId, type: 'agent-run',
-              startTime: Date.now(), metadata: {},
-            })
-            break
-
-          case 'turn_start':
-            turnSpanId = tracer.startSpan({
-              correlationId, type: 'agent-turn',
-              parentSpanId: agentSpanId,
-              startTime: Date.now(),
-              metadata: { turnId: event.turnId },
-            })
-            break
-
-          case 'tool_start': {
-            const sid = tracer.startSpan({
-              correlationId, type: `agent-tool.${event.name}`,
-              parentSpanId: turnSpanId,
-              startTime: Date.now(),
-              metadata: { callId: event.callId, name: event.name },
-            })
-            toolSpans.set(event.callId, sid)
-            break
-          }
-
-          case 'tool_end': {
-            const sid = toolSpans.get(event.callId)
-            if (sid) {
-              const ok = event.execution.status === 'success'
-              tracer.endSpan(sid, ok ? 'ok' : 'error', ok ? undefined : event.execution.error)
-              toolSpans.delete(event.callId)
-            }
-            break
-          }
-
-          case 'turn_end':
-            if (turnSpanId) {
-              const ok = event.record.outcome === 'answered' || event.record.outcome === 'partial'
-              tracer.endSpan(turnSpanId, ok ? 'ok' : 'error',
-                ok ? undefined : event.record.failure?.message)
-              turnSpanId = undefined
-            }
-            break
-
-          case 'error':
-            // Close any dangling turn span.
-            if (turnSpanId) {
-              tracer.endSpan(turnSpanId, 'error', event.failure.message)
-              turnSpanId = undefined
-            }
-            break
-
-          case 'agent_end':
-            if (agentSpanId) {
-              tracer.endSpan(agentSpanId, 'ok')
-              agentSpanId = undefined
-            }
-            break
-        }
-      }
-
-      // ── Forward to caller ──────────────────────────────────────────────
-      await emit(event)
-
-      // ── Phase C: file tracking + summarization ─────────────────────────
-      if (event.type === 'turn_end') {
-        for (const ex of event.record.executions) {
-          if (ex.status === 'success') {
-            this.fileTracker.record(ex.plan.name, ex.plan.input as Record<string, unknown>)
-          }
-        }
-        if (shouldSummarize(event.record)) {
-          summarizeTurn(event.record, this.config.router)
-            .then(summary => this.summaries.set(summary.turnId, summary))
-            .catch(() => { /* ignore — summaries are best-effort */ })
-        }
-        // Phase E: fire-and-forget fact extraction.
-        if (shouldExtractFacts(event.record)) {
-          extractFacts(event.record, this.config.router, this.factStore)
-            .catch(() => { /* ignore — facts are best-effort */ })
-        }
+  /** Post-turn bookkeeping: file tracking, summarization, fact extraction. */
+  private _onTurnEnd(record: TurnRecord): void {
+    for (const ex of record.executions) {
+      if (ex.status === 'success') {
+        this.fileTracker.record(ex.plan.name, ex.plan.input as Record<string, unknown>)
       }
     }
+    if (shouldSummarize(record)) {
+      summarizeTurn(record, this.config.router)
+        .then(summary => this.summaries.set(summary.turnId, summary))
+        .catch(() => { /* best-effort */ })
+    }
+    if (shouldExtractFacts(record)) {
+      extractFacts(record, this.config.router, this.factStore)
+        .catch(() => { /* best-effort */ })
+    }
+  }
 
-    await wrappedEmit({ type: 'agent_start' })
+  private async _run(callerEmit: AgentEventSink): Promise<TurnRecord[]> {
+    const before = this.executions.length
+
+    // Build the emit chain: tracing (optional) → turn bookkeeping → caller.
+    const bookkeepingEmit: AgentEventSink = async (event) => {
+      await callerEmit(event)
+      if (event.type === 'turn_end') this._onTurnEnd(event.record)
+    }
+
+    const emit: AgentEventSink = this.config.tracer
+      ? createTracingSink(this.config.tracer, randomUUID(), bookkeepingEmit)
+      : bookkeepingEmit
+
+    await emit({ type: 'agent_start' })
     try {
       const broker = this._getBroker()
 
@@ -196,7 +206,7 @@ export class CodingAgent implements IAgent {
           messages:    assembled.messages,
           contextUsed: assembled.selections,
         })),
-        wrappedEmit,
+        emit,
       )
 
       for (const r of records) this.executions.push(r)
@@ -206,10 +216,10 @@ export class CodingAgent implements IAgent {
         kind:    'unknown_error',
         message: e instanceof Error ? (e.stack ?? e.message) : String(e),
       }
-      await wrappedEmit({ type: 'error', failure })
+      await emit({ type: 'error', failure })
       return this.executions.slice(before)
     } finally {
-      await wrappedEmit({ type: 'agent_end', records: this.executions })
+      await emit({ type: 'agent_end', records: this.executions })
     }
   }
 
@@ -222,6 +232,6 @@ export class CodingAgent implements IAgent {
     this.summaries    = new Map()
     this.fileTracker  = new SessionFileTracker()
     this.factStore    = this.config.factStore ?? new FactStore()
-    this.broker       = null  // force re-init with fresh fileTracker + factStore
+    this.broker       = null
   }
 }

@@ -25,7 +25,7 @@ import * as fs       from 'node:fs'
 import * as path     from 'node:path'
 import * as readline from 'node:readline'
 import { createCodingAgent, createCodingTools, createCodingRegistry } from './index.js'
-import { DefaultToolPolicy }                   from './tool-policy.js'
+import { TrustTierToolPolicy }                  from '../../runtime/ToolPolicy.js'
 import { OllamaProvider, AnthropicProvider, OLLAMA_CLOUD_MODEL_DEFAULTS } from '../../providers/index.js'
 import { InMemorySpanTracer }                  from '../../runtime/InMemorySpanTracer.js'
 import type { ILLMProvider, ModelTier } from '../../contracts/llm.js'
@@ -335,7 +335,7 @@ async function main(): Promise<void> {
   const router   = buildRouter(args.provider)
   const tools    = createCodingTools({ cwd: args.cwd })
   const registry = createCodingRegistry(tools)
-  const policy   = new DefaultToolPolicy(registry)
+  const policy   = new TrustTierToolPolicy(registry)
   const tracer   = args.trace ? new InMemorySpanTracer() : undefined
 
   const defaultSystem = [

@@ -9,7 +9,6 @@
 export { CodingAgent }                       from './CodingAgent.js'
 export { createCodingTools, createCodingRegistry } from './tools.js'
 export type { CreateCodingToolsOptions }     from './tools.js'
-export { DefaultToolPolicy }                 from './tool-policy.js'
 export type { ExternalArtifact }             from './artifact.js'
 export type { AgentConfig }                  from './config.js'
 export { DefaultContextBroker }              from './context-broker.js'

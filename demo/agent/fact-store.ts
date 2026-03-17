@@ -107,9 +107,8 @@ export class FactStore {
     return this.store.evictExpired()
   }
 
-  clear(): void {
-    // InMemoryStore doesn't have a bulk clear, but eviction with 0 TTL effectively cleans up.
-    // For a real clear, we'd need to query all and delete. Keep simple for now.
-    void this.store.evictExpired()
+  async clear(): Promise<void> {
+    const items = await this.store.query({ types: ['working', 'semantic'], limit: 1000 })
+    for (const item of items) await this.store.delete(item.id)
   }
 }
