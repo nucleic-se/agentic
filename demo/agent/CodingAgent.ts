@@ -165,6 +165,13 @@ export class CodingAgent implements IAgent {
         this.fileTracker.record(ex.plan.name, ex.plan.input as Record<string, unknown>)
       }
     }
+
+    // Summaries and facts are only useful when older turns fall outside the
+    // tail window (raw messages). Below that threshold the raw conversation
+    // is already in context and the extra LLM calls are wasted.
+    const tailTurns = this.config.tailTurns ?? 3
+    if (this.executions.length < tailTurns) return
+
     if (shouldSummarize(record)) {
       summarizeTurn(record, this.config.router)
         .then(summary => this.summaries.set(summary.turnId, summary))

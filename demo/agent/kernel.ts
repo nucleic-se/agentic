@@ -30,8 +30,15 @@ function syntheticResult(callId: string, content: string): ToolResultMessage {
   return { role: 'tool_result', toolCallId: callId, content, isError: true }
 }
 
+const MAX_RESULT_CHARS = 4000
+
+function truncateResult(content: string): string {
+  if (content.length <= MAX_RESULT_CHARS) return content
+  return content.slice(0, MAX_RESULT_CHARS) + `\n\n[truncated — ${content.length} chars total]`
+}
+
 function realResult(callId: string, content: string, isError: boolean): ToolResultMessage {
-  return { role: 'tool_result', toolCallId: callId, content, isError }
+  return { role: 'tool_result', toolCallId: callId, content: truncateResult(content), isError }
 }
 
 // ── Kernel context ────────────────────────────────────────────────────────────

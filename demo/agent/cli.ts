@@ -344,6 +344,7 @@ async function main(): Promise<void> {
     'Read files before editing them.',
     'When multiple independent actions are needed, call ALL tools in a single response instead of one at a time. For example, to read 3 files, return 3 fs_read tool calls in one message.',
     'Use shell_run to run tests, compile, or verify changes. Background processes (&) block until timeout (default 30s).',
+    'If a tool call fails, diagnose the error and try an alternative approach.',
     'After tool calls complete, respond with the answer directly. Do not narrate which tools you called.',
     'Be concise. Show only relevant output.',
   ].join('\n')
