@@ -38,6 +38,10 @@
     "./providers": {
       "types": "./dist/providers/index.d.ts",
       "import": "./dist/providers/index.js"
+    },
+    "./agent": {
+      "types": "./dist/demo/agent/index.d.ts",
+      "import": "./dist/demo/agent/index.js"
     }
   },
   "files": [
