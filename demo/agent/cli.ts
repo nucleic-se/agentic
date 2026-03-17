@@ -11,6 +11,7 @@
  * Options:
  *   -C, --cwd <path>          Working directory for file/shell tools  (default: .)
  *   -p, --provider <name>     ollama | anthropic                       (default: AGENT_PROVIDER or ollama)
+ *   -m, --model <model>       Override balanced model (the main chat model)
  *   -s, --system <prompt>     Override system prompt
  *       --max-turns <n>       Turn limit                               (default: 20)
  *   -i, --interactive         Multi-turn interactive session
@@ -78,9 +79,9 @@ function loadEnv(startDir: string): void {
 
 // ── Provider factory ──────────────────────────────────────────────────────────
 
-function buildRouter(providerName: string): IModelRouter {
+function buildRouter(providerName: string, modelOverride?: string): IModelRouter {
   const fastModel     = process.env['AGENT_FAST_MODEL']
-  const balancedModel = process.env['AGENT_BALANCED_MODEL']
+  const balancedModel = modelOverride ?? process.env['AGENT_BALANCED_MODEL']
   const capableModel  = process.env['AGENT_CAPABLE_MODEL']
 
   if (providerName === 'anthropic') {
@@ -205,6 +206,7 @@ ${c(C.bold, 'Usage:')}
 ${c(C.bold, 'Options:')}
   -C, --cwd <path>       Working directory for tools     ${c(C.dim, '(default: .)')}
   -p, --provider <name>  ollama | anthropic               ${c(C.dim, '(default: AGENT_PROVIDER or ollama)')}
+  -m, --model <model>    Override balanced (chat) model   ${c(C.dim, '(e.g. glm-5:cloud, claude-sonnet-4-6)')}
   -s, --system <prompt>  Custom system prompt
       --max-turns <n>    Max turns                        ${c(C.dim, '(default: 20)')}
   -i, --interactive      Multi-turn REPL session
@@ -232,6 +234,7 @@ interface CliArgs {
   instruction?: string
   cwd:          string
   provider:     string
+  model?:       string
   system?:      string
   maxTurns:     number
   interactive:  boolean
@@ -265,6 +268,7 @@ function parseArgs(argv: string[]): CliArgs {
       case '-a': case '--auto-stop': result.autoStop = true;      break
       case '-C': case '--cwd':         result.cwd = path.resolve(args[++i] ?? '.'); break
       case '-p': case '--provider':    result.provider = args[++i] ?? result.provider; break
+      case '-m': case '--model':       result.model = args[++i]; break
       case '-s': case '--system':      result.system = args[++i]; break
       case '--max-turns':              result.maxTurns = parseInt(args[++i] ?? '20', 10); break
       default:
@@ -332,7 +336,16 @@ async function main(): Promise<void> {
     die('Provide an instruction or use -i for interactive mode.')
   }
 
-  const router   = buildRouter(args.provider)
+  // Validate inputs.
+  if (!fs.existsSync(args.cwd) || !fs.statSync(args.cwd).isDirectory()) {
+    die(`Working directory does not exist: ${args.cwd}`)
+  }
+  const validProviders = ['ollama', 'anthropic']
+  if (!validProviders.includes(args.provider)) {
+    die(`Unknown provider "${args.provider}". Use: ${validProviders.join(', ')}`)
+  }
+
+  const router   = buildRouter(args.provider, args.model)
   const tools    = createCodingTools({ cwd: args.cwd })
   const registry = createCodingRegistry(tools)
   const policy   = new TrustTierToolPolicy(registry)
@@ -345,6 +358,7 @@ async function main(): Promise<void> {
     'When multiple independent actions are needed, call ALL tools in a single response instead of one at a time. For example, to read 3 files, return 3 fs_read tool calls in one message.',
     'Use shell_run to run tests, compile, or verify changes. Background processes (&) block until timeout (default 30s).',
     'If a tool call fails, diagnose the error and try an alternative approach.',
+    'Never delete files or directories without first listing their contents. Do not run destructive shell commands (rm -rf, git reset --hard) unless the user explicitly asks.',
     'After tool calls complete, respond with the answer directly. Do not narrate which tools you called.',
     'Be concise. Show only relevant output.',
   ].join('\n')
@@ -362,9 +376,9 @@ async function main(): Promise<void> {
 
   const handler = makeEventHandler(args.verbose)
 
-  console.log(
-    c(C.dim, `provider=${args.provider}  cwd=${args.cwd}  max-turns=${args.maxTurns}`) + '\n'
-  )
+  const banner = [`provider=${args.provider}`, `cwd=${args.cwd}`, `max-turns=${args.maxTurns}`]
+  if (args.model) banner.push(`model=${args.model}`)
+  console.log(c(C.dim, banner.join('  ')) + '\n')
 
   if (args.interactive) {
     console.log(c(C.dim, 'Interactive session. Type /exit to quit, /clear to reset, /history for turn count.\n'))
