@@ -104,6 +104,31 @@ await provider.turn({
 })
 ```
 
+```ts
+import { AgentContextAssembler } from '@nucleic-se/agentic/runtime'
+```
+
+**`AgentContextAssembler`** — budget-aware assembler that selects the most recent messages that fit within the token budget. Tail-first: always includes the latest exchange, then walks backwards adding older turns until the budget is exhausted. Tool-result messages are kept together with their preceding assistant message to avoid orphaned results.
+
+```ts
+const assembler = new AgentContextAssembler({
+    systemPrompt: 'You are a coding agent.',
+    minRecentMessages: 4,  // always include at least the last 4 messages
+})
+
+const context = await assembler.assemble({
+    userInput,
+    messages: this.conversation,
+    tokenBudget: 100_000,
+})
+
+await provider.turn({
+    system:   context.system,
+    messages: context.messages,  // trimmed to fit budget
+    tools:    toolDefs,
+})
+```
+
 ---
 
 ## Writing a custom assembler

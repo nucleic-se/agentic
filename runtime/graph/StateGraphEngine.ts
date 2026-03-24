@@ -270,6 +270,8 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             stepCount,
             state: structuredClone(state),
             timestamp: Date.now(),
+            tokenCount: this._tokenCount,
+            toolCallCount: this._toolCallCount,
         });
     }
 
@@ -283,16 +285,16 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             throw new Error(`Resume failed: node '${cp.currentNodeId}' not found in graph.`);
         }
 
-        // Reset per-run accumulators. Resume always gets a fresh budget.
-        this._toolCallCount = 0;
-        this._tokenCount = 0;
+        // Restore per-run accumulators from checkpoint so the resumed run
+        // continues with the *remaining* budget, not a fresh allocation.
+        this._toolCallCount = cp.toolCallCount ?? 0;
+        this._tokenCount = cp.tokenCount ?? 0;
 
         const state = structuredClone(cp.state);
         const snapshots: GraphSnapshot<TState>[] = [];
         let currentNodeId: string | GraphEnd = cp.currentNodeId;
-        // Step counter starts from 0 so the resumed run gets a full maxSteps
-        // budget, independent of how many steps ran before the checkpoint.
-        let steps = 0;
+        // Restore step counter so maxSteps enforcement is cumulative.
+        let steps = cp.stepCount;
         const startTime = Date.now();
 
         while (currentNodeId !== END) {

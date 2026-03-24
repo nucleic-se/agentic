@@ -41,16 +41,16 @@ interface GraphEngineConfig {
   maxSteps?: number;                          // Default: 100
   tracer?: ITracer;
   correlationId?: string;
-  limits?: OrchestratorLimits;
+  limits?: GraphRunLimits;
   onBeforeNode?: (nodeId: string, state: unknown) => void;
   onAfterNode?: (nodeId: string, state: unknown) => void;
 }
 ```
 
-### `OrchestratorLimits`
+### `GraphRunLimits`
 
 ```ts
-interface OrchestratorLimits {
+interface GraphRunLimits {
   maxTotalTokens?: number;
   maxToolCalls?: number;
   maxDurationMs?: number;
@@ -146,6 +146,31 @@ interface SubGraphNodeConfig<TParent, TSub> {
   output: (sub: TSub, parent: TParent) => void;
 }
 ```
+
+### `AgentLlmNode<TState>`
+
+```ts
+import { AgentLlmNode } from '@nucleic-se/agentic/runtime';
+
+new AgentLlmNode<TState>(config: AgentLlmNodeConfig<TState>)
+```
+
+```ts
+interface AgentLlmNodeConfig<TState> {
+  id: string;
+  provider: ILLMProvider | ((state: Readonly<TState>) => ILLMProvider);
+  systemPromptKey: keyof TState & string;
+  messagesKey: keyof TState & string;
+  outputKey: keyof TState & string;
+  tools?: ToolDefinition[] | ((state: Readonly<TState>) => ToolDefinition[]);
+  eventsKey?: keyof TState & string;
+  onError?: AgentLlmOnError<TState>;  // returns 'retry' | 'continue' | 'fail'
+  maxRetries?: number;                 // Default: 3
+  maxTokens?: number;
+}
+```
+
+Emits `AgentLlmEvent` (`turn_start`, `turn_end`, `message_delta`) to `eventsKey`.
 
 ### `GraphContext<TState>`
 
@@ -433,7 +458,7 @@ import { PassThroughContextAssembler } from '@nucleic-se/agentic/runtime'
 new PassThroughContextAssembler(systemPrompt?: string)
 ```
 
-The minimal `IAgentContextAssembler`: returns messages unchanged, system as-is.
+The minimal `IAgentContextAssembler`: returns messages unchanged, system as-is. Use for Phase A implementations before budget-aware selection is needed.
 
 ```ts
 interface AgentContextInput {
@@ -451,6 +476,23 @@ interface IAgentContextAssembler {
   assemble(input: AgentContextInput): Promise<AgentContextOutput>
 }
 ```
+
+### `AgentContextAssembler`
+
+```ts
+import { AgentContextAssembler } from '@nucleic-se/agentic/runtime'
+
+new AgentContextAssembler(config: AgentContextAssemblerConfig)
+```
+
+```ts
+interface AgentContextAssemblerConfig {
+  systemPrompt: string;
+  minRecentMessages?: number;  // Default: 2
+}
+```
+
+Budget-aware assembler. Reserves system prompt tokens, then selects the most recent messages that fit the remaining budget (tail-first). Keeps tool-result messages grouped with their preceding assistant message.
 
 See [Context assembly](./concepts/context-assembly.md) for the selection model and custom assembler guidance.
 
@@ -494,7 +536,7 @@ import type {
   IGraphEngine, IGraphBuilder, IGraphNode, GraphContext,
   GraphState, GraphRunResult, GraphCheckpoint, GraphDeadLetter,
   RouterFn, AsyncRouterFn, ParallelEdge, ParallelMergeFn,
-  GraphEngineConfig, OrchestratorLimits, NodeRetryPolicy,
+  GraphEngineConfig, GraphRunLimits, NodeRetryPolicy,
   GraphEnd,
 
   // LLM

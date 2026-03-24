@@ -12,5 +12,5 @@ export { StateGraphEngine } from './StateGraphEngine.js';
 export { StateGraphBuilder } from './StateGraphBuilder.js';
 
 // Nodes
-export { CallbackGraphNode, LlmGraphNode, SubGraphNode } from './nodes/index.js';
-export type { LlmGraphNodeConfig, SubGraphNodeConfig } from './nodes/index.js';
+export { CallbackGraphNode, LlmGraphNode, SubGraphNode, AgentLlmNode } from './nodes/index.js';
+export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentLlmEvent, OnErrorAction, AgentLlmOnError } from './nodes/index.js';

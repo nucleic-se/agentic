@@ -226,6 +226,12 @@ export interface GraphCheckpoint<TState> {
     readonly stepCount: number;
     readonly state: TState;
     readonly timestamp: number;
+    /** Accumulated token count at time of checkpoint. Restored on resume. */
+    readonly tokenCount?: number;
+    /** Accumulated tool call count at time of checkpoint. Restored on resume. */
+    readonly toolCallCount?: number;
+    /** Elapsed wall-clock ms at time of checkpoint (for maxTotalMs enforcement). */
+    readonly elapsedMs?: number;
 }
 
 // ── Parallel Edge ──────────────────────────────────────────────

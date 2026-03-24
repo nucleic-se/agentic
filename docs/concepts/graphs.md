@@ -112,6 +112,35 @@ For deferred initialisation (e.g. when the sub-engine depends on parent state), 
 engine: (parentState) => buildResearchEngine(parentState.config),
 ```
 
+### `AgentLlmNode`
+
+Purpose-built node for agentic turn interactions. Unlike `LlmGraphNode` (prompt→text/structured), this node handles the full agent loop: reading system prompt + message history from state, calling `provider.turn()` with tool definitions, writing the full `AssistantMessage` (including `toolCalls[]`) back to state, and reporting token usage.
+
+```ts
+import { AgentLlmNode } from '@nucleic-se/agentic/runtime';
+
+const llmNode = new AgentLlmNode<AgentState>({
+  id: 'llm_call',
+  provider: (state) => router.select(state.fallbackActive ? 'balanced' : 'capable'),
+  systemPromptKey: 'systemPrompt',
+  messagesKey: 'messages',
+  outputKey: 'lastResponse',
+  tools: (state) => state.toolDefinitions,
+  eventsKey: 'events',
+  onError: (error, state) => {
+    state.fallbackActive = true;
+    return 'retry';
+  },
+  maxRetries: 3,
+});
+```
+
+Key features:
+- **Dynamic provider** — pass a function to switch model tiers mid-run (e.g. error cascade fallback)
+- **Error cascade** — `onError` callback returns `'retry'`, `'continue'`, or `'fail'`; on retry, provider is re-resolved from state
+- **Event emission** — emits `turn_start`, `turn_end`, `message_delta` events to a state key
+- **Streaming** — uses `provider.streamTurn()` when available and `eventsKey` is set
+
 ---
 
 ## Edges
@@ -193,7 +222,7 @@ Use `maxSteps` in `build()` to prevent infinite loops:
 | `maxSteps` | `number` | `100` | Hard ceiling on node executions |
 | `tracer` | `ITracer` | — | Observability hook |
 | `correlationId` | `string` | auto | Propagated to all trace events |
-| `limits` | `OrchestratorLimits` | — | Token / time / tool-call caps |
+| `limits` | `GraphRunLimits` | — | Token / time / tool-call caps |
 | `onBeforeNode` | `(nodeId, state) => void` | — | Called before each node |
 | `onAfterNode` | `(nodeId, state) => void` | — | Called after each node |
 
@@ -222,6 +251,8 @@ await saveToDb(checkpoint);
 const saved = await loadFromDb();
 const { state } = await engine.resume(saved);
 ```
+
+Checkpoints carry cumulative budget counters (`tokenCount`, `toolCallCount`, `elapsedMs`) so the resumed run continues with the **remaining** budget rather than a fresh allocation. Step count is also cumulative — `maxSteps` enforcement spans the entire logical run, not just the post-resume segment. All three fields are optional for backwards compatibility; omitting them restores the pre-0.x behaviour of fresh-budget resume.
 
 ---
 

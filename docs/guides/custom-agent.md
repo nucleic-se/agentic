@@ -165,7 +165,7 @@ console.log(events);
 
 ## 7. Add budget limits
 
-Prevent runaway costs with `OrchestratorLimits`:
+Prevent runaway costs with `GraphRunLimits`:
 
 ```ts
 .build({

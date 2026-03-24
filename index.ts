@@ -39,6 +39,9 @@ export type {
     ITool,
     ToolResult,
     IToolRegistry,
+    IToolPolicy,
+    PolicyContext,
+    PolicyDecision,
     MemoryType,
     MemoryItem,
     MemoryQuery,
@@ -105,6 +108,7 @@ export {
     InMemoryStore,
     ToolPromptRenderer,
     ContextAssembler,
+    AgentContextAssembler,
     AIPromptService,
     AIPromptBuilder,
     AIPipeline,
@@ -114,9 +118,11 @@ export {
     CallbackGraphNode,
     LlmGraphNode,
     SubGraphNode,
+    AgentLlmNode,
 } from './runtime/index.js';
 
-export type { LlmGraphNodeConfig, SubGraphNodeConfig } from './runtime/index.js';
+export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentLlmEvent, OnErrorAction, AgentLlmOnError } from './runtime/index.js';
+export type { AgentContextAssemblerConfig } from './runtime/index.js';
 
 export type { MigrationState } from './runtime/index.js';
 
