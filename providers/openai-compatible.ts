@@ -152,7 +152,7 @@ function toOpenAIMessages(system: string | undefined, messages: Message[]): Open
         if (msg.role === 'assistant') {
             out.push({
                 role:       'assistant',
-                content:    msg.content || null,
+                content:    msg.content || '',
                 ...(msg.toolCalls?.length
                     ? {
                         tool_calls: msg.toolCalls.map(call => ({
