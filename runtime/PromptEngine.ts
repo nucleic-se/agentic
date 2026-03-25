@@ -5,7 +5,7 @@
  * sticky sections, deterministic tie-breaking, and token budgeting.
  */
 
-import type { IPromptEngine, PromptSection, PromptComposeResult, PromptSectionPhase } from '../contracts/index.js';
+import type { IPromptEngine, PromptSection, PromptComposeResult, PromptComposeOptions, PromptSectionPhase } from '../contracts/index.js';
 
 /** Canonical phase ordering — determines position in assembled prompt. */
 const PHASE_ORDER: PromptSectionPhase[] = [
@@ -18,7 +18,7 @@ const PHASE_ORDER: PromptSectionPhase[] = [
 ];
 
 export class PromptEngine implements IPromptEngine {
-    compose(sections: PromptSection[], tokenBudget: number): PromptComposeResult {
+    compose(sections: PromptSection[], tokenBudget: number, options?: PromptComposeOptions): PromptComposeResult {
         if (sections.length === 0) {
             return { text: '', included: [], excluded: [], totalTokens: 0 };
         }
@@ -75,6 +75,7 @@ export class PromptEngine implements IPromptEngine {
             const nextTokens = totalTokens + section.estimatedTokens;
             if (nextTokens > tokenBudget && included.length > 0) {
                 excluded.push(section);
+                options?.onDrop?.(section);
                 continue;
             }
             included.push(section);

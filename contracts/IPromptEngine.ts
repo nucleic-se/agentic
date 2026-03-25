@@ -71,6 +71,17 @@ export interface PromptComposeResult {
     totalTokens: number;
 }
 
+/**
+ * Options for a single compose() call.
+ */
+export interface PromptComposeOptions {
+    /**
+     * Called for each section dropped due to budget exhaustion.
+     * Useful for triggering compaction, logging, or reactive memory management.
+     */
+    onDrop?: (section: PromptSection) => void;
+}
+
 export interface IPromptEngine {
     /**
      * Compose a prompt from sections within a token budget.
@@ -79,8 +90,9 @@ export interface IPromptEngine {
      * Sticky sections are always included.
      * Non-sticky sections are ranked by score desc, then stable id.
      * Sections are included until budget is reached.
+     * Dropped sections are passed to options.onDrop if provided.
      */
-    compose(sections: PromptSection[], tokenBudget: number): PromptComposeResult;
+    compose(sections: PromptSection[], tokenBudget: number, options?: PromptComposeOptions): PromptComposeResult;
 }
 
 /**

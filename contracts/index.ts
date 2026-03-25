@@ -10,6 +10,7 @@ export type {
     PromptSectionTag,
     PromptSectionPhase,
     PromptComposeResult,
+    PromptComposeOptions,
     IPromptEngine,
     PromptContributionContext,
     IPromptContributor,
