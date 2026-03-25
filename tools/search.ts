@@ -66,16 +66,19 @@ function* walkFiles(dir: string, root: string, include?: string): Generator<stri
 const DEFINITIONS: ToolDefinition[] = [
     {
         name:        'search_grep',
-        description: 'Search for a pattern (regex or literal) across files in the working root. Returns matching lines with file and line number.',
+        description: 'Search for a pattern (regex or literal) across files. Supports context lines, result limits, and output modes (content/files_only/count).',
         parameters: {
             type: 'object',
             required: ['pattern'],
             properties: {
-                pattern:       { type: 'string', description: 'Regex or literal string to search for.' },
-                path:          { type: 'string', description: 'Subdirectory to search in (relative to root). Default: root.' },
-                include:       { type: 'string', description: 'Glob pattern to filter files (e.g. "*.ts", "**/*.md"). Default: all files.' },
+                pattern:        { type: 'string', description: 'Regex or literal string to search for.' },
+                path:           { type: 'string', description: 'Subdirectory to search in (relative to root). Default: root.' },
+                include:        { type: 'string', description: 'Glob pattern to filter files (e.g. "*.ts", "**/*.md"). Default: all files.' },
                 case_sensitive: { type: 'boolean', description: 'Case-sensitive match. Default: false.' },
-                literal:       { type: 'boolean', description: 'Treat pattern as literal string, not regex. Default: false.' },
+                literal:        { type: 'boolean', description: 'Treat pattern as literal string, not regex. Default: false.' },
+                context_lines:  { type: 'integer', description: 'Number of lines to show before and after each match. Default: 0.' },
+                max_results:    { type: 'integer', description: 'Maximum matches to return. Default: 100.' },
+                output:         { type: 'string', enum: ['content', 'files_only', 'count'], description: 'Output mode. "content": matching lines (default). "files_only": just file paths. "count": match count per file.' },
             },
         },
     },
@@ -103,6 +106,9 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
     const include       = args['include'] ? String(args['include']) : undefined
     const caseSensitive = Boolean(args['case_sensitive'] ?? false)
     const literal       = Boolean(args['literal'] ?? false)
+    const contextLines  = Math.min(Math.max(Number(args['context_lines'] ?? 0), 0), 10)
+    const maxResults    = Math.min(Math.max(Number(args['max_results'] ?? MAX_MATCHES), 1), MAX_MATCHES)
+    const output        = String(args['output'] ?? 'content') as 'content' | 'files_only' | 'count'
 
     const searchRoot = subdir ? path.resolve(root, subdir) : root
     if (!withinRoot(root, searchRoot)) return fail(`Path escapes working root: ${subdir}`)
@@ -116,8 +122,44 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
         return fail(`Invalid pattern: ${e instanceof Error ? e.message : String(e)}`)
     }
 
+    // files_only and count modes — just track per-file info
+    if (output === 'files_only' || output === 'count') {
+        const fileCounts = new Map<string, number>()
+        for (const abs of walkFiles(searchRoot, root, include)) {
+            let stat: fs.Stats
+            try { stat = fs.statSync(abs) } catch { continue }
+            if (stat.size > MAX_FILE_BYTES) continue
+            let fileContent: string
+            try { fileContent = fs.readFileSync(abs, 'utf8') } catch { continue }
+
+            const rel   = path.relative(root, abs)
+            const lines = fileContent.split('\n')
+            let count = 0
+            for (const line of lines) {
+                if (regex.test(line)) count++
+            }
+            if (count > 0) {
+                fileCounts.set(rel, count)
+                if (output === 'files_only' && fileCounts.size >= maxResults) break
+            }
+        }
+
+        if (fileCounts.size === 0) return ok('No matches found.')
+
+        if (output === 'files_only') {
+            const text = [...fileCounts.keys()].join('\n')
+            return ok(text, { fileCount: fileCounts.size })
+        }
+        // count mode
+        const entries = [...fileCounts.entries()].map(([f, c]) => `${f}: ${c}`)
+        const total = [...fileCounts.values()].reduce((a, b) => a + b, 0)
+        return ok(entries.join('\n') + `\n\nTotal: ${total} matches in ${fileCounts.size} files`, { fileCount: fileCounts.size, totalMatches: total })
+    }
+
+    // content mode — matching lines with optional context
     const matches: string[] = []
     let truncated = false
+    let matchCount = 0
 
     for (const abs of walkFiles(searchRoot, root, include)) {
         if (truncated) break
@@ -125,26 +167,50 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
         try { stat = fs.statSync(abs) } catch { continue }
         if (stat.size > MAX_FILE_BYTES) continue
 
-        let content: string
-        try { content = fs.readFileSync(abs, 'utf8') } catch { continue }
+        let fileContent: string
+        try { fileContent = fs.readFileSync(abs, 'utf8') } catch { continue }
 
         const rel   = path.relative(root, abs)
-        const lines = content.split('\n')
+        const lines = fileContent.split('\n')
+
+        // Collect matching line indices for this file
+        const hitIndices: number[] = []
         for (let i = 0; i < lines.length; i++) {
-            if (regex.test(lines[i])) {
-                const line = lines[i].length > MAX_LINE_LEN
-                    ? lines[i].slice(0, MAX_LINE_LEN) + '…'
-                    : lines[i]
-                matches.push(`${rel}:${i + 1}: ${line}`)
-                if (matches.length >= MAX_MATCHES) { truncated = true; break }
+            if (regex.test(lines[i])) hitIndices.push(i)
+        }
+        if (hitIndices.length === 0) continue
+
+        // Build context-aware output
+        const emittedLines = new Set<number>()
+        for (const hitIdx of hitIndices) {
+            if (truncated) break
+
+            const rangeStart = Math.max(0, hitIdx - contextLines)
+            const rangeEnd   = Math.min(lines.length - 1, hitIdx + contextLines)
+
+            // Separator between non-contiguous ranges
+            if (emittedLines.size > 0 && !emittedLines.has(rangeStart - 1)) {
+                matches.push('--')
             }
+
+            for (let i = rangeStart; i <= rangeEnd; i++) {
+                if (emittedLines.has(i)) continue
+                emittedLines.add(i)
+
+                const line = lines[i].length > MAX_LINE_LEN ? lines[i].slice(0, MAX_LINE_LEN) + '…' : lines[i]
+                const marker = i === hitIdx ? ':' : '-'  // : for match, - for context
+                matches.push(`${rel}:${i + 1}${marker} ${line}`)
+            }
+
+            matchCount++
+            if (matchCount >= maxResults) { truncated = true; break }
         }
     }
 
-    if (matches.length === 0) return ok('No matches found.')
+    if (matchCount === 0) return ok('No matches found.')
 
-    const content = matches.join('\n') + (truncated ? `\n(truncated at ${MAX_MATCHES} matches)` : '')
-    return ok(content, { count: matches.length, truncated })
+    const content = matches.join('\n') + (truncated ? `\n(truncated at ${maxResults} matches)` : '')
+    return ok(content, { count: matchCount, truncated })
 }
 
 function handleFind(root: string, args: Record<string, unknown>): ToolCallResult {

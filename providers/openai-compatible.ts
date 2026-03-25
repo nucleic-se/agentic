@@ -145,27 +145,40 @@ function toOpenAIMessages(system: string | undefined, messages: Message[]): Open
 
     for (const msg of messages) {
         if (msg.role === 'user') {
-            out.push({ role: 'user', content: msg.content })
+            // Merge consecutive user messages — some providers (Ollama, Anthropic)
+            // require strict user/assistant alternation.
+            const prev = out[out.length - 1]
+            if (prev?.role === 'user') {
+                prev.content += '\n' + msg.content
+            } else {
+                out.push({ role: 'user', content: msg.content })
+            }
             continue
         }
 
         if (msg.role === 'assistant') {
-            out.push({
-                role:       'assistant',
-                content:    msg.content || '',
-                ...(msg.toolCalls?.length
-                    ? {
-                        tool_calls: msg.toolCalls.map(call => ({
-                            id:   call.id,
-                            type: 'function' as const,
-                            function: {
-                                name:      call.name,
-                                arguments: JSON.stringify(call.args),
-                            },
-                        })),
-                    }
-                    : {}),
-            })
+            // Merge consecutive assistant messages (same rationale).
+            const prev = out[out.length - 1]
+            if (prev?.role === 'assistant' && !msg.toolCalls?.length && !prev.tool_calls?.length) {
+                prev.content += '\n' + (msg.content || '')
+            } else {
+                out.push({
+                    role:       'assistant',
+                    content:    msg.content || '',
+                    ...(msg.toolCalls?.length
+                        ? {
+                            tool_calls: msg.toolCalls.map(call => ({
+                                id:   call.id,
+                                type: 'function' as const,
+                                function: {
+                                    name:      call.name,
+                                    arguments: JSON.stringify(call.args),
+                                },
+                            })),
+                        }
+                        : {}),
+                })
+            }
             continue
         }
 

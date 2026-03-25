@@ -107,10 +107,20 @@ function toAnthropicMessages(messages: Message[]): AnthropicMessage[] {
 
     for (const msg of messages) {
         if (msg.role === 'user') {
-            out.push({ role: 'user', content: msg.content })
+            // Merge consecutive user messages — Anthropic requires strict alternation.
+            const prev = out[out.length - 1]
+            if (prev?.role === 'user' && typeof prev.content === 'string') {
+                prev.content += '\n' + msg.content
+            } else {
+                out.push({ role: 'user', content: msg.content })
+            }
 
         } else if (msg.role === 'assistant') {
-            if (!msg.toolCalls?.length) {
+            // Merge consecutive plain assistant messages.
+            const prev = out[out.length - 1]
+            if (!msg.toolCalls?.length && prev?.role === 'assistant' && typeof prev.content === 'string') {
+                prev.content += '\n' + msg.content
+            } else if (!msg.toolCalls?.length) {
                 out.push({ role: 'assistant', content: msg.content })
             } else {
                 const blocks: AnthropicBlock[] = []

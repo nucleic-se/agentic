@@ -54,13 +54,15 @@ function isProtectedSystemWrite(root: string, abs: string): boolean {
 const DEFINITIONS: ToolDefinition[] = [
     {
         name:        'fs_read',
-        description: 'Read the contents of a file. Returns the text content.',
+        description: 'Read the contents of a file. Supports line-range selection via offset/limit to efficiently read large files without loading the entire content.',
         parameters: {
             type: 'object',
             required: ['path'],
             properties: {
                 path:     { type: 'string', description: 'File path (relative to working root or absolute).' },
                 encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Encoding. Default: utf8.' },
+                offset:   { type: 'integer', description: 'Start reading from this line number (1-based). Default: 1.' },
+                limit:    { type: 'integer', description: 'Maximum number of lines to return. Default: all lines.' },
             },
         },
     },
@@ -112,6 +114,29 @@ const DEFINITIONS: ToolDefinition[] = [
             },
         },
     },
+    {
+        name:        'fs_patch',
+        description: 'Apply exact string replacements to a file. Each operation finds a unique literal string and replaces it. Fails safely if any search string is not found or matches multiple locations. Use this instead of fs_write when editing existing files.',
+        parameters: {
+            type: 'object',
+            required: ['path', 'patches'],
+            properties: {
+                path:    { type: 'string', description: 'File path relative to working root.' },
+                patches: {
+                    type: 'array',
+                    description: 'Array of {search, replace} pairs. Each search must match exactly once in the file.',
+                    items: {
+                        type: 'object',
+                        required: ['search', 'replace'],
+                        properties: {
+                            search:  { type: 'string', description: 'Exact string to find (must be unique in the file).' },
+                            replace: { type: 'string', description: 'Replacement string.' },
+                        },
+                    },
+                },
+            },
+        },
+    },
 ]
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -126,12 +151,36 @@ function handleRead(root: string, args: Record<string, unknown>): ToolCallResult
 
     const stat = fs.statSync(abs)
     if (stat.isDirectory()) return fail(`Path is a directory: ${filePath}`)
-    if (stat.size > MAX_READ_BYTES) return fail(`File too large: ${stat.size} bytes (max ${MAX_READ_BYTES})`)
+
+    const offset = args['offset'] != null ? Number(args['offset']) : undefined
+    const limit  = args['limit']  != null ? Number(args['limit'])  : undefined
+    const hasLineRange = offset != null || limit != null
+
+    // Allow large files when using line ranges; enforce cap for full reads
+    if (!hasLineRange && stat.size > MAX_READ_BYTES) {
+        return fail(`File too large: ${stat.size} bytes (max ${MAX_READ_BYTES}). Use offset/limit to read a line range.`)
+    }
 
     try {
         const encoding = String(args['encoding'] ?? 'utf8') as BufferEncoding
-        const content  = fs.readFileSync(abs, encoding)
-        return ok(content, { path: abs, bytes: stat.size })
+        const raw = fs.readFileSync(abs, encoding)
+
+        if (!hasLineRange) {
+            return ok(raw, { path: abs, bytes: stat.size })
+        }
+
+        // Line-range mode: return numbered lines
+        const allLines   = raw.split('\n')
+        const totalLines = allLines.length
+        const startLine  = Math.max(1, offset ?? 1)
+        const endLine    = limit != null ? Math.min(startLine + limit - 1, totalLines) : totalLines
+
+        const selected = allLines.slice(startLine - 1, endLine)
+        const numbered = selected.map((line, i) => `${startLine + i}: ${line}`)
+        const content  = numbered.join('\n')
+        const meta     = { path: abs, bytes: stat.size, totalLines, startLine, endLine, linesReturned: selected.length }
+
+        return ok(content, meta)
     } catch (e) {
         return fail(`Read failed: ${e instanceof Error ? e.message : String(e)}`)
     }
@@ -233,6 +282,56 @@ function handleMove(root: string, args: Record<string, unknown>): ToolCallResult
     }
 }
 
+function handlePatch(root: string, args: Record<string, unknown>): ToolCallResult {
+    const filePath = String(args['path'] ?? '')
+    if (!filePath) return fail('path is required')
+
+    const abs = resolve(root, filePath)
+    if (!withinRoot(root, abs)) return fail(`Path escapes working root: ${filePath}`)
+    if (isProtectedSystemWrite(root, abs)) {
+        return fail(`Direct writes to ${filePath} are protected.`)
+    }
+    if (!fs.existsSync(abs)) return fail(`File not found: ${filePath}`)
+    if (fs.statSync(abs).isDirectory()) return fail(`Path is a directory: ${filePath}`)
+
+    const patches = args['patches']
+    if (!Array.isArray(patches) || patches.length === 0) return fail('patches array is required and must not be empty')
+
+    let content: string
+    try {
+        content = fs.readFileSync(abs, 'utf8')
+    } catch (e) {
+        return fail(`Read failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
+
+    // Validate all patches before applying any (atomic — all or nothing)
+    for (let i = 0; i < patches.length; i++) {
+        const patch = patches[i] as Record<string, unknown>
+        const search = String(patch['search'] ?? '')
+        if (!search) return fail(`Patch ${i}: search string is empty`)
+
+        const occurrences = content.split(search).length - 1
+        if (occurrences === 0) return fail(`Patch ${i}: search string not found in file.\nSearch: ${search.slice(0, 200)}`)
+        if (occurrences > 1)   return fail(`Patch ${i}: search string matches ${occurrences} locations (must be unique).\nSearch: ${search.slice(0, 200)}`)
+    }
+
+    // Apply patches sequentially
+    for (const patch of patches) {
+        const p = patch as Record<string, unknown>
+        const search  = String(p['search'] ?? '')
+        const replace = String(p['replace'] ?? '')
+        content = content.replace(search, replace)
+    }
+
+    try {
+        fs.writeFileSync(abs, content, 'utf8')
+        const bytes = fs.statSync(abs).size
+        return ok(`Patched: ${filePath} (${patches.length} replacement${patches.length > 1 ? 's' : ''}, ${bytes} bytes)`, { path: abs, bytes, patchCount: patches.length })
+    } catch (e) {
+        return fail(`Write failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
+}
+
 // ── Runtime ───────────────────────────────────────────────────────────────────
 
 interface IToolRuntimeWithMeta extends IToolRuntime {
@@ -252,6 +351,7 @@ export class FsToolRuntime implements IToolRuntimeWithMeta {
         switch (name) {
             case 'fs_read':   return handleRead(this.root, args)
             case 'fs_write':  return handleWrite(this.root, args)
+            case 'fs_patch':  return handlePatch(this.root, args)
             case 'fs_list':   return handleList(this.root, args)
             case 'fs_delete': return handleDelete(this.root, args)
             case 'fs_move':   return handleMove(this.root, args)
@@ -260,6 +360,6 @@ export class FsToolRuntime implements IToolRuntimeWithMeta {
     }
 
     mutatingToolNames(): ReadonlySet<string> {
-        return new Set(['fs_write', 'fs_delete', 'fs_move'])
+        return new Set(['fs_write', 'fs_patch', 'fs_delete', 'fs_move'])
     }
 }
