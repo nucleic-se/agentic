@@ -217,6 +217,92 @@ function mapStopReason(raw: string | null | undefined, toolCalls: ToolCall[]): S
     return toolCalls.length ? 'tool_use' : 'end_turn'
 }
 
+/**
+ * Recover tool calls that a model emitted as plain text instead of
+ * structured tool_calls. Some models (e.g. deepseek on Ollama Cloud)
+ * intermittently output tool calls in a text template rather than
+ * using the function calling protocol.
+ *
+ * Strategy: find every JSON object in the text, then scan nearby lines
+ * for a tool name (with or without prefixes like "tool_call_name:").
+ * This is format-agnostic — handles all observed model output patterns.
+ *
+ * Only runs when: (1) no structured tool_calls in the response,
+ * (2) tool names from the request are found in the response text.
+ */
+function recoverTextToolCalls(text: string, toolNames: Set<string>): ToolCall[] {
+    if (!text || toolNames.size === 0) return []
+
+    // Quick check: does the text mention any tool name?
+    let hasToolRef = false
+    for (const name of toolNames) {
+        if (text.includes(name)) { hasToolRef = true; break }
+    }
+    if (!hasToolRef) return []
+
+    // Build a regex that matches any tool name as a word boundary token.
+    // Handles: "fs_read", "tool_call_name:fs_read", "`fs_read`", etc.
+    const namePattern = new RegExp(`(?:^|\\W)(${[...toolNames].map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?:\\W|$)`)
+
+    /** Scan a line for a tool name. */
+    const extractToolName = (line: string): string | undefined => {
+        const m = namePattern.exec(line)
+        return m ? m[1] : undefined
+    }
+
+    const calls: ToolCall[] = []
+    const lines = text.split('\n')
+
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim()
+
+        // Scan line for a tool name
+        const name = extractToolName(trimmed)
+        if (!name) continue
+
+        // Found a tool name — search forward for the nearest JSON object.
+        // JSON may start at line beginning or be inline after a prefix like
+        // "tool_call_arguments: {..." or "```json\n{...".
+        let args: Record<string, unknown> | undefined
+        for (let j = i; j < Math.min(lines.length, i + 8); j++) {
+            const l = lines[j].trim()
+            if (l.startsWith('```') && !l.includes('{')) continue
+
+            // Find first '{' on this line
+            const braceIdx = l.indexOf('{')
+            if (braceIdx === -1) continue
+
+            // Extract from the brace onwards, collecting multi-line JSON
+            const firstPart = l.slice(braceIdx)
+            const jsonLines: string[] = [firstPart]
+            let depth = 0
+            for (const ch of firstPart) {
+                if (ch === '{') depth++
+                else if (ch === '}') depth--
+            }
+            if (depth > 0) {
+                for (let k = j + 1; k < lines.length; k++) {
+                    const jl = lines[k].trim()
+                    if (jl.startsWith('```')) break
+                    jsonLines.push(lines[k])
+                    for (const ch of jl) {
+                        if (ch === '{') depth++
+                        else if (ch === '}') depth--
+                    }
+                    if (depth <= 0) break
+                }
+            }
+            const raw = jsonLines.join('\n').trim()
+            try { args = JSON.parse(raw) } catch { continue }
+            break
+        }
+
+        calls.push({ id: `recovered-${calls.length}`, name, args: args ?? {} })
+    }
+
+    return calls
+}
+
 function fromOpenAIResponse(res: OpenAIChatResponse): TurnResponse {
     const choice = res.choices?.[0]
     const message = choice?.message
@@ -313,7 +399,21 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         }
 
         const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody })
-        return fromOpenAIResponse(res)
+        const result = fromOpenAIResponse(res)
+
+        // Recover tool calls emitted as text by models that intermittently
+        // ignore the function calling protocol (e.g. deepseek on Ollama Cloud).
+        if (!result.message.toolCalls?.length && request.tools?.length && result.message.content) {
+            const toolNames = new Set(request.tools.map(t => t.name))
+            const recovered = recoverTextToolCalls(result.message.content, toolNames)
+            if (recovered.length) {
+                result.message.toolCalls = recovered
+                result.message.content = ''
+                result.stopReason = 'tool_use'
+            }
+        }
+
+        return result
     }
 
     async streamTurn(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse> {
