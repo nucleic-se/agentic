@@ -5,10 +5,18 @@
  * truncated if it exceeds the size limit. Status codes, headers, and
  * errors are all surfaced in the content string so the LLM can reason
  * about them.
+ *
+ * When `outputDir` is provided, response bodies are written to disk and
+ * the tool returns the file path instead of inlining the content. This
+ * keeps large responses out of the conversation context — the model reads
+ * the file with fs_read when it needs the content.
  */
 
 import type { ToolDefinition } from '../contracts/llm.js'
 import type { IToolRuntime, ToolCallResult } from '../contracts/tool-runtime.js'
+import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // ── Limits ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +37,15 @@ function truncate(text: string, maxBytes: number): { text: string; truncated: bo
     const buf = Buffer.from(text, 'utf8')
     if (buf.byteLength <= maxBytes) return { text, truncated: false }
     return { text: buf.slice(0, maxBytes).toString('utf8') + '\n[truncated]', truncated: true }
+}
+
+function saveToFile(outputDir: string, url: string, content: string, ext: string): string {
+    mkdirSync(outputDir, { recursive: true })
+    const hash = createHash('sha1').update(url).digest('hex').slice(0, 8)
+    const filename = `fetch-${hash}-${Date.now()}.${ext}`
+    const filePath = join(outputDir, filename)
+    writeFileSync(filePath, content, 'utf8')
+    return filePath
 }
 
 // ── Definitions ───────────────────────────────────────────────────────────────
@@ -64,7 +81,7 @@ const DEFINITIONS: ToolDefinition[] = [
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-async function handleGet(args: Record<string, unknown>): Promise<ToolCallResult> {
+async function handleGet(args: Record<string, unknown>, outputDir?: string): Promise<ToolCallResult> {
     const url = String(args['url'] ?? '')
     if (!url) return fail('url is required')
 
@@ -84,6 +101,15 @@ async function handleGet(args: Record<string, unknown>): Promise<ToolCallResult>
         const raw = await res.text()
         const { text: body, truncated } = truncate(raw, MAX_RESPONSE_BYTES)
 
+        if (outputDir) {
+            const ext = /json/i.test(res.headers.get('content-type') ?? '') ? 'json' : 'txt'
+            const filePath = saveToFile(outputDir, url, body, ext)
+            return ok(
+                `GET ${url}\nHTTP ${res.status} ${res.statusText}\nContent-Type: ${res.headers.get('content-type') ?? 'unknown'}\nSize: ${(Buffer.byteLength(raw, 'utf8') / 1024).toFixed(1)} KB${truncated ? ' (truncated)' : ''}\nSaved to: ${filePath}`,
+                { status: res.status, truncated, filePath },
+            )
+        }
+
         const summary = [
             `HTTP ${res.status} ${res.statusText}`,
             `Content-Type: ${res.headers.get('content-type') ?? 'unknown'}`,
@@ -98,7 +124,7 @@ async function handleGet(args: Record<string, unknown>): Promise<ToolCallResult>
     }
 }
 
-async function handlePost(args: Record<string, unknown>): Promise<ToolCallResult> {
+async function handlePost(args: Record<string, unknown>, outputDir?: string): Promise<ToolCallResult> {
     const url  = String(args['url'] ?? '')
     const body = args['body']
     if (!url)              return fail('url is required')
@@ -124,6 +150,15 @@ async function handlePost(args: Record<string, unknown>): Promise<ToolCallResult
         const raw = await res.text()
         const { text: resBody, truncated } = truncate(raw, MAX_RESPONSE_BYTES)
 
+        if (outputDir) {
+            const ext = /json/i.test(res.headers.get('content-type') ?? '') ? 'json' : 'txt'
+            const filePath = saveToFile(outputDir, `${url}-${bodyText.slice(0, 64)}`, resBody, ext)
+            return ok(
+                `POST ${url}\nHTTP ${res.status} ${res.statusText}\nContent-Type: ${res.headers.get('content-type') ?? 'unknown'}\nSize: ${(Buffer.byteLength(raw, 'utf8') / 1024).toFixed(1)} KB${truncated ? ' (truncated)' : ''}\nSaved to: ${filePath}`,
+                { status: res.status, truncated, filePath },
+            )
+        }
+
         const summary = [
             `HTTP ${res.status} ${res.statusText}`,
             `Content-Type: ${res.headers.get('content-type') ?? 'unknown'}`,
@@ -140,15 +175,27 @@ async function handlePost(args: Record<string, unknown>): Promise<ToolCallResult
 
 // ── Runtime ───────────────────────────────────────────────────────────────────
 
+export interface FetchToolOptions {
+    /** If set, response bodies are written to this directory and the tool
+     *  returns the file path instead of inlining content in the conversation. */
+    outputDir?: string
+}
+
 export class FetchToolRuntime implements IToolRuntime {
+    private readonly outputDir?: string
+
+    constructor(options?: FetchToolOptions) {
+        this.outputDir = options?.outputDir
+    }
+
     tools(): ToolDefinition[] {
         return DEFINITIONS
     }
 
     async call(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
         switch (name) {
-            case 'fetch_get':  return handleGet(args)
-            case 'fetch_post': return handlePost(args)
+            case 'fetch_get':  return handleGet(args, this.outputDir)
+            case 'fetch_post': return handlePost(args, this.outputDir)
             default:           return { ok: false, content: `Unknown tool: ${name}` }
         }
     }

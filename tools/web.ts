@@ -1,9 +1,21 @@
+/**
+ * Web tools — search and clean-fetch.
+ *
+ * web_search: DuckDuckGo HTML search, returns snippets inline (short, always useful in context).
+ * web_fetch_clean: fetches a page and strips it to readable text. When outputDir is set,
+ *   writes the cleaned text to disk and returns the file path — keeps large pages out of
+ *   the conversation context.
+ */
+
 import type { ToolDefinition } from '../contracts/llm.js'
 import type { IToolRuntime, ToolCallResult } from '../contracts/tool-runtime.js'
+import { createHash } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
-const MAX_RESULTS = 8
+const MAX_RESULTS    = 8
 const MAX_BODY_CHARS = 12_000
-const TIMEOUT_MS = 15_000
+const TIMEOUT_MS     = 15_000
 
 function ok(content: string, data?: unknown): ToolCallResult {
     return { ok: true, content, data }
@@ -130,7 +142,7 @@ async function handleSearch(args: Record<string, unknown>): Promise<ToolCallResu
     }
 }
 
-async function handleFetchClean(args: Record<string, unknown>): Promise<ToolCallResult> {
+async function handleFetchClean(args: Record<string, unknown>, outputDir?: string): Promise<ToolCallResult> {
     const url = String(args['url'] ?? '').trim()
     if (!url) return fail('url is required')
 
@@ -140,23 +152,36 @@ async function handleFetchClean(args: Record<string, unknown>): Promise<ToolCall
         if (!res.ok) return fail(`Fetch failed: HTTP ${res.status} ${res.statusText}`)
 
         const contentType = res.headers.get('content-type') ?? 'unknown'
+
+        let body: string
         if (!/html|xml/i.test(contentType)) {
-            return ok([
-                `URL: ${url}`,
-                `Content-Type: ${contentType}`,
-                'Body:',
-                truncate(raw, MAX_BODY_CHARS),
-            ].join('\n'))
+            body = truncate(raw, MAX_BODY_CHARS)
+        } else {
+            const cleaned = cleanHtmlToText(raw)
+            const lines: string[] = []
+            if (cleaned.title) lines.push(`# ${cleaned.title}`)
+            lines.push(cleaned.text)
+            body = lines.join('\n\n')
         }
 
-        const cleaned = cleanHtmlToText(raw)
+        if (outputDir) {
+            mkdirSync(outputDir, { recursive: true })
+            const hash = createHash('sha1').update(url).digest('hex').slice(0, 8)
+            const filename = `web-${hash}.md`
+            const filePath = join(outputDir, filename)
+            writeFileSync(filePath, body, 'utf8')
+            return ok(
+                `Fetched: ${url}\nContent-Type: ${contentType}\nSize: ${(body.length / 1024).toFixed(1)} KB\nSaved to: ${filePath}`,
+                { filePath },
+            )
+        }
+
         return ok([
             `URL: ${url}`,
-            cleaned.title ? `Title: ${cleaned.title}` : '',
             `Content-Type: ${contentType}`,
             'Cleaned text:',
-            cleaned.text,
-        ].filter(Boolean).join('\n'))
+            body,
+        ].join('\n'))
     } catch (err) {
         return fail(`Fetch failed: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -188,7 +213,19 @@ const DEFINITIONS: ToolDefinition[] = [
     },
 ]
 
+export interface WebToolOptions {
+    /** If set, web_fetch_clean writes cleaned page text to this directory and
+     *  returns the file path instead of inlining the content in the conversation. */
+    outputDir?: string
+}
+
 export class WebToolRuntime implements IToolRuntime {
+    private readonly outputDir?: string
+
+    constructor(options?: WebToolOptions) {
+        this.outputDir = options?.outputDir
+    }
+
     tools(): ToolDefinition[] {
         return DEFINITIONS
     }
@@ -198,7 +235,7 @@ export class WebToolRuntime implements IToolRuntime {
             case 'web_search':
                 return handleSearch(args)
             case 'web_fetch_clean':
-                return handleFetchClean(args)
+                return handleFetchClean(args, this.outputDir)
             default:
                 return fail(`Unknown tool: ${name}`)
         }
