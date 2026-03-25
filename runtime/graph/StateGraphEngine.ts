@@ -293,8 +293,8 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         const state = structuredClone(cp.state);
         const snapshots: GraphSnapshot<TState>[] = [];
         let currentNodeId: string | GraphEnd = cp.currentNodeId;
-        // Restore step counter so maxSteps enforcement is cumulative.
-        let steps = cp.stepCount;
+        // Fresh step budget on resume — checkpoint stepCount is historical, not a constraint.
+        let steps = 0;
         const startTime = Date.now();
 
         while (currentNodeId !== END) {

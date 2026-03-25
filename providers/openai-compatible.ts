@@ -164,7 +164,8 @@ function toOpenAIMessages(system: string | undefined, messages: Message[]): Open
             } else {
                 out.push({
                     role:       'assistant',
-                    content:    msg.content || '',
+                    // OpenAI spec: content must be null (not '') when tool_calls are present
+                    content:    msg.toolCalls?.length ? (msg.content || null) : (msg.content || ''),
                     ...(msg.toolCalls?.length
                         ? {
                             tool_calls: msg.toolCalls.map(call => ({
