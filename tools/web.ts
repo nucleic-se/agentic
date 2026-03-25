@@ -98,21 +98,28 @@ function cleanHtmlToText(html: string): { title: string; text: string } {
     }
 }
 
-function parseDuckDuckGoResults(html: string, maxResults: number): Array<{ title: string; url: string; snippet: string }> {
+function parseDuckDuckGoLiteResults(html: string, maxResults: number): Array<{ title: string; url: string; snippet: string }> {
     const results: Array<{ title: string; url: string; snippet: string }> = []
-    const blocks = html.split(/<div[^>]+class="result[^"]*"[^>]*>/i).slice(1)
 
-    for (const block of blocks) {
-        const href = block.match(/<a[^>]*class="result__a"[^>]*href="([^"]+)"/i)?.[1]
-        const titleHtml = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/i)?.[1]
-        const snippetHtml = block.match(/<(?:a|div)[^>]*class="result__snippet"[^>]*>([\s\S]*?)<\/(?:a|div)>/i)?.[1] ?? ''
-        if (!href || !titleHtml) continue
-        results.push({
-            title: stripTags(titleHtml),
-            url: decodeHtml(href),
-            snippet: stripTags(snippetHtml),
-        })
-        if (results.length >= maxResults) break
+    // Extract all result-link anchors (title + URL)
+    const linkRe = /<a[^>]+class='result-link'[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+    // Extract all result-snippet cells (in document order)
+    const snippetRe = /<td[^>]+class='result-snippet'[^>]*>([\s\S]*?)<\/td>/gi
+
+    const snippets: string[] = []
+    let sm: RegExpExecArray | null
+    while ((sm = snippetRe.exec(html)) !== null) {
+        snippets.push(stripTags(sm[1]))
+    }
+
+    let lm: RegExpExecArray | null
+    let i = 0
+    while ((lm = linkRe.exec(html)) !== null && results.length < maxResults) {
+        const url = decodeHtml(lm[1])
+        const title = stripTags(lm[2])
+        if (!url || !title) continue
+        results.push({ url, title, snippet: snippets[i] ?? '' })
+        i++
     }
 
     return results
@@ -124,13 +131,29 @@ async function handleSearch(args: Record<string, unknown>): Promise<ToolCallResu
     if (!query) return fail('query is required')
 
     try {
-        const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
-        const res = await fetchText(url)
+        // Use lite endpoint (POST) — more stable than html endpoint, no bot challenges
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+        let res: Response
+        try {
+            res = await fetch('https://lite.duckduckgo.com/lite/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                },
+                body: `q=${encodeURIComponent(query)}`,
+                signal: controller.signal,
+            })
+        } finally {
+            clearTimeout(timer)
+        }
+
         const html = await res.text()
         if (!res.ok) return fail(`Search failed: HTTP ${res.status} ${res.statusText}`)
 
-        const results = parseDuckDuckGoResults(html, maxResults)
-        if (results.length === 0) return fail('Search returned no parseable results.')
+        const results = parseDuckDuckGoLiteResults(html, maxResults)
+        if (results.length === 0) return fail('Search returned no results.')
 
         return ok(results.map((result, index) => [
             `${index + 1}. ${result.title}`,
