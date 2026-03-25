@@ -71,6 +71,9 @@ export type {
     MemoryQuery,
     IMemoryStore,
     IMemoryWriteValidator,
+    MemorySlot,
+    MemoryFact,
+    IFactStore,
 } from './IMemory.js';
 
 // Tool prompt rendering
