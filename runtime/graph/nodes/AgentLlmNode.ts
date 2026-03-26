@@ -119,6 +119,13 @@ export interface AgentLlmNodeConfig<TState extends GraphState> {
 
     /** Max tokens to generate. Passed to TurnRequest.maxTokens. */
     maxTokens?: number;
+
+    /**
+     * Called with each text delta during streaming. When provided (and the
+     * provider implements streamTurn), streaming is preferred over turn().
+     * Callers use this to pipe tokens to a transport in real time.
+     */
+    onDelta?: (text: string) => void;
 }
 
 // ── Node implementation ──────────────────────────────────────
@@ -145,6 +152,7 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
             onError,
             maxRetries = 3,
             maxTokens,
+            onDelta,
         } = this.config;
 
         // Resolve provider (static or dynamic)
@@ -180,15 +188,18 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
 
         while (true) {
             try {
-                // Use streaming if available for delta events
-                if (eventsKey && provider.streamTurn) {
+                // Use streaming when available and a consumer exists
+                if ((eventsKey || onDelta) && provider.streamTurn) {
                     response = await provider.streamTurn(request, (text) => {
-                        this.emitEvent(state, eventsKey, {
-                            type: 'message_delta',
-                            nodeId: this.id,
-                            text,
-                            timestamp: Date.now(),
-                        });
+                        if (eventsKey) {
+                            this.emitEvent(state, eventsKey, {
+                                type: 'message_delta',
+                                nodeId: this.id,
+                                text,
+                                timestamp: Date.now(),
+                            });
+                        }
+                        onDelta?.(text);
                     });
                 } else {
                     response = await provider.turn(request);
