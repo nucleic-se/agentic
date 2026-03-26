@@ -252,7 +252,7 @@ function handleDelete(root: string, args: Record<string, unknown>): ToolCallResu
     if (!fs.existsSync(abs)) return fail(`File not found: ${filePath}`)
 
     try {
-        fs.rmSync(abs, { recursive: false })
+        fs.rmSync(abs, { recursive: true })
         return ok(`Deleted: ${filePath}`)
     } catch (e) {
         return fail(`Delete failed: ${e instanceof Error ? e.message : String(e)}`)
