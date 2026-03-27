@@ -18,21 +18,26 @@ import type { JsonSchema } from './shared.js'
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 
+export type MessageProvenance = 'human' | 'model' | 'deterministic'
+
 export interface UserMessage {
-    role:    'user'
-    content: string
+    role:       'user'
+    content:    string
+    provenance?: MessageProvenance
 }
 
 export interface AssistantMessage {
     role:       'assistant'
     content:    string
     toolCalls?: ToolCall[]
+    provenance?: MessageProvenance
 }
 
 export interface ToolResultMessage {
-    role:       'tool_result'
-    toolCallId: string
-    content:    string
+    role:        'tool_result'
+    toolCallId:  string
+    content:     string
+    provenance?: MessageProvenance
     /** True when the tool itself returned an error — the LLM should see this as a failure. */
     isError?:   boolean
 }
