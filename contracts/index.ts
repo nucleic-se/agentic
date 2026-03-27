@@ -151,7 +151,7 @@ export type {
 } from './IAIBuilder.js';
 
 // State graph engine
-export { END } from './graph/index.js';
+export { END, GraphRunLimitError } from './graph/index.js';
 export type {
     GraphState,
     GraphEnd,

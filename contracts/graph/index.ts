@@ -6,7 +6,7 @@
  * @module contracts/graph
  */
 
-export { END } from './IGraphEngine.js';
+export { END, GraphRunLimitError } from './IGraphEngine.js';
 
 export type {
     GraphState,

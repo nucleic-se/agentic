@@ -30,7 +30,7 @@ import type {
     GraphEnd,
     GraphState,
 } from '../../contracts/graph/index.js';
-import { END } from '../../contracts/graph/index.js';
+import { END, GraphRunLimitError } from '../../contracts/graph/index.js';
 import type { ITracer, ISpanTracer } from '../../contracts/IObservability.js';
 import { randomUUID } from 'node:crypto';
 
@@ -218,23 +218,26 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                 if (this.limits?.maxTotalMs != null) {
                     const elapsed = Date.now() - startTime;
                     if (elapsed >= this.limits.maxTotalMs) {
-                        throw new Error(
+                        throw new GraphRunLimitError(
                             `Graph run limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
+                            'time',
                         );
                     }
                 }
 
                 // Enforce tool-call limit.
                 if (this.limits?.maxToolCalls != null && this._toolCallCount >= this.limits.maxToolCalls) {
-                    throw new Error(
+                    throw new GraphRunLimitError(
                         `Graph run limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
+                        'toolCalls',
                     );
                 }
 
                 // Enforce token limit.
                 if (this.limits?.maxTotalTokens != null && this._tokenCount >= this.limits.maxTotalTokens) {
-                    throw new Error(
+                    throw new GraphRunLimitError(
                         `Graph run limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
+                        'tokens',
                     );
                 }
 
@@ -301,21 +304,24 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             if (this.limits?.maxTotalMs != null) {
                 const elapsed = Date.now() - startTime;
                 if (elapsed >= this.limits.maxTotalMs) {
-                    throw new Error(
+                    throw new GraphRunLimitError(
                         `Graph run limit exceeded: maxTotalMs (${this.limits.maxTotalMs}ms) reached after ${steps} steps.`,
+                        'time',
                     );
                 }
             }
 
             if (this.limits?.maxToolCalls != null && this._toolCallCount >= this.limits.maxToolCalls) {
-                throw new Error(
+                throw new GraphRunLimitError(
                     `Graph run limit exceeded: maxToolCalls (${this.limits.maxToolCalls}) reached after ${steps} steps.`,
+                    'toolCalls',
                 );
             }
 
             if (this.limits?.maxTotalTokens != null && this._tokenCount >= this.limits.maxTotalTokens) {
-                throw new Error(
+                throw new GraphRunLimitError(
                     `Graph run limit exceeded: maxTotalTokens (${this.limits.maxTotalTokens}) reached after ${steps} steps.`,
+                    'tokens',
                 );
             }
 

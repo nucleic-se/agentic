@@ -13,6 +13,18 @@
 
 import type { ITracer } from '../IObservability.js';
 
+// ── Errors ─────────────────────────────────────────────────────
+
+/** Thrown when a hard run limit (tokens, tool calls, time) is exceeded. */
+export class GraphRunLimitError extends Error {
+    readonly dimension: 'tokens' | 'toolCalls' | 'time';
+    constructor(message: string, dimension: 'tokens' | 'toolCalls' | 'time') {
+        super(message);
+        this.name = 'GraphRunLimitError';
+        this.dimension = dimension;
+    }
+}
+
 // ── State Constraint ───────────────────────────────────────────
 
 /** Base constraint for graph state — a plain object with string keys. */
