@@ -45,11 +45,11 @@ export type {
     PackBootstrapContext,
 } from './IPackBootstrap.js';
 
-// Capability registry
+// Pack registry
 export type {
-    ICapabilityRegistry,
+    IPackRegistry,
     PackValidationError,
-} from './ICapabilityRegistry.js';
+} from './IPackRegistry.js';
 
 // Shared types
 export type { JsonSchema } from './shared.js';

@@ -19,8 +19,12 @@ export interface ITickStep<TContext extends TickContext = TickContext> {
     /** Unique identifier for this step */
     id: string;
 
-    /** Execution order (lower runs first) */
-    order: number;
+    /**
+     * IDs of steps that must execute before this one.
+     * Forward references are allowed — resolution happens at run() time, not at registerStep() time.
+     * If absent or empty, the step has no ordering constraint (registration order is the tiebreak).
+     */
+    after?: string[];
 
     /** Execute this step. Returns void; mutates world state via services. */
     execute(context: TContext): Promise<void>;

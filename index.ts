@@ -30,7 +30,7 @@ export type {
     PackCommandDef,
     IPackBootstrap,
     PackBootstrapContext,
-    ICapabilityRegistry,
+    IPackRegistry,
     PackValidationError,
     JsonSchema,
     ToolTrustTier,
@@ -104,7 +104,7 @@ export {
     TickPipeline,
     InMemoryTracer,
     InMemorySpanTracer,
-    CapabilityRegistry,
+    PackRegistry,
     PackMigrationRunner,
     InMemoryMigrationState,
     ToolRegistry,
@@ -112,6 +112,7 @@ export {
     ToolPromptRenderer,
     ContextAssembler,
     AgentContextAssembler,
+    AgentRunner,
     AIPromptService,
     AIPromptBuilder,
     AIPipeline,
@@ -125,7 +126,8 @@ export {
 } from './runtime/index.js';
 
 export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentLlmEvent, OnErrorAction, AgentLlmOnError } from './runtime/index.js';
-export type { AgentContextAssemblerConfig } from './runtime/index.js';
+export type { ConversationAssemblerConfig } from './runtime/index.js';
+export type { AgentRunnerConfig } from './runtime/index.js';
 
 export type { MigrationState } from './runtime/index.js';
 
@@ -163,6 +165,9 @@ export type {
     HumanInLoopState,
     HumanInLoopConfig,
 } from './patterns/index.js';
+
+// ── Tools ──────────────────────────────────────────────────────
+export { ToolRuntimeAdapter, CompositeToolRuntime } from './tools/index.js';
 
 // ── Utilities ──────────────────────────────────────────────────
 export { estimateTokens } from './utils.js';

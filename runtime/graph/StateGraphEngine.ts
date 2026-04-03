@@ -60,6 +60,8 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
     // Per-run accumulators — reset at the start of each run() / resume().
     private _toolCallCount = 0;
     private _tokenCount = 0;
+    /** Wall-clock start time of the current run, used to populate elapsedMs in checkpoints. */
+    private _runStartTime: number | undefined = undefined;
     /** Span ID of the root span opened by the current run(). Undefined outside a run. */
     private _activeRootSpanId: string | undefined = undefined;
 
@@ -201,6 +203,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         // Reset per-run accumulators.
         this._toolCallCount = 0;
         this._tokenCount = 0;
+        this._runStartTime = startTime;
 
         // Open a root span if the tracer supports it.
         if (isSpanTracer(this.tracer)) {
@@ -259,8 +262,10 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             this._activeRootSpanId = undefined;
         }
 
+        this._runStartTime = undefined;
         return Object.freeze({ state, snapshots: Object.freeze(snapshots), steps });
     }
+
     /**
      * Capture current execution state as a serialisable checkpoint.
      * The checkpoint can be persisted and later passed to resume().
@@ -275,6 +280,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             timestamp: Date.now(),
             tokenCount: this._tokenCount,
             toolCallCount: this._toolCallCount,
+            elapsedMs: this._runStartTime != null ? Date.now() - this._runStartTime : undefined,
         });
     }
 
@@ -298,7 +304,10 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         let currentNodeId: string | GraphEnd = cp.currentNodeId;
         // Fresh step budget on resume — checkpoint stepCount is historical, not a constraint.
         let steps = 0;
-        const startTime = Date.now();
+        // Offset startTime so elapsed continues from where the checkpoint recorded it,
+        // preserving the maxTotalMs budget across resume boundaries.
+        const startTime = Date.now() - (cp.elapsedMs ?? 0);
+        this._runStartTime = startTime;
 
         while (currentNodeId !== END) {
             if (this.limits?.maxTotalMs != null) {
@@ -331,8 +340,10 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             steps++;
         }
 
+        this._runStartTime = undefined;
         return Object.freeze({ state, snapshots: Object.freeze(snapshots), steps });
     }
+
     // ── Private ────────────────────────────────────────────────
 
     /**
@@ -362,8 +373,10 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                         reportTokens: (count: number) => { this._tokenCount += count; },
                     });
                     // Fire hooks and use the same retry+timeout logic as sequential nodes.
+                    // Pre-snapshot must be a separate clone — branchState is mutated during
+                    // execution, so passing it as both state and snapshot would corrupt retries.
                     await this.onBeforeNode?.(targetId, branchState, -1);
-                    await this.executeWithRetryAndTimeout(node, branchState, context, branchState);
+                    await this.executeWithRetryAndTimeout(node, branchState, context, structuredClone(branchState));
                     await this.onAfterNode?.(targetId, branchState, -1);
                     return branchState;
                 }),

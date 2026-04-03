@@ -15,6 +15,8 @@
 
 import type { ToolDefinition } from '../contracts/llm.js'
 import type { IToolRuntime, ToolCallResult } from '../contracts/tool-runtime.js'
+import type { IToolPolicy } from '../contracts/IToolPolicy.js'
+import type { ToolTrustTier } from '../contracts/ITool.js'
 
 interface IToolRuntimeWithMeta extends IToolRuntime {
     mutatingToolNames(): ReadonlySet<string>
@@ -25,8 +27,10 @@ export class CompositeToolRuntime implements IToolRuntimeWithMeta {
     private readonly map = new Map<string, IToolRuntime>()
     private readonly defs: ToolDefinition[] = []
     private readonly mutating = new Set<string>()
+    private readonly policy?: IToolPolicy
 
-    constructor(runtimes: IToolRuntime[]) {
+    constructor(runtimes: IToolRuntime[], policy?: IToolPolicy) {
+        this.policy = policy;
         for (const rt of runtimes) {
             for (const def of rt.tools()) {
                 this.defs.push(def)
@@ -47,6 +51,24 @@ export class CompositeToolRuntime implements IToolRuntimeWithMeta {
     async call(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
         const rt = this.map.get(name)
         if (!rt) return { ok: false, content: `Unknown tool: ${name}` }
+
+        if (this.policy) {
+            const trustTier: ToolTrustTier = rt.trustTierFor?.(name) ?? 'standard';
+            const decision = await this.policy.evaluate({
+                callId: `composite-${name}-${Date.now()}`,
+                name,
+                args,
+                trustTier,
+            });
+            if (decision.kind === 'deny') {
+                return { ok: false, content: decision.reason };
+            }
+            if (decision.kind === 'rewrite') {
+                return rt.call(name, decision.args);
+            }
+            // 'allow' and 'confirm' fall through to normal dispatch
+        }
+
         return rt.call(name, args)
     }
 

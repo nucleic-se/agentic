@@ -1,13 +1,13 @@
 /**
- * In-memory capability registry with topological dependency validation.
+ * In-memory pack registry with topological dependency validation.
  *
  * Validates pack dependency graphs and resolves boot order.
  * Missing required provider => hard startup error.
  */
 
-import type { ICapabilityRegistry, IPackManifest, PackValidationError } from '../contracts/index.js';
+import type { IPackRegistry, IPackManifest, PackValidationError } from '../contracts/index.js';
 
-export class CapabilityRegistry implements ICapabilityRegistry {
+export class PackRegistry implements IPackRegistry {
     private manifests = new Map<string, IPackManifest>();
 
     registerManifest(manifest: IPackManifest): void {

@@ -1,5 +1,5 @@
 /**
- * Capability registry contract.
+ * Pack registry contract.
  *
  * Manages pack manifests, validates dependency graphs, and
  * resolves boot ordering.
@@ -12,7 +12,7 @@ export interface PackValidationError {
     message: string;
 }
 
-export interface ICapabilityRegistry {
+export interface IPackRegistry {
     /** Register a pack manifest */
     registerManifest(manifest: IPackManifest): void;
 

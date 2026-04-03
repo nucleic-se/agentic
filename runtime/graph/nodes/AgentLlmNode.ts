@@ -185,12 +185,15 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
         // Call LLM with error cascade support
         let response: TurnResponse;
         let attempts = 0;
+        // currentProvider is mutable so retries can switch to a new provider
+        // after onError mutates state (e.g. setting a fallback tier flag).
+        let currentProvider = provider;
 
         while (true) {
             try {
                 // Use streaming when available and a consumer exists
-                if ((eventsKey || onDelta) && provider.streamTurn) {
-                    response = await provider.streamTurn(request, (text) => {
+                if ((eventsKey || onDelta) && currentProvider.streamTurn) {
+                    response = await currentProvider.streamTurn(request, (text) => {
                         if (eventsKey) {
                             this.emitEvent(state, eventsKey, {
                                 type: 'message_delta',
@@ -202,7 +205,7 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
                         onDelta?.(text);
                     });
                 } else {
-                    response = await provider.turn(request);
+                    response = await currentProvider.turn(request);
                 }
                 break; // success
             } catch (error) {
@@ -214,19 +217,16 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
 
                 if (action === 'retry') {
                     attempts++;
-                    // Re-resolve provider in case onError mutated state (e.g. fallbackActive)
-                    const retryProvider: ILLMProvider = typeof providerOrFn === 'function'
+                    // Re-resolve provider — onError may have mutated state to activate a fallback.
+                    currentProvider = typeof providerOrFn === 'function'
                         ? providerOrFn(state)
                         : providerOrFn;
 
-                    // Rebuild request in case state changed
+                    // Rebuild request in case state changed.
                     const retrySystem = state[systemPromptKey] as string | undefined;
                     const retryMessages = state[messagesKey] as Message[];
                     request.messages = retryMessages;
                     if (retrySystem) request.system = retrySystem;
-
-                    // Use the potentially-new provider on next iteration
-                    Object.defineProperty(request, '__provider', { value: retryProvider });
                     continue;
                 } else if (action === 'continue') {
                     return; // Skip — node completes without writing output

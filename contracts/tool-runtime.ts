@@ -24,6 +24,7 @@
  */
 
 import type { ToolDefinition } from './llm.js'
+import type { ToolTrustTier } from './ITool.js'
 
 // ── Result ────────────────────────────────────────────────────────────────────
 
@@ -67,4 +68,12 @@ export interface IToolRuntime {
      * Options are additive: runtimes that do not support signal or onUpdate ignore them.
      */
     call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult>
+
+    /**
+     * Optional: return the effective trust tier for a named tool.
+     * Runtimes that carry trust-tier information implement this so that
+     * wrappers (e.g. CompositeToolRuntime) can forward accurate tier information
+     * to IToolPolicy.evaluate(). If absent or returning undefined, callers default to 'standard'.
+     */
+    trustTierFor?(name: string): ToolTrustTier | undefined
 }

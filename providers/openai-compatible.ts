@@ -138,7 +138,7 @@ function toOpenAITools(tools: ToolDefinition[]): OpenAIFunctionTool[] {
     }))
 }
 
-function toOpenAIMessages(system: string | undefined, messages: Message[]): OpenAIMessage[] {
+export function toOpenAIMessages(system: string | undefined, messages: Message[]): OpenAIMessage[] {
     const out: OpenAIMessage[] = []
 
     if (system) out.push({ role: 'system', content: system })

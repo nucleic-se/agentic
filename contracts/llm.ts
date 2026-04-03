@@ -24,6 +24,8 @@ export interface UserMessage {
     role:       'user'
     content:    string
     provenance?: MessageProvenance
+    /** When true, this message is never dropped by the conversation assembler. */
+    sticky?:    boolean
 }
 
 export interface AssistantMessage {
@@ -36,6 +38,8 @@ export interface AssistantMessage {
 export interface ToolResultMessage {
     role:        'tool_result'
     toolCallId:  string
+    /** Name of the tool that produced this result. Used by the conversation assembler for tool-aware compression. */
+    toolName?:   string
     content:     string
     provenance?: MessageProvenance
     /** True when the tool itself returned an error — the LLM should see this as a failure. */

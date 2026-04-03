@@ -2,7 +2,7 @@
  * Ollama provider — a thin OpenAI-compatible wrapper for Ollama's `/v1` API.
  */
 
-import { OpenAICompatibleProvider, type OpenAICompatibleConfig } from './openai-compatible.js'
+import { OpenAICompatibleProvider, toOpenAIMessages, type OpenAICompatibleConfig } from './openai-compatible.js'
 import type { StructuredRequest, StructuredResponse } from '../contracts/llm.js'
 import type { RetryConfig } from './resilient-fetch.js'
 
@@ -68,9 +68,11 @@ export class OllamaProvider extends OpenAICompatibleProvider {
      */
     async structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>> {
         const schemaHint = `You MUST respond with ONLY a JSON object (no markdown, no code fences) matching this schema:\n${JSON.stringify(request.schema)}`
-        const messages: StructuredRequest['messages'] = [
-            ...request.messages,
-            { role: 'user', content: schemaHint },
+        // Use toOpenAIMessages to correctly map library roles (e.g. tool_result → tool)
+        // before appending the schema hint as a final user message.
+        const wireMessages = [
+            ...toOpenAIMessages(request.system, request.messages),
+            { role: 'user' as const, content: schemaHint },
         ]
 
         const res = await this.post<{
@@ -78,7 +80,7 @@ export class OllamaProvider extends OpenAICompatibleProvider {
             usage?: { prompt_tokens?: number; completion_tokens?: number }
         }>('/chat/completions', {
             model:    this.model,
-            messages: messages.map(m => ({ role: m.role, content: m.content })),
+            messages: wireMessages,
             stream:   false,
             response_format: { type: 'json_object' },
             ...this.extraBody,
