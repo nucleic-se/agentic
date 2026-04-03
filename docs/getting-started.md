@@ -74,7 +74,7 @@ console.log(state.validated); // true
 
 ## Adding tools
 
-Give the LLM access to external capabilities by attaching a `IToolRuntime`:
+Create an `IToolRuntime` when your agent flow needs external capabilities:
 
 ```ts
 import { CompositeToolRuntime, FsToolRuntime, FetchToolRuntime } from '@nucleic-se/agentic/tools';
@@ -85,16 +85,13 @@ const tools = new CompositeToolRuntime([
 ]);
 ```
 
-Pass it to `LlmGraphNode` via the `toolRuntime` config field — the LLM can then call tools during its turn:
+You can call tools directly from callback nodes, or pass the runtime into higher-level agent flows that support tool use:
 
 ```ts
-new LlmGraphNode<MyState>({
-  id: 'research',
-  provider: llm,
-  prompt: (s) => ({ instructions: 'Research the topic.', text: s.topic }),
-  outputKey: 'findings',
-  toolRuntime: tools,
-})
+const lookupNode = new CallbackGraphNode<MyState>('lookup', async (state) => {
+  const result = await tools.call('web_fetch', { url: state.url });
+  state.findings = result.content;
+});
 ```
 
 See [Tool runtimes](./concepts/tools.md) for a full breakdown of available runtimes.

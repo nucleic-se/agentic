@@ -32,6 +32,8 @@ export type {
     PackBootstrapContext,
     IPackRegistry,
     PackValidationError,
+    ICapability,
+    ICapabilityLifecycle,
     JsonSchema,
     ToolTrustTier,
     RetryPolicy,
@@ -123,9 +125,13 @@ export {
     LlmGraphNode,
     SubGraphNode,
     AgentLlmNode,
+    PlanningCapability,
+    BudgetHintCapability,
+    EmptyResponseCapability,
 } from './runtime/index.js';
 
 export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentLlmEvent, OnErrorAction, AgentLlmOnError } from './runtime/index.js';
+export type { PlanningCapabilityConfig, BudgetHintCapabilityConfig, BudgetHintThreshold, EmptyResponseCapabilityConfig } from './runtime/index.js';
 export type { ConversationAssemblerConfig } from './runtime/index.js';
 export type { AgentRunnerConfig } from './runtime/index.js';
 

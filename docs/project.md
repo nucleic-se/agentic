@@ -68,6 +68,33 @@
 - `npm test`
 - `npm run build`
 
+## Delivery Status
+
+### Wave 1
+
+- Status: Complete
+- Scope shipped:
+  - `IPackRegistry` / `PackRegistry` rename
+  - grouped `AgentContextAssembler`
+  - `ToolRuntimeAdapter`
+  - policy-aware `CompositeToolRuntime`
+  - `ITickStep.after` ordering
+  - `AgentRunner`
+  - runtime bug fixes tracked as `R1`–`R4`
+
+### Wave 2
+
+- Status: Complete
+- Scope shipped:
+  - `ICapability<TState>` / `ICapabilityLifecycle<TState>`
+  - `IPackManifest.capabilities`
+  - `PlanningCapability`
+  - `BudgetHintCapability`
+  - `EmptyResponseCapability`
+- Verification:
+  - `npm test`
+  - `npm run build`
+
 ## Design Notes
 
 ### agentic-v2-design.md

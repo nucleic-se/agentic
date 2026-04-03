@@ -40,7 +40,7 @@ const engine = new StateGraphBuilder<ResearchState>()
 `build()` returns an `IGraphEngine<TState>`. Call `.run(initialState)` to execute:
 
 ```ts
-const { state, stepsTaken, deadLetters } = await engine.run({
+const { state, snapshots, steps } = await engine.run({
   topic: 'TypeScript',
   sources: [],
   summary: '',
@@ -83,7 +83,6 @@ const summarize = new LlmGraphNode<ResearchState>({
   // Optional:
   model: 'claude-sonnet-4-6',
   temperature: 0.3,
-  toolRuntime: myTools,  // Give the LLM tools to call
 });
 ```
 
@@ -181,18 +180,16 @@ Fan out to multiple nodes, then merge results before continuing:
 ```ts
 import type { ParallelEdge } from '@nucleic-se/agentic/contracts';
 
-const edge: ParallelEdge<MyState> = {
-  targets: ['fetchNews', 'fetchDocs', 'fetchCode'],
-  merge: (results, original) => ({
-    ...original,
-    news:  results[0].news,
-    docs:  results[1].docs,
-    code:  results[2].code,
+.addParallelEdge(
+  'dispatch',
+  ['fetchNews', 'fetchDocs', 'fetchCode'],
+  (states) => ({
+    ...states[0],
+    docs: states[1].docs,
+    code: states[2].code,
   }),
-  next: 'synthesize',
-};
-
-.addParallelEdge('dispatch', edge)
+  'synthesize',
+)
 ```
 
 ---
@@ -223,14 +220,14 @@ Use `maxSteps` in `build()` to prevent infinite loops:
 | `tracer` | `ITracer` | — | Observability hook |
 | `correlationId` | `string` | auto | Propagated to all trace events |
 | `limits` | `GraphRunLimits` | — | Token / time / tool-call caps |
-| `onBeforeNode` | `(nodeId, state) => void` | — | Called before each node |
-| `onAfterNode` | `(nodeId, state) => void` | — | Called after each node |
+| `onBeforeNode` | `(nodeId, state, stepCount) => void \| Promise<void>` | — | Called before each node |
+| `onAfterNode` | `(nodeId, state, stepCount) => void \| Promise<void>` | — | Called after each node |
 
 ```ts
 .build({
   maxSteps: 50,
   correlationId: 'session-abc',
-  limits: { maxTotalTokens: 100_000, maxDurationMs: 30_000 },
+  limits: { maxTotalTokens: 100_000, maxTotalMs: 30_000 },
   onAfterNode: (id, state) => console.log(`[${id}]`, state),
 })
 ```
@@ -244,7 +241,7 @@ Save mid-run state and resume from it:
 ```ts
 // In one process / request:
 const engine = builder.build();
-const checkpoint = await engine.checkpoint();
+const checkpoint = engine.checkpoint(currentState, currentNodeId, stepCount);
 await saveToDb(checkpoint);
 
 // Later, in another process / request:
@@ -252,7 +249,7 @@ const saved = await loadFromDb();
 const { state } = await engine.resume(saved);
 ```
 
-Checkpoints carry cumulative budget counters (`tokenCount`, `toolCallCount`, `elapsedMs`) so the resumed run continues with the **remaining** budget rather than a fresh allocation. Step count is also cumulative — `maxSteps` enforcement spans the entire logical run, not just the post-resume segment. All three fields are optional for backwards compatibility; omitting them restores the pre-0.x behaviour of fresh-budget resume.
+Checkpoints carry cumulative budget counters (`tokenCount`, `toolCallCount`, `elapsedMs`) so the resumed run continues with the **remaining** budget rather than a fresh allocation.
 
 ---
 
@@ -261,17 +258,18 @@ Checkpoints carry cumulative budget counters (`tokenCount`, `toolCallCount`, `el
 ```ts
 interface GraphRunResult<TState> {
   state: TState;                  // Final state after execution
-  stepsTaken: number;             // Total node executions
-  deadLetters: GraphDeadLetter[]; // Nodes that threw — { nodeId, error, state }
+  snapshots: readonly GraphSnapshot<TState>[];
+  steps: number;                  // Total node executions
 }
 ```
 
-Dead letters let you inspect failures without crashing the run:
+Dead letters are exposed on the engine itself when a node fails:
 
 ```ts
-const { state, deadLetters } = await engine.run(initial);
-if (deadLetters.length) {
-  console.error('Failed nodes:', deadLetters.map(d => d.nodeId));
+try {
+  await engine.run(initial);
+} catch {
+  console.error('Failed nodes:', engine.deadLetterQueue.map(d => d.nodeId));
 }
 ```
 

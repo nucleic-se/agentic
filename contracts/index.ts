@@ -51,6 +51,12 @@ export type {
     PackValidationError,
 } from './IPackRegistry.js';
 
+// Capability contracts (Wave 2)
+export type {
+    ICapability,
+    ICapabilityLifecycle,
+} from './ICapability.js';
+
 // Shared types
 export type { JsonSchema } from './shared.js';
 

@@ -42,8 +42,8 @@ interface GraphEngineConfig {
   tracer?: ITracer;
   correlationId?: string;
   limits?: GraphRunLimits;
-  onBeforeNode?: (nodeId: string, state: unknown) => void;
-  onAfterNode?: (nodeId: string, state: unknown) => void;
+  onBeforeNode?: (nodeId: string, state: Readonly<GraphState>, stepCount: number) => void | Promise<void>;
+  onAfterNode?: (nodeId: string, state: Readonly<GraphState>, stepCount: number) => void | Promise<void>;
 }
 ```
 
@@ -53,7 +53,7 @@ interface GraphEngineConfig {
 interface GraphRunLimits {
   maxTotalTokens?: number;
   maxToolCalls?: number;
-  maxDurationMs?: number;
+  maxTotalMs?: number;
 }
 ```
 
@@ -62,9 +62,10 @@ interface GraphRunLimits {
 ```ts
 interface IGraphEngine<TState> {
   run(initialState: TState): Promise<GraphRunResult<TState>>;
-  step(state: TState, nodeId: string): Promise<TState>;
-  checkpoint(): Promise<GraphCheckpoint<TState>>;
+  step(state: TState, nodeId: string, stepCount?: number): Promise<GraphStepResult<TState>>;
+  checkpoint(state: TState, currentNodeId: string, stepCount: number): GraphCheckpoint<TState>;
   resume(checkpoint: GraphCheckpoint<TState>): Promise<GraphRunResult<TState>>;
+  readonly deadLetterQueue: readonly GraphDeadLetter<TState>[];
 }
 ```
 
@@ -73,8 +74,8 @@ interface IGraphEngine<TState> {
 ```ts
 interface GraphRunResult<TState> {
   state: TState;
-  stepsTaken: number;
-  deadLetters: GraphDeadLetter[];  // { nodeId, error, state }
+  snapshots: readonly GraphSnapshot<TState>[];
+  steps: number;
 }
 ```
 
@@ -126,7 +127,6 @@ interface LlmGraphNodeConfig<TState> {
   schema?: JsonSchema;     // Applied to all calls; prompt() schema takes precedence
   model?: string;
   temperature?: number;
-  toolRuntime?: IToolRuntime;
 }
 ```
 
@@ -212,7 +212,6 @@ import { AnthropicProvider } from '@nucleic-se/agentic/providers';
 new AnthropicProvider({
   apiKey: string;
   model: string;
-  temperature?: number;
   maxTokens?: number;
   baseUrl?: string;
   minRequestSpacingMs?: number;
@@ -226,9 +225,14 @@ new AnthropicProvider({
 import { OpenAICompatibleProvider } from '@nucleic-se/agentic/providers';
 
 new OpenAICompatibleProvider({
-  baseURL: string;
-  apiKey: string;
+  baseUrl: string;
+  apiKey?: string;
   model: string;
+  embeddingModel?: string;
+  providerName?: string;
+  headers?: Record<string, string>;
+  extraBody?: Record<string, unknown>;
+  retry?: RetryConfig;
 })
 ```
 
@@ -251,7 +255,8 @@ new OllamaProvider({
 interface ILLMProvider {
   structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>>;
   turn(request: TurnRequest): Promise<TurnResponse>;
-  embed?(texts: string[]): Promise<number[][]>;
+  streamTurn?(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse>;
+  embed(texts: string[]): Promise<number[][]>;
 }
 ```
 
@@ -264,7 +269,8 @@ All runtimes extend `IToolRuntime`:
 ```ts
 interface IToolRuntime {
   tools(): ToolDefinition[];
-  call(name: string, args: unknown, options?: ToolCallOptions): Promise<ToolCallResult>;
+  call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult>;
+  trustTierFor?(name: string): ToolTrustTier | undefined;
 }
 
 interface ToolCallResult {
@@ -281,7 +287,8 @@ interface ToolCallOptions {
 
 | Class | Import | Options |
 |---|---|---|
-| `CompositeToolRuntime` | `@nucleic-se/agentic/tools` | `(runtimes: IToolRuntime[])` |
+| `CompositeToolRuntime` | `@nucleic-se/agentic/tools` | `(runtimes: IToolRuntime[], policy?: IToolPolicy)` |
+| `ToolRuntimeAdapter` | `@nucleic-se/agentic/tools` | `(tools: ITool[], policy?: IToolPolicy)` |
 | `FsToolRuntime` | `@nucleic-se/agentic/tools` | `{ root: string }` |
 | `FetchToolRuntime` | `@nucleic-se/agentic/tools` | `{ timeoutMs?: number }` |
 | `ShellToolRuntime` | `@nucleic-se/agentic/tools` | `{ timeoutMs?: number }` |
@@ -314,12 +321,11 @@ interface IMemoryStore {
 type MemoryType = 'working' | 'episodic' | 'semantic' | 'procedural';
 
 interface MemoryQuery {
+  text?: string;
   types?: MemoryType[];
   tags?: string[];
-  keys?: string[];
-  limit?: number;
+  limit: number;
   tokenBudget?: number;
-  minConfidence?: number;
 }
 ```
 
@@ -482,19 +488,86 @@ interface IAgentContextAssembler {
 ```ts
 import { AgentContextAssembler } from '@nucleic-se/agentic/runtime'
 
-new AgentContextAssembler(config: AgentContextAssemblerConfig)
+new AgentContextAssembler(config: ConversationAssemblerConfig)
 ```
 
 ```ts
-interface AgentContextAssemblerConfig {
+interface ConversationAssemblerConfig {
   systemPrompt: string;
-  minRecentMessages?: number;  // Default: 2
+  tokenBudget: number;
+  minRecentGroups?: number;  // Default: 2
+  scorer?(msg: Message, index: number): number;
+  sticky?(msg: Message, index: number): boolean;
+  onCompress?(msg: Message): Promise<Message | null>;
+  onDrop?(msg: Message): void;
 }
 ```
 
-Budget-aware assembler. Reserves system prompt tokens, then selects the most recent messages that fit the remaining budget (tail-first). Keeps tool-result messages grouped with their preceding assistant message.
+Grouped, compress-before-drop assembler. It preserves assistant/tool-result atomicity, applies tool-aware compression before dropping context, protects sticky user messages, and keeps recent groups by default.
 
 See [Context assembly](./concepts/context-assembly.md) for the selection model and custom assembler guidance.
+
+### `AgentRunner`
+
+```ts
+import { AgentRunner } from '@nucleic-se/agentic/runtime'
+
+new AgentRunner({
+  engine,
+  inputKey: 'input',
+  messagesKey: 'messages',
+  outputKey: 'assistantMessage',
+})
+```
+
+Lightweight `IAgent` adapter over `IGraphEngine`.
+
+Known limitations:
+
+- `executions[]` is always empty
+- `tokenUsage` is always zero
+- `outcome` is always `'answered'`
+
+Use it as a convenience bridge for custom graphs, not as a full kernel/agent loop.
+
+---
+
+## Capability primitives
+
+### `ICapability<TState>` / `ICapabilityLifecycle<TState>`
+
+```ts
+interface ICapabilityLifecycle<TState extends GraphState = GraphState> {
+  beforeRun?(state: TState): Promise<void>;
+  afterTurn?(state: TState, turn: TurnRecord): Promise<void>;
+  afterRun?(state: TState): Promise<void>;
+}
+
+interface ICapability<TState extends GraphState = GraphState> {
+  id: string;
+  after?: readonly string[];
+  active?(state: Readonly<TState>): boolean;
+  prompt?: IPromptContributor;
+  runtime?: IToolRuntime;
+  lifecycle?: ICapabilityLifecycle<TState>;
+}
+```
+
+Wave 2 keeps this contract intentionally minimal. Registry/orchestration is deferred to Wave 3.
+
+### Built-in capabilities
+
+Available from `@nucleic-se/agentic/runtime`:
+
+- `PlanningCapability`
+- `BudgetHintCapability`
+- `EmptyResponseCapability`
+
+`PlanningCapability` seeds structured planning state before a run.
+
+`BudgetHintCapability` injects sticky wrap-up hints as the turn budget is consumed.
+
+`EmptyResponseCapability` injects sticky nudges after empty model turns and can set a done flag after repeated empties.
 
 ---
 

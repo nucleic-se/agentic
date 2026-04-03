@@ -1,6 +1,6 @@
 # @nucleic-se/agentic
 
-Lean, domain-agnostic TypeScript primitives for building LLM agents: state graphs, LLM providers, tool runtimes, tool policy, prompt composition, context assembly, and memory.
+Lean, domain-agnostic TypeScript primitives for building LLM agents: state graphs, LLM providers, tool runtimes, tool policy, prompt composition, context assembly, memory, and capability primitives.
 
 ```bash
 npm install @nucleic-se/agentic
@@ -52,6 +52,19 @@ console.log(state.summary);
 | [Pre-built patterns](docs/guides/patterns.md) | ReAct, Plan-Execute, RAG, Reflection, Supervisor |
 | [Building a custom agent](docs/guides/custom-agent.md) | End-to-end walkthrough |
 | [API reference](docs/api-reference.md) | All exported types and classes |
+
+---
+
+## Current surface
+
+Recent additions:
+
+- `IPackRegistry` / `PackRegistry` replace the old capability-registry naming for pack wiring
+- `ToolRuntimeAdapter` bridges `ITool[]` to `IToolRuntime`
+- `AgentRunner` provides a lightweight `IAgent` adapter over `IGraphEngine`
+- `AgentContextAssembler` now uses grouped, compress-before-drop conversation pruning
+- `ICapability<TState>` / `ICapabilityLifecycle<TState>` define the minimal Wave 2 capability contract
+- `PlanningCapability`, `BudgetHintCapability`, and `EmptyResponseCapability` ship as concrete default capabilities
 
 ---
 

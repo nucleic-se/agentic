@@ -14,15 +14,18 @@ interface ILLMProvider {
   /** Agentic turn — may return text, tool calls, or both. Caller runs the loop. */
   turn(request: TurnRequest): Promise<TurnResponse>;
 
+  /** Optional streaming variant of turn(). */
+  streamTurn?(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse>;
+
   /** Embed strings into vectors. */
-  embed?(texts: string[]): Promise<number[][]>;
+  embed(texts: string[]): Promise<number[][]>;
 }
 ```
 
 - **`structured()`** — use for planning, classification, and evaluation where you need reliable JSON output.
 - **`turn()`** — use inside a tool loop. The caller inspects `stopReason` and re-calls with tool results until `'end_turn'`.
 
-`LlmGraphNode` handles the `turn()` loop automatically when you attach a `toolRuntime`.
+`LlmGraphNode` does not run a tool loop. For agentic turn handling, use `AgentLlmNode` or build the loop in your own driver.
 
 ---
 
@@ -65,21 +68,21 @@ import { OpenAICompatibleProvider } from '@nucleic-se/agentic/providers';
 
 // OpenAI
 const llm = new OpenAICompatibleProvider({
-  baseURL: 'https://api.openai.com/v1',
+  baseUrl: 'https://api.openai.com/v1',
   apiKey: process.env.OPENAI_API_KEY!,
   model: 'gpt-4o',
 });
 
 // Azure OpenAI
 const llm = new OpenAICompatibleProvider({
-  baseURL: 'https://my-resource.openai.azure.com/openai/deployments/my-deployment',
+  baseUrl: 'https://my-resource.openai.azure.com/openai/deployments/my-deployment',
   apiKey: process.env.AZURE_OPENAI_KEY!,
   model: 'gpt-4o',
 });
 
 // Local vLLM / LM Studio
 const llm = new OpenAICompatibleProvider({
-  baseURL: 'http://localhost:8000/v1',
+  baseUrl: 'http://localhost:8000/v1',
   apiKey: 'not-used',
   model: 'meta-llama/Llama-3.1-8B-Instruct',
 });
@@ -118,14 +121,17 @@ import type { ILLMProvider, StructuredRequest, StructuredResponse, TurnRequest, 
 class MyProvider implements ILLMProvider {
   async structured<T>(req: StructuredRequest): Promise<StructuredResponse<T>> {
     const raw = await callMyApi(req.messages, req.schema);
-    return { content: raw as T, usage: { inputTokens: 0, outputTokens: 0 } };
+    return { value: raw as T, usage: { inputTokens: 0, outputTokens: 0 } };
   }
 
   async turn(req: TurnRequest): Promise<TurnResponse> {
     const raw = await callMyApi(req.messages, req.tools);
     return {
-      content: raw.text,
-      toolCalls: raw.tool_calls ?? [],
+      message: {
+        role: 'assistant',
+        content: raw.text,
+        toolCalls: raw.tool_calls ?? [],
+      },
       stopReason: raw.stop_reason === 'tool' ? 'tool_use' : 'end_turn',
       usage: { inputTokens: raw.usage.input, outputTokens: raw.usage.output },
     };
@@ -141,9 +147,9 @@ All providers use the same message types:
 
 ```ts
 type Message =
-  | { role: 'user';        content: string }
+  | { role: 'user';        content: string; sticky?: boolean }
   | { role: 'assistant';   content: string; toolCalls?: ToolCall[] }
-  | { role: 'tool_result'; toolCallId: string; content: string; isError: boolean };
+  | { role: 'tool_result'; toolCallId: string; toolName?: string; content: string; isError?: boolean };
 ```
 
 ---

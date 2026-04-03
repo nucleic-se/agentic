@@ -33,8 +33,8 @@ export interface IPackManifest {
     /** Optional tick step registrations */
     tickSteps?: string[];
 
-    /** Optional prompt contributor registrations */
-    promptContributors?: string[];
+    /** Optional capability registrations */
+    capabilities?: string[];
 
     /** Optional sub-query registrations */
     subQueries?: string[];

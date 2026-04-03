@@ -7,11 +7,11 @@ This guide walks through building a complete coding agent from scratch using `@n
 ## What we're building
 
 ```
-write code → run tests → check result
-                ↑              |
-                |____ fail ____| (up to 3 times)
-                                ↓
-                             success / END
+write code → save file → run tests → check result
+                              ↑              |
+                              |____ fail ____| (up to 3 times)
+                                              ↓
+                                           success / END
 ```
 
 ---
@@ -63,12 +63,24 @@ const writeNode = new LlmGraphNode<CodingState>({
   provider: llm,
   prompt: (state) => ({
     instructions: state.attempts === 0
-      ? 'Write TypeScript code that solves the given task. Use the fs_write tool to save your implementation to /workspace/solution.ts.'
-      : `The previous attempt failed. Fix the code.\n\nTest output:\n${state.testOutput}\n\nUse fs_write to save the updated file.`,
+      ? 'Write TypeScript code that solves the given task. Return only the implementation.'
+      : `The previous attempt failed. Fix the code.\n\nTest output:\n${state.testOutput}\n\nReturn only the updated implementation.`,
     text: state.task,
   }),
   outputKey: 'code',    // LLM's response text is stored here
-  toolRuntime: tools,   // The LLM can call fs_write and shell_exec
+});
+```
+
+### Save node (callback)
+
+```ts
+import { CallbackGraphNode } from '@nucleic-se/agentic/runtime';
+
+const saveNode = new CallbackGraphNode<CodingState>('save', async (state) => {
+  await tools.call('fs_write', {
+    path: '/workspace/solution.ts',
+    content: state.code,
+  });
 });
 ```
 
@@ -97,9 +109,11 @@ import { StateGraphBuilder, END } from '@nucleic-se/agentic/runtime';
 
 const engine = new StateGraphBuilder<CodingState>()
   .addNode(writeNode)
+  .addNode(saveNode)
   .addNode(testNode)
   .setEntry('write')
-  .addEdge('write', 'test')
+  .addEdge('write', 'save')
+  .addEdge('save', 'test')
   .addConditionalEdge('test', (state) => {
     if (state.passed)        return END;          // Done
     if (state.attempts >= 3) return END;          // Give up
@@ -113,7 +127,7 @@ const engine = new StateGraphBuilder<CodingState>()
 ## 5. Run it
 
 ```ts
-const { state, deadLetters } = await engine.run({
+const { state } = await engine.run({
   task: 'Implement a function called `add(a, b)` that returns the sum of two numbers.',
   code: '',
   testOutput: '',
@@ -127,10 +141,6 @@ if (state.passed) {
 } else {
   console.log('Failed after', state.attempts, 'attempts');
   console.log('Last output:', state.testOutput);
-}
-
-if (deadLetters.length) {
-  console.error('Node errors:', deadLetters.map(d => `${d.nodeId}: ${d.error}`));
 }
 ```
 
@@ -173,7 +183,7 @@ Prevent runaway costs with `GraphRunLimits`:
   limits: {
     maxTotalTokens: 50_000,    // Stop if LLM usage exceeds this
     maxToolCalls: 30,           // Stop if tool calls exceed this
-    maxDurationMs: 120_000,     // Stop after 2 minutes
+    maxTotalMs: 120_000,        // Stop after 2 minutes
   },
 })
 ```
@@ -213,14 +223,19 @@ async function runCodingAgent(task: string) {
     .addNode(new LlmGraphNode<CodingState>({
       id: 'write',
       provider: llm,
-      toolRuntime: tools,
       prompt: (state) => ({
         instructions: state.attempts === 0
-          ? 'Write TypeScript code to solve the task. Save to /workspace/solution.ts using fs_write.'
-          : `Fix the failing tests.\n\nOutput:\n${state.testOutput}`,
+          ? 'Write TypeScript code to solve the task. Return only the implementation.'
+          : `Fix the failing tests.\n\nOutput:\n${state.testOutput}\n\nReturn only the updated implementation.`,
         text: state.task,
       }),
       outputKey: 'code',
+    }))
+    .addNode(new CallbackGraphNode<CodingState>('save', async (state) => {
+      await tools.call('fs_write', {
+        path: '/workspace/solution.ts',
+        content: state.code,
+      });
     }))
     .addNode(new CallbackGraphNode<CodingState>('test', async (state) => {
       const result = await tools.call('shell_exec', {
@@ -232,7 +247,8 @@ async function runCodingAgent(task: string) {
       state.passed = result.ok && result.content.includes('passed');
     }))
     .setEntry('write')
-    .addEdge('write', 'test')
+    .addEdge('write', 'save')
+    .addEdge('save', 'test')
     .addConditionalEdge('test', (state) => {
       if (state.passed || state.attempts >= 3) return END;
       return 'write';

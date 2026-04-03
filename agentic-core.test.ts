@@ -26,6 +26,9 @@ import {
     AgentRunner,
     ToolRuntimeAdapter,
     CompositeToolRuntime,
+    PlanningCapability,
+    BudgetHintCapability,
+    EmptyResponseCapability,
     estimateTokens,
 } from './index.js';
 
@@ -44,6 +47,8 @@ import type {
     IToolPolicy,
     PolicyContext,
     PolicyDecision,
+    TurnRecord,
+    JsonSchema,
 } from './index.js';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -1184,5 +1189,272 @@ describe('AgentContextAssembler', () => {
         ];
         const result = await assembler.assemble({ messages: msgs });
         expect(result.messages.some(m => m.role === 'user' && m.content === 'keep me')).toBe(true);
+    });
+});
+
+// ── PlanningCapability ─────────────────────────────────────────
+
+describe('PlanningCapability', () => {
+    function makePlanningProvider(plan: unknown): ILLMProvider {
+        return {
+            ...fakeLLM,
+            structured: async () => ({ value: plan, usage: { inputTokens: 0, outputTokens: 0 } }),
+        };
+    }
+
+    type S = GraphState & { memory: string; plan: unknown };
+
+    function baseConfig(provider: ILLMProvider) {
+        return {
+            provider,
+            system:   'You are a planning agent.',
+            prompt:   (state: Readonly<S>) => state.memory,
+            schema:   {} as JsonSchema,
+            stateKey: 'plan' as const,
+        };
+    }
+
+    it('stores plan in state[stateKey] after beforeRun', async () => {
+        const expectedPlan = { goal: 'fix bug', approach: 'read logs' };
+        const cap = new PlanningCapability<S>(baseConfig(makePlanningProvider(expectedPlan)));
+        const state: S = { memory: 'some context', plan: null };
+        await cap.lifecycle!.beforeRun!(state);
+        expect(state.plan).toEqual(expectedPlan);
+    });
+
+    it('has no prompt contributor field', () => {
+        const cap = new PlanningCapability<S>(baseConfig(fakeLLM));
+        expect((cap as Record<string, unknown>)['prompt']).toBeUndefined();
+    });
+
+    it('falls back to fallback value when provider throws', async () => {
+        const failProvider: ILLMProvider = {
+            ...fakeLLM,
+            structured: async () => { throw new Error('provider error'); },
+        };
+        const fallback = { goal: 'default', approach: 'none' };
+        const cap = new PlanningCapability<S>({ ...baseConfig(failProvider), fallback });
+        const state: S = { memory: 'context', plan: null };
+        await expect(cap.lifecycle!.beforeRun!(state)).resolves.toBeUndefined();
+        expect(state.plan).toEqual(fallback);
+    });
+
+    it('leaves stateKey unchanged when provider throws and no fallback', async () => {
+        const failProvider: ILLMProvider = {
+            ...fakeLLM,
+            structured: async () => { throw new Error('provider error'); },
+        };
+        const cap = new PlanningCapability<S>(baseConfig(failProvider));
+        const state: S = { memory: 'context', plan: 'original' };
+        await cap.lifecycle!.beforeRun!(state);
+        expect(state.plan).toBe('original');
+    });
+
+    it('clears plan (sets undefined) after afterRun', async () => {
+        const expectedPlan = { goal: 'x', approach: 'y' };
+        const cap = new PlanningCapability<S>(baseConfig(makePlanningProvider(expectedPlan)));
+        const state: S = { memory: 'ctx', plan: null };
+        await cap.lifecycle!.beforeRun!(state);
+        expect(state.plan).toEqual(expectedPlan);
+        await cap.lifecycle!.afterRun!(state);
+        expect(state.plan).toBeUndefined();
+    });
+
+    it('passes state projection result as user message content', async () => {
+        let capturedMessages: unknown[] | undefined;
+        const provider: ILLMProvider = {
+            ...fakeLLM,
+            structured: async (req) => {
+                capturedMessages = req.messages;
+                return { value: {}, usage: { inputTokens: 0, outputTokens: 0 } };
+            },
+        };
+        const cap = new PlanningCapability<S>({
+            ...baseConfig(provider),
+            prompt: (state) => `context: ${state.memory}`,
+        });
+        const state: S = { memory: 'logs show error', plan: null };
+        await cap.lifecycle!.beforeRun!(state);
+        expect(capturedMessages).toHaveLength(1);
+        expect((capturedMessages![0] as { content: string }).content).toBe('context: logs show error');
+    });
+});
+
+// ── BudgetHintCapability ───────────────────────────────────────
+
+describe('BudgetHintCapability', () => {
+    type S = GraphState & { turnCount: number; messages: unknown[] };
+
+    function makeTurn(): TurnRecord {
+        return {
+            turnId: 't1', userInput: 'hi',
+            modelRequest: { messages: [] },
+            modelResponse: { role: 'assistant', content: 'ok', toolCalls: [] },
+            plan: [], executions: [], outcome: 'answered',
+            durationMs: 1, tokenUsage: { inputTokens: 0, outputTokens: 0 },
+        };
+    }
+
+    it('injects no hint below 75% threshold', async () => {
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 10, messagesKey: 'messages' });
+        const state: S = { turnCount: 5, messages: [] }; // 50%
+        await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.messages).toHaveLength(0);
+    });
+
+    it('injects hint at 75% threshold', async () => {
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 8, messagesKey: 'messages' });
+        const state: S = { turnCount: 6, messages: [] }; // 75%
+        await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.messages).toHaveLength(1);
+        const msg = state.messages[0] as { sticky?: boolean; content: string };
+        expect(msg.sticky).toBe(true);
+        expect(msg.content).toContain('wrap-up');
+    });
+
+    it('injects hint at 90% threshold', async () => {
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 10, messagesKey: 'messages' });
+        const state: S = { turnCount: 9, messages: [] }; // 90%
+        await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.messages).toHaveLength(1);
+        expect((state.messages[0] as { content: string }).content).toContain('wrapping up');
+    });
+
+    it('injects final-turn hint at 100%', async () => {
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 5, messagesKey: 'messages' });
+        const state: S = { turnCount: 5, messages: [] }; // 100%
+        await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.messages).toHaveLength(1);
+        expect((state.messages[0] as { content: string }).content).toContain('final turn');
+    });
+
+    it('each threshold fires at most once per run', async () => {
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 10, messagesKey: 'messages' });
+        // 75% threshold
+        const state: S = { turnCount: 8, messages: [] }; // 80%
+        await cap.lifecycle!.afterTurn!(state, makeTurn());
+        await cap.lifecycle!.afterTurn!(state, makeTurn()); // still 80%
+        // Only one hint should have been injected (the 90% threshold won't fire at 80%)
+        expect(state.messages).toHaveLength(1);
+    });
+
+    it('concurrent runs use separate fired sets via WeakMap', async () => {
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 4, messagesKey: 'messages' });
+        const stateA: S = { turnCount: 3, messages: [] }; // 75%
+        const stateB: S = { turnCount: 3, messages: [] }; // 75%
+        // Both independent state objects should each receive their own hint
+        await cap.lifecycle!.afterTurn!(stateA, makeTurn());
+        await cap.lifecycle!.afterTurn!(stateB, makeTurn());
+        expect(stateA.messages).toHaveLength(1);
+        expect(stateB.messages).toHaveLength(1);
+        // Firing again on stateA should not re-inject (threshold already fired for this state)
+        await cap.lifecycle!.afterTurn!(stateA, makeTurn());
+        expect(stateA.messages).toHaveLength(1);
+    });
+});
+
+// ── EmptyResponseCapability ────────────────────────────────────
+
+describe('EmptyResponseCapability', () => {
+    type S = GraphState & { messages: unknown[]; emptyCount: number; done?: boolean };
+
+    function makeTurn(content: string, toolCalls: unknown[] = []): TurnRecord {
+        return {
+            turnId: 't1', userInput: null,
+            modelRequest: { messages: [] },
+            modelResponse: { role: 'assistant', content, toolCalls: toolCalls as never },
+            plan: [], executions: [], outcome: 'answered',
+            durationMs: 1, tokenUsage: { inputTokens: 0, outputTokens: 0 },
+        };
+    }
+
+    it('does nothing on non-empty turn', async () => {
+        const cap = new EmptyResponseCapability<S>({ messagesKey: 'messages', emptyCountKey: 'emptyCount' });
+        const state: S = { messages: [], emptyCount: 0 };
+        await cap.lifecycle!.afterTurn!(state, makeTurn('hello'));
+        expect(state.messages).toHaveLength(0);
+        expect(state.emptyCount).toBe(0);
+    });
+
+    it('injects nudge on empty turn', async () => {
+        const cap = new EmptyResponseCapability<S>({ messagesKey: 'messages', emptyCountKey: 'emptyCount', maxRetries: 2 });
+        const state: S = { messages: [], emptyCount: 0 };
+        await cap.lifecycle!.afterTurn!(state, makeTurn(''));
+        expect(state.messages).toHaveLength(1);
+        const msg = state.messages[0] as { sticky?: boolean; content: string };
+        expect(msg.sticky).toBe(true);
+        expect(state.emptyCount).toBe(1);
+    });
+
+    it('uses mid-run nudge when recent messages contain tool_result', async () => {
+        const cap = new EmptyResponseCapability<S>({
+            messagesKey:   'messages',
+            emptyCountKey: 'emptyCount',
+            nudgeMidRun:   'MID_RUN_NUDGE',
+            nudgeFinal:    'FINAL_NUDGE',
+        });
+        const state: S = {
+            messages:   [{ role: 'tool_result', toolCallId: 'x', content: 'result' }],
+            emptyCount: 0,
+        };
+        await cap.lifecycle!.afterTurn!(state, makeTurn(''));
+        const last = state.messages[state.messages.length - 1] as { content: string };
+        expect(last.content).toBe('MID_RUN_NUDGE');
+    });
+
+    it('uses final nudge when no recent tool_results', async () => {
+        const cap = new EmptyResponseCapability<S>({
+            messagesKey:   'messages',
+            emptyCountKey: 'emptyCount',
+            nudgeMidRun:   'MID_RUN_NUDGE',
+            nudgeFinal:    'FINAL_NUDGE',
+        });
+        const state: S = { messages: [{ role: 'user', content: 'go' }], emptyCount: 0 };
+        await cap.lifecycle!.afterTurn!(state, makeTurn(''));
+        const last = state.messages[state.messages.length - 1] as { content: string };
+        expect(last.content).toBe('FINAL_NUDGE');
+    });
+
+    it('resets counter on non-empty turn', async () => {
+        const cap = new EmptyResponseCapability<S>({ messagesKey: 'messages', emptyCountKey: 'emptyCount', maxRetries: 2 });
+        const state: S = { messages: [], emptyCount: 0 };
+        await cap.lifecycle!.afterTurn!(state, makeTurn('')); // empty #1 → count 1
+        await cap.lifecycle!.afterTurn!(state, makeTurn('ok')); // non-empty → count 0
+        await cap.lifecycle!.afterTurn!(state, makeTurn('')); // empty #1 again → count 1
+        // Should have 2 nudge messages (not 3)
+        expect(state.messages.filter((m: unknown) => (m as { role: string }).role === 'user')).toHaveLength(2);
+        expect(state.emptyCount).toBe(1);
+    });
+
+    it('sets doneKey after maxRetries exceeded', async () => {
+        const cap = new EmptyResponseCapability<S>({
+            messagesKey:   'messages',
+            emptyCountKey: 'emptyCount',
+            doneKey:       'done',
+            maxRetries:    1,
+        });
+        const state: S = { messages: [], emptyCount: 0, done: false };
+        await cap.lifecycle!.afterTurn!(state, makeTurn('')); // empty #1 — nudge
+        await cap.lifecycle!.afterTurn!(state, makeTurn('')); // empty #2 — exceeded
+        expect(state.done).toBe(true);
+    });
+
+    it('counter resets when a fresh state object is used (new run)', async () => {
+        const cap = new EmptyResponseCapability<S>({
+            messagesKey:   'messages',
+            emptyCountKey: 'emptyCount',
+            doneKey:       'done',
+            maxRetries:    1,
+        });
+        // First run: exhaust retries
+        const stateRun1: S = { messages: [], emptyCount: 0, done: false };
+        await cap.lifecycle!.afterTurn!(stateRun1, makeTurn('')); // empty #1 — nudge
+        await cap.lifecycle!.afterTurn!(stateRun1, makeTurn('')); // empty #2 — exceeded
+        expect(stateRun1.done).toBe(true);
+        // Second run: fresh state → counter starts from 0, first empty turn nudges not terminates
+        const stateRun2: S = { messages: [], emptyCount: 0, done: false };
+        await cap.lifecycle!.afterTurn!(stateRun2, makeTurn('')); // empty #1 — nudge
+        expect(stateRun2.done).toBe(false);
+        expect(stateRun2.messages).toHaveLength(1);
     });
 });

@@ -108,12 +108,13 @@ await provider.turn({
 import { AgentContextAssembler } from '@nucleic-se/agentic/runtime'
 ```
 
-**`AgentContextAssembler`** — budget-aware assembler that selects the most recent messages that fit within the token budget. Tail-first: always includes the latest exchange, then walks backwards adding older turns until the budget is exhausted. Tool-result messages are kept together with their preceding assistant message to avoid orphaned results.
+**`AgentContextAssembler`** — grouped, two-pass conversation assembler. It treats an assistant message plus its immediately following matching `tool_result` messages as an atomic group, tries compression before dropping, preserves sticky user messages, and protects the most recent groups from trimming.
 
 ```ts
 const assembler = new AgentContextAssembler({
     systemPrompt: 'You are a coding agent.',
-    minRecentMessages: 4,  // always include at least the last 4 messages
+    tokenBudget: 100_000,
+    minRecentGroups: 2,  // always protect the most recent groups
 })
 
 const context = await assembler.assemble({
@@ -128,6 +129,14 @@ await provider.turn({
     tools:    toolDefs,
 })
 ```
+
+Default behavior:
+
+1. Build atomic groups from the conversation
+2. Score older groups lower than recent groups
+3. Try tool-aware compression on low-priority groups first
+4. Drop whole groups only if still over budget
+5. Never drop messages with `sticky === true`
 
 ---
 

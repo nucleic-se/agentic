@@ -137,16 +137,12 @@ const tools = new CompositeToolRuntime([
 ]);
 ```
 
-Attach to any `LlmGraphNode`:
+Use the combined runtime anywhere you need one dispatch surface:
 
 ```ts
-new LlmGraphNode<MyState>({
-  id: 'agent',
-  provider: llm,
-  prompt: (s) => ({ instructions: '...', text: s.task }),
-  outputKey: 'result',
-  toolRuntime: tools,
-})
+const result = await tools.call('web_fetch', {
+  url: 'https://example.com',
+});
 ```
 
 ---

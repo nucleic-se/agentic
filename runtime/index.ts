@@ -27,3 +27,5 @@ export { StateGraphEngine } from './graph/index.js';
 export { StateGraphBuilder } from './graph/index.js';
 export { CallbackGraphNode, LlmGraphNode, SubGraphNode, AgentLlmNode } from './graph/index.js';
 export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentLlmEvent, OnErrorAction, AgentLlmOnError } from './graph/index.js';
+export { PlanningCapability, BudgetHintCapability, EmptyResponseCapability } from './capabilities/index.js';
+export type { PlanningCapabilityConfig, BudgetHintCapabilityConfig, BudgetHintThreshold, EmptyResponseCapabilityConfig } from './capabilities/index.js';
