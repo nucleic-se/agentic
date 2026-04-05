@@ -48,8 +48,9 @@ console.log(state.summary);
 | [Tool policy](docs/concepts/tool-policy.md) | Allow/deny/rewrite/confirm before execution |
 | [Memory](docs/concepts/memory.md) | Working, episodic, semantic, procedural memory |
 | [Prompt engine](docs/concepts/prompts.md) | Priority-weighted composition under a token budget |
+| [Capabilities](docs/concepts/capabilities.md) | Prompt, tools, and lifecycle bundled as a composable unit |
 | [Context assembly](docs/concepts/context-assembly.md) | Selecting what the model sees each turn |
-| [Pre-built patterns](docs/guides/patterns.md) | ReAct, Plan-Execute, RAG, Reflection, Supervisor |
+| [Pre-built patterns](docs/guides/patterns.md) | ReAct, Plan-Execute, RAG, Reflection, Supervisor, Router, Map-Reduce |
 | [Building a custom agent](docs/guides/custom-agent.md) | End-to-end walkthrough |
 | [API reference](docs/api-reference.md) | All exported types and classes |
 
@@ -65,6 +66,7 @@ Recent additions:
 - `AgentContextAssembler` now uses grouped, compress-before-drop conversation pruning
 - `ICapability<TState>` / `ICapabilityLifecycle<TState>` define the minimal Wave 2 capability contract
 - `PlanningCapability`, `BudgetHintCapability`, and `EmptyResponseCapability` ship as concrete default capabilities
+- `createRouterAgent` and `createMapReduceAgent` add lightweight routing and fan-out/fan-in graph patterns
 
 ---
 

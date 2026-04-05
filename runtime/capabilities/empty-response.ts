@@ -1,19 +1,23 @@
 /**
- * EmptyResponseCapability — handles consecutive empty LLM turns gracefully.
+ * EmptyResponseCapability — handles consecutive silent LLM turns gracefully.
  *
- * After each turn, checks if the assistant returned nothing (no text content,
- * no tool calls). On empty turns, increments state[emptyCountKey] and injects
- * a context-aware nudge as a sticky user message. After maxRetries consecutive
- * empty turns, sets state[doneKey] = true (if configured) to signal the loop to stop.
+ * Two distinct silence patterns are handled:
  *
- * The empty count lives in state[emptyCountKey], not on the capability instance.
- * This makes the capability safe to reuse across concurrent runs without interference.
+ * 1. Completely empty (no text, no tool calls) — the model said nothing at all.
+ *    Nudges with nudgeMidRun / nudgeFinal based on recent history, then sets
+ *    state[doneKey] after maxRetries consecutive occurrences.
  *
- * Nudge selection is context-aware:
- *   - If the last few messages include tool_results → model is mid-task → use nudgeMidRun.
- *   - Otherwise → model appears to be wrapping up → use nudgeFinal.
+ * 2. Text-silent with tool calls — the model made tool calls but wrote no
+ *    accompanying text. Common with models that silently chain tools without
+ *    narrating reasoning steps, which breaks summarisation and planning nodes
+ *    that read from text content.
+ *    Enabled by setting requireTextWithToolUse: true (default: false for
+ *    backward compatibility). Uses a separate counter (emptyCountKey + '_tool')
+ *    so it does not interfere with the completely-empty counter.
+ *    Nudges with nudgeToolOnly after each silent-tool turn.
  *
- * The consecutive empty counter resets to zero on any non-empty turn.
+ * Both counters live in state, not on the capability instance, so concurrent
+ * runs are independent and counts survive checkpoints.
  *
  * Ported from evolve-lab's empty response handling logic.
  */
@@ -29,8 +33,10 @@ export interface EmptyResponseCapabilityConfig<TState extends GraphState = Graph
     /** State key holding the message array (Message[]) to append nudges to. */
     messagesKey: keyof TState & string
     /**
-     * State key to track consecutive empty turn count.
+     * State key to track consecutive completely-empty turn count.
      * Lives in state so concurrent runs are independent and count survives checkpoints.
+     * Also used as the base key for the text-silent-with-tools counter
+     * (stored as state[emptyCountKey + '_tool']).
      */
     emptyCountKey: keyof TState & string
     /**
@@ -39,7 +45,7 @@ export interface EmptyResponseCapabilityConfig<TState extends GraphState = Graph
      */
     doneKey?: keyof TState & string
     /**
-     * Max consecutive empty turns before giving up.
+     * Max consecutive completely-empty turns before giving up.
      * Default: 2.
      */
     maxRetries?: number
@@ -56,6 +62,18 @@ export interface EmptyResponseCapabilityConfig<TState extends GraphState = Graph
      * Default: 6.
      */
     recentWindow?: number
+    /**
+     * When true, also nudge turns where the model made tool calls but produced no text.
+     * This is off by default for backward compatibility. Enable for models that silently
+     * chain tool calls without narrating their reasoning.
+     * Default: false.
+     */
+    requireTextWithToolUse?: boolean
+    /**
+     * Nudge injected when the model called tools without writing any text.
+     * Only used when requireTextWithToolUse is true.
+     */
+    nudgeToolOnly?: string
 }
 
 const DEFAULT_NUDGE_MID_RUN =
@@ -63,6 +81,9 @@ const DEFAULT_NUDGE_MID_RUN =
 
 const DEFAULT_NUDGE_FINAL =
     '[Your last response was empty. Please write your final response now.]'
+
+const DEFAULT_NUDGE_TOOL_ONLY =
+    '[You called a tool without writing anything. Before your next tool call, write one short sentence explaining what you are doing and why.]'
 
 // ── Implementation ────────────────────────────────────────────────────────────
 
@@ -75,44 +96,69 @@ export class EmptyResponseCapability<TState extends GraphState = GraphState>
     constructor(config: EmptyResponseCapabilityConfig<TState>, id = 'empty-response') {
         this.id = id
 
-        const maxRetries   = config.maxRetries   ?? 2
-        const recentWindow = config.recentWindow ?? 6
-        const nudgeMidRun  = config.nudgeMidRun  ?? DEFAULT_NUDGE_MID_RUN
-        const nudgeFinal   = config.nudgeFinal   ?? DEFAULT_NUDGE_FINAL
+        const maxRetries          = config.maxRetries          ?? 2
+        const recentWindow        = config.recentWindow        ?? 6
+        const nudgeMidRun         = config.nudgeMidRun         ?? DEFAULT_NUDGE_MID_RUN
+        const nudgeFinal          = config.nudgeFinal          ?? DEFAULT_NUDGE_FINAL
+        const requireTextWithTools = config.requireTextWithToolUse ?? false
+        const nudgeToolOnly       = config.nudgeToolOnly       ?? DEFAULT_NUDGE_TOOL_ONLY
+        const toolOnlyCountKey    = `${config.emptyCountKey}_tool`
 
         this.lifecycle = {
             afterTurn: async (state: TState, turn: TurnRecord): Promise<void> => {
                 const s = state as Record<string, unknown>
                 const { content, toolCalls } = turn.modelResponse
-                const isEmpty = !content?.trim() && (!toolCalls || toolCalls.length === 0)
+                const hasText  = !!content?.trim()
+                const hasTools = !!(toolCalls && toolCalls.length > 0)
 
-                if (!isEmpty) {
-                    s[config.emptyCountKey] = 0
-                    return
-                }
+                // ── Case 1: completely empty (no text, no tool calls) ─────────
+                const completelyEmpty = !hasText && !hasTools
+                if (completelyEmpty) {
+                    s[toolOnlyCountKey] = 0 // reset tool-only counter
 
-                const count = Number(s[config.emptyCountKey] ?? 0) + 1
-                s[config.emptyCountKey] = count
+                    const count = Number(s[config.emptyCountKey] ?? 0) + 1
+                    s[config.emptyCountKey] = count
 
-                if (count > maxRetries) {
-                    if (config.doneKey) {
-                        s[config.doneKey] = true
+                    if (count > maxRetries) {
+                        if (config.doneKey) {
+                            s[config.doneKey] = true
+                        }
+                        return
+                    }
+
+                    const messages = s[config.messagesKey]
+                    const recent   = Array.isArray(messages) ? messages.slice(-recentWindow) : []
+                    const midRun   = recent.some(
+                        (m: unknown) => (m as Record<string, unknown>)['role'] === 'tool_result',
+                    )
+                    const nudgeText = midRun ? nudgeMidRun : nudgeFinal
+                    const nudge: UserMessage = { role: 'user', content: nudgeText, sticky: true }
+                    if (Array.isArray(messages)) {
+                        messages.push(nudge)
                     }
                     return
                 }
 
-                // Select nudge based on recent history
-                const messages  = s[config.messagesKey]
-                const recent    = Array.isArray(messages) ? messages.slice(-recentWindow) : []
-                const midRun    = recent.some(
-                    (m: unknown) => (m as Record<string, unknown>)['role'] === 'tool_result',
-                )
-                const nudgeText = midRun ? nudgeMidRun : nudgeFinal
+                // ── Case 2: tool calls with no text (when opted in) ───────────
+                if (requireTextWithTools && hasTools && !hasText) {
+                    s[config.emptyCountKey] = 0 // reset completely-empty counter
 
-                const nudge: UserMessage = { role: 'user', content: nudgeText, sticky: true }
-                if (Array.isArray(messages)) {
-                    messages.push(nudge)
+                    const count = Number(s[toolOnlyCountKey] ?? 0) + 1
+                    s[toolOnlyCountKey] = count
+
+                    // Don't gate on maxRetries — nudge every silent-tool turn
+                    // since each one is an independent planning failure.
+                    const messages = s[config.messagesKey]
+                    const nudge: UserMessage = { role: 'user', content: nudgeToolOnly, sticky: true }
+                    if (Array.isArray(messages)) {
+                        messages.push(nudge)
+                    }
+                    return
                 }
+
+                // ── Non-empty turn: reset both counters ───────────────────────
+                s[config.emptyCountKey] = 0
+                s[toolOnlyCountKey] = 0
             },
         }
     }

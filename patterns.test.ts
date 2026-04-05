@@ -10,6 +10,8 @@ import {
     createRAGAgent,
     createChainOfThoughtAgent,
     createHumanInLoopAgent,
+    createRouterAgent,
+    createMapReduceAgent,
 } from './patterns/index.js';
 import type { ILLMProvider, StructuredRequest } from './contracts/index.js';
 
@@ -279,6 +281,65 @@ describe('Agentic Patterns', () => {
             expect(feedbackRequested).toBe(true);
             expect(result.state.approved).toBe(true);
             expect(result.state.result).toBeDefined();
+        });
+    });
+
+    describe('Router Pattern', () => {
+        it('should route input to the chosen handler', async () => {
+            const llm = new MockLLMProvider();
+            llm.structured = async () => ({
+                value: {
+                    route: 'docs',
+                    rationale: 'The input asks for documentation help.',
+                },
+                usage: { inputTokens: 0, outputTokens: 0 },
+            });
+
+            const agent = createRouterAgent({
+                llm,
+                routes: {
+                    docs: {
+                        description: 'Answer documentation questions',
+                        handle: async (input) => `docs:${input}`,
+                    },
+                    code: {
+                        description: 'Answer code questions',
+                        handle: async (input) => `code:${input}`,
+                    },
+                },
+            });
+
+            const result = await agent.run({
+                input: 'How do I use the docs?',
+                route: '',
+                rationale: '',
+                output: '',
+            });
+
+            expect(result.state.route).toBe('docs');
+            expect(result.state.output).toBe('docs:How do I use the docs?');
+        });
+    });
+
+    describe('Map-Reduce Pattern', () => {
+        it('should map items and reduce them into one output', async () => {
+            const llm = new MockLLMProvider();
+
+            const agent = createMapReduceAgent({
+                llm,
+                mapper: async (item, ctx) => `${ctx.index + 1}:${item.toUpperCase()}`,
+                reducer: async (mapped) => mapped.join(' | '),
+            });
+
+            const result = await agent.run({
+                input: 'Summarize these items',
+                items: ['alpha', 'beta', 'gamma'],
+                mapped: [],
+                output: '',
+            });
+
+            expect(result.state.mapped).toEqual(['1:ALPHA', '2:BETA', '3:GAMMA']);
+            expect(result.state.output).toBe('1:ALPHA | 2:BETA | 3:GAMMA');
         });
     });
 });

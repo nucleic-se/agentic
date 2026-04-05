@@ -110,6 +110,8 @@ export {
     PackMigrationRunner,
     InMemoryMigrationState,
     ToolRegistry,
+    PassThroughToolPolicy,
+    TrustTierToolPolicy,
     InMemoryStore,
     ToolPromptRenderer,
     ContextAssembler,
@@ -146,6 +148,8 @@ export {
     createChainOfThoughtAgent,
     createSupervisorAgent,
     createHumanInLoopAgent,
+    createRouterAgent,
+    createMapReduceAgent,
 } from './patterns/index.js';
 
 export type {
@@ -170,6 +174,11 @@ export type {
     WorkerAgent,
     HumanInLoopState,
     HumanInLoopConfig,
+    RouterState,
+    RouterConfig,
+    RouterHandler,
+    MapReduceState,
+    MapReduceConfig,
 } from './patterns/index.js';
 
 // ── Tools ──────────────────────────────────────────────────────

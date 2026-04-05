@@ -1299,13 +1299,15 @@ describe('BudgetHintCapability', () => {
         const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 10, messagesKey: 'messages' });
         const state: S = { turnCount: 5, messages: [] }; // 50%
         await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.turnCount).toBe(6);
         expect(state.messages).toHaveLength(0);
     });
 
     it('injects hint at 75% threshold', async () => {
         const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 8, messagesKey: 'messages' });
-        const state: S = { turnCount: 6, messages: [] }; // 75%
+        const state: S = { turnCount: 5, messages: [] }; // becomes 75%
         await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.turnCount).toBe(6);
         expect(state.messages).toHaveLength(1);
         const msg = state.messages[0] as { sticky?: boolean; content: string };
         expect(msg.sticky).toBe(true);
@@ -1314,34 +1316,34 @@ describe('BudgetHintCapability', () => {
 
     it('injects hint at 90% threshold', async () => {
         const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 10, messagesKey: 'messages' });
-        const state: S = { turnCount: 9, messages: [] }; // 90%
+        const state: S = { turnCount: 8, messages: [] }; // becomes 90%
         await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.turnCount).toBe(9);
         expect(state.messages).toHaveLength(1);
         expect((state.messages[0] as { content: string }).content).toContain('wrapping up');
     });
 
     it('injects final-turn hint at 100%', async () => {
         const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 5, messagesKey: 'messages' });
-        const state: S = { turnCount: 5, messages: [] }; // 100%
+        const state: S = { turnCount: 4, messages: [] }; // becomes 100%
         await cap.lifecycle!.afterTurn!(state, makeTurn());
+        expect(state.turnCount).toBe(5);
         expect(state.messages).toHaveLength(1);
         expect((state.messages[0] as { content: string }).content).toContain('final turn');
     });
 
     it('each threshold fires at most once per run', async () => {
-        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 10, messagesKey: 'messages' });
-        // 75% threshold
-        const state: S = { turnCount: 8, messages: [] }; // 80%
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 100, messagesKey: 'messages' });
+        const state: S = { turnCount: 74, messages: [] }; // becomes 75%, then 76%
         await cap.lifecycle!.afterTurn!(state, makeTurn());
-        await cap.lifecycle!.afterTurn!(state, makeTurn()); // still 80%
-        // Only one hint should have been injected (the 90% threshold won't fire at 80%)
+        await cap.lifecycle!.afterTurn!(state, makeTurn());
         expect(state.messages).toHaveLength(1);
     });
 
     it('concurrent runs use separate fired sets via WeakMap', async () => {
-        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 4, messagesKey: 'messages' });
-        const stateA: S = { turnCount: 3, messages: [] }; // 75%
-        const stateB: S = { turnCount: 3, messages: [] }; // 75%
+        const cap = new BudgetHintCapability<S>({ turnCountKey: 'turnCount', maxTurns: 100, messagesKey: 'messages' });
+        const stateA: S = { turnCount: 74, messages: [] }; // becomes 75%
+        const stateB: S = { turnCount: 74, messages: [] }; // becomes 75%
         // Both independent state objects should each receive their own hint
         await cap.lifecycle!.afterTurn!(stateA, makeTurn());
         await cap.lifecycle!.afterTurn!(stateB, makeTurn());

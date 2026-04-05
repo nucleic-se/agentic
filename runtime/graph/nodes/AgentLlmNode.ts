@@ -29,6 +29,8 @@ import type {
     GraphContext,
     IGraphNode,
 } from '../../../contracts/graph/IGraphEngine.js';
+import type { ICapability } from '../../../contracts/ICapability.js';
+import type { TurnRecord } from '../../../contracts/agent.js';
 
 // ── Event types emitted by AgentLlmNode ──────────────────────
 
@@ -126,6 +128,18 @@ export interface AgentLlmNodeConfig<TState extends GraphState> {
      * Callers use this to pipe tokens to a transport in real time.
      */
     onDelta?: (text: string) => void;
+
+    /**
+     * Capabilities whose afterTurn lifecycle hook should be called after each
+     * successful LLM turn. This is the bridge from the Wave 2 capability
+     * contract to per-turn execution — capabilities see every turn, not just
+     * checkpoint boundaries.
+     *
+     * Hooks are called in array order with a minimal TurnRecord synthesised
+     * from the provider response. Errors thrown by hooks propagate to the
+     * node caller.
+     */
+    capabilities?: ICapability<TState>[];
 }
 
 // ── Node implementation ──────────────────────────────────────
@@ -161,17 +175,45 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
             : providerOrFn;
 
         // Read state
-        const systemPrompt = state[systemPromptKey] as string | undefined;
+        const baseSystemPrompt = state[systemPromptKey] as string | undefined;
         const messages = state[messagesKey] as Message[];
-        const tools = typeof toolsOrFn === 'function'
-            ? toolsOrFn(state)
-            : toolsOrFn;
+
+        // Collect prompt sections and tool definitions from active capability contributors.
+        // Capabilities can contribute to both the system prompt (via cap.prompt) and the
+        // tool list (via cap.runtime.tools()) when active.
+        const { capabilities } = this.config;
+        let composedSystem = baseSystemPrompt ?? '';
+        const extraTools: ToolDefinition[] = [];
+        if (capabilities && capabilities.length > 0) {
+            const sections: string[] = [];
+            for (const cap of capabilities) {
+                if (cap.active && !cap.active(state)) continue;
+                if (cap.runtime) {
+                    extraTools.push(...cap.runtime.tools());
+                }
+                if (!cap.prompt) continue;
+                const contributed = await cap.prompt.contribute({ state });
+                for (const section of contributed) {
+                    const text = section.text();
+                    if (text) sections.push(text);
+                }
+            }
+            if (sections.length > 0) {
+                composedSystem = (composedSystem ? composedSystem + '\n\n' : '') + sections.join('\n\n');
+            }
+        }
+
+        // Merge static/dynamic tools with any contributed by active capabilities.
+        const resolvedTools = typeof toolsOrFn === 'function' ? toolsOrFn(state) : (toolsOrFn ?? []);
+        const mergedTools = extraTools.length > 0
+            ? [...resolvedTools, ...extraTools]
+            : resolvedTools;
 
         // Build request
         const request: TurnRequest = {
             messages,
-            ...(systemPrompt && { system: systemPrompt }),
-            ...(tools && tools.length > 0 && { tools }),
+            ...(composedSystem && { system: composedSystem }),
+            ...(mergedTools && mergedTools.length > 0 && { tools: mergedTools }),
             ...(maxTokens != null && { maxTokens }),
         };
 
@@ -242,6 +284,27 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
         // Report token usage
         const totalTokens = response.usage.inputTokens + response.usage.outputTokens;
         context.reportTokens(totalTokens);
+
+        // Fire capability afterTurn hooks — restricted to active capabilities.
+        // Each capability sees every LLM turn (not checkpoint boundaries, which
+        // are a Scheduler-level concept fired separately by the host runtime).
+        if (capabilities && capabilities.length > 0) {
+            const turnRecord: TurnRecord = {
+                turnId: `${this.id}-${Date.now()}`,
+                userInput: null,
+                modelRequest: request,
+                modelResponse: response.message,
+                plan: [],
+                executions: [],
+                outcome: 'answered',
+                durationMs: 0,
+                tokenUsage: response.usage,
+            };
+            for (const cap of capabilities) {
+                if (cap.active && !cap.active(state)) continue;
+                await cap.lifecycle?.afterTurn?.(state, turnRecord);
+            }
+        }
 
         // Emit turn_end
         this.emitEvent(state, eventsKey, {

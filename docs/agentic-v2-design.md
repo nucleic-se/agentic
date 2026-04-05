@@ -259,6 +259,35 @@ The engine calls `store.save()` after completing the named nodes. `resume()` cal
 
 Not everything here has the same priority or the same cost to get wrong. The sequencing below reflects that.
 
+---
+
+## Validation from Echo usage
+
+The Echo integration is useful because it exercises the library in a real product shell rather than a toy example. Three framework friction points showed up repeatedly during actual implementation:
+
+1. **API discoverability is still weaker than it should be.**
+   The graph and capability primitives are useful, but a cold implementer still benefits too much from external reference notes and example-driven discovery. This validates the Wave 2 focus on making lifecycle contracts explicit and self-documenting.
+
+2. **`graphCtx.reportToolCall()` is a footgun.**
+   Having a required manual side effect before dispatch is easy to miss. Echo had to treat this as a checklist item rather than relying on the framework to make the correct behavior obvious. This is strong evidence for moving tool-call accounting closer to the runtime dispatch surface in Wave 1 / Wave 2 work.
+
+3. **Conditional edges are still too stringly typed.**
+   Returning raw node IDs from conditional edge callbacks is easy to get wrong and too hard to validate early. Echo's staged runtime refactor made this risk concrete rather than hypothetical. Construction-time validation or stronger typing would remove a real class of errors.
+
+These are not arguments against the library design. They are evidence that the current Wave order is right:
+
+- Wave 1 should connect tool/runtime surfaces and reduce manual dispatch footguns.
+- Wave 2 should make lifecycle/capability contracts explicit enough to be discoverable from types.
+- Wave 3 should compose those proven pieces rather than papering over ambiguity with a larger orchestration layer.
+
+One important current-state note from Echo integration: much of the Wave 1 surface and the core Wave 2 surface are already present in the library and already being used in Echo. The remaining design pressure is therefore concentrated more heavily in Wave 3 than this document's sequencing language might imply at first read. In practice, the biggest unfinished pieces are:
+
+- an explicit checkpoint storage contract
+- runtime resolution of capability `after` ordering
+- a real capability composition/registry layer
+
+That does not make the Wave order wrong. It means the later work should be read as "complete and connect the existing pieces cleanly," not "introduce these concepts from zero."
+
 ### Wave 1 — Fix the foundation (do first, or alongside runtime defect fixes)
 
 These are concrete, independently valuable, and don't require buying into any new framework layer. Each one ships and works on its own.
@@ -278,7 +307,12 @@ Also fix known runtime defects in retry and checkpoint behavior before or alongs
 
 ### Wave 2 — Define the capability contract (early, but stay minimal)
 
-Define and export `ICapability` and `ICapabilityLifecycle` once Wave 1 is stable. This gives downstream consumers (and evolve-lab) a contract to build against before the registry exists.
+Status note:
+- the interface shape described here is already largely present in the codebase
+- the practical remaining problem is not the existence of `ICapability`
+- the practical remaining problem is how capabilities are ordered and composed at runtime
+
+Normalize and complete the exported `ICapability` and `ICapabilityLifecycle` surface once Wave 1 is stable. This gives downstream consumers (and evolve-lab) a contract to build against before the registry exists.
 
 ```typescript
 interface ICapability<TState extends GraphState = GraphState> {
@@ -310,6 +344,8 @@ Ship default capability implementations from evolve-lab — `PlanningCapability`
 `IAgentCapabilityRegistry`, `ILifecycleOrchestrator`, the topological sort on `after`, conflict detection, and `CompositionReport`. These are only designable correctly once there are real `ICapability` implementations in the wild to test against.
 
 Also: `ICheckpointStore` and checkpoint config on `GraphEngineConfig`. `MemoryCapability` bridging `IMemoryStore` to prompt sections.
+
+This is now the main remaining structural gap exposed by Echo usage. The library already has many of the pieces Wave 1 and Wave 2 were meant to establish; what it still lacks is the explicit composition layer that makes those pieces work together predictably.
 
 The assembler renames (`IContextAssembler` → `IPromptAssembler`, `IAgentContextAssembler` → `IConversationAssembler`) belong here or later. They have real value for clarity but are not worth spending alpha churn budget on before the behavioral fixes and composition model are stable.
 

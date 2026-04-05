@@ -123,7 +123,7 @@ const { state } = await agent.run({
 console.log(state.answer); // "36"
 ```
 
-Available patterns: [ReAct, Plan-Execute, RAG, Reflection, Chain-of-Thought, Supervisor-Worker, Human-in-the-Loop](./guides/patterns.md).
+Available patterns: [ReAct, Plan-Execute, RAG, Reflection, Chain-of-Thought, Supervisor-Worker, Human-in-the-Loop, Router, Map-Reduce](./guides/patterns.md).
 
 ---
 

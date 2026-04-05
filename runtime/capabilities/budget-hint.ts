@@ -91,6 +91,10 @@ export class BudgetHintCapability<TState extends GraphState = GraphState>
 
         this.lifecycle = {
             afterTurn: async (state: TState, _turn: TurnRecord): Promise<void> => {
+                const s = state as Record<string, unknown>
+                const used = Number(s[config.turnCountKey] ?? 0) + 1
+                s[config.turnCountKey] = used
+
                 // Get or create the per-run fired set for this state object
                 let fired = this.#firedByRun.get(state as object)
                 if (!fired) {
@@ -98,7 +102,6 @@ export class BudgetHintCapability<TState extends GraphState = GraphState>
                     this.#firedByRun.set(state as object, fired)
                 }
 
-                const used      = Number((state as Record<string, unknown>)[config.turnCountKey] ?? 0)
                 const max       = config.maxTurns
                 if (max <= 0) return
 

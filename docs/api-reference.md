@@ -167,10 +167,19 @@ interface AgentLlmNodeConfig<TState> {
   onError?: AgentLlmOnError<TState>;  // returns 'retry' | 'continue' | 'fail'
   maxRetries?: number;                 // Default: 3
   maxTokens?: number;
+  onDelta?: (text: string) => void;   // Enables streaming; receives each text chunk
+  capabilities?: ICapability<TState>[]; // Capability bundles (prompt, runtime, lifecycle)
 }
 ```
 
 Emits `AgentLlmEvent` (`turn_start`, `turn_end`, `message_delta`) to `eventsKey`.
+
+When `capabilities` is provided, each turn `AgentLlmNode`:
+1. Calls `cap.prompt.contribute({ state })` for each active capability and appends sections to the system prompt.
+2. Calls `cap.runtime.tools()` for each active capability and merges them with the node's `tools`.
+3. After the LLM responds, calls `cap.lifecycle.afterTurn(state, turn)` for each active capability.
+
+See [Capabilities guide](./concepts/capabilities.md) for the full capability authoring pattern.
 
 ### `GraphContext<TState>`
 
@@ -534,40 +543,40 @@ Use it as a convenience bridge for custom graphs, not as a full kernel/agent loo
 
 ## Capability primitives
 
+See [Capabilities guide](./concepts/capabilities.md) for the full authoring pattern, wiring instructions, and a worked example.
+
 ### `ICapability<TState>` / `ICapabilityLifecycle<TState>`
 
 ```ts
 interface ICapabilityLifecycle<TState extends GraphState = GraphState> {
-  beforeRun?(state: TState): Promise<void>;
-  afterTurn?(state: TState, turn: TurnRecord): Promise<void>;
-  afterRun?(state: TState): Promise<void>;
+  beforeRun?(state: TState): Promise<void>;                    // Once, before the graph run
+  afterTurn?(state: TState, turn: TurnRecord): Promise<void>; // After each LLM turn
+  afterRun?(state: TState): Promise<void>;                    // Once, after the run ends
 }
 
 interface ICapability<TState extends GraphState = GraphState> {
-  id: string;
-  after?: readonly string[];
-  active?(state: Readonly<TState>): boolean;
-  prompt?: IPromptContributor;
-  runtime?: IToolRuntime;
+  id: string;                                  // Unique identifier
+  after?: readonly string[];                   // Ordering hint (Wave 3 registry)
+  active?(state: Readonly<TState>): boolean;   // Gate — false skips all three fields
+  prompt?: IPromptContributor;                 // Per-turn system prompt injection
+  runtime?: IToolRuntime;                      // Tool contribution
   lifecycle?: ICapabilityLifecycle<TState>;
 }
 ```
 
-Wave 2 keeps this contract intentionally minimal. Registry/orchestration is deferred to Wave 3.
+All three fields (`prompt`, `runtime`, `lifecycle`) are optional. Inactive capabilities (where `active()` returns `false`) contribute nothing — no prompt sections, no tools, no lifecycle hooks.
+
+`afterTurn` fires after each LLM turn. `beforeRun`/`afterRun` fire at run boundaries and are called by your graph's setup/teardown nodes, not by `AgentLlmNode`.
 
 ### Built-in capabilities
 
 Available from `@nucleic-se/agentic/runtime`:
 
-- `PlanningCapability`
-- `BudgetHintCapability`
-- `EmptyResponseCapability`
-
-`PlanningCapability` seeds structured planning state before a run.
-
-`BudgetHintCapability` injects sticky wrap-up hints as the turn budget is consumed.
-
-`EmptyResponseCapability` injects sticky nudges after empty model turns and can set a done flag after repeated empties.
+| Class | What it does |
+|---|---|
+| `PlanningCapability` | Runs a structured planning call in `beforeRun`; injects the plan as a sticky section each turn via `prompt`. |
+| `BudgetHintCapability` | Watches remaining turn budget in `afterTurn`; injects a wrap-up hint via `prompt` when budget is low. |
+| `EmptyResponseCapability` | Detects empty model turns in `afterTurn`; injects a recovery nudge and can set a done flag after repeated empties. |
 
 ---
 
@@ -582,8 +591,10 @@ All imported from `@nucleic-se/agentic/patterns`:
 | `createReflectionAgent` | `ReflectionConfig` | `ReflectionState` |
 | `createRAGAgent` | `RAGConfig` | `RAGState` |
 | `createChainOfThoughtAgent` | `ChainOfThoughtConfig` | `ChainOfThoughtState` |
-| `createSupervisorAgent` | `SupervisorConfig` | `SupervisorState` |
+| `createSupervisorAgent` | `SupervisorWorkerConfig` | `SupervisorState` |
 | `createHumanInLoopAgent` | `HumanInLoopConfig` | `HumanInLoopState` |
+| `createRouterAgent` | `RouterConfig` | `RouterState` |
+| `createMapReduceAgent` | `MapReduceConfig` | `MapReduceState` |
 
 All configs extend `PatternConfig<TState>`:
 

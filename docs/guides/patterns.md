@@ -199,6 +199,70 @@ const { state } = await agent.run({
 
 ---
 
+## Router
+
+Classifies an input, selects one route, and dispatches to a handler for that route. Use when the first problem is "who should handle this?" rather than "how should one agent solve this?".
+
+```ts
+import { createRouterAgent } from '@nucleic-se/agentic/patterns';
+
+const agent = createRouterAgent({
+  llm,
+  routes: {
+    docs: {
+      description: 'Answer documentation and API questions',
+      handle: async (input, ctx) => `docs: ${input} (${ctx.rationale})`,
+    },
+    code: {
+      description: 'Answer implementation questions',
+      handle: async (input) => `code: ${input}`,
+    },
+  },
+  fallbackRoute: 'docs',
+});
+
+const { state } = await agent.run({
+  input: 'How do I build a custom agent?',
+  route: '',
+  rationale: '',
+  output: '',
+});
+
+console.log(state.route);
+console.log(state.output);
+```
+
+**Flow:** `route → dispatch → END`
+
+---
+
+## Map-Reduce
+
+Splits work into independent items, maps each item in parallel, then reduces the mapped outputs into one final result. Use when you already have a natural collection to fan out over.
+
+```ts
+import { createMapReduceAgent } from '@nucleic-se/agentic/patterns';
+
+const agent = createMapReduceAgent({
+  llm,
+  mapper: async (item, ctx) => `${ctx.index + 1}. ${item.toUpperCase()}`,
+  reducer: async (mapped) => mapped.join('\n'),
+});
+
+const { state } = await agent.run({
+  input: 'Summarize these headings',
+  items: ['prompting', 'tools', 'memory'],
+  mapped: [],
+  output: '',
+});
+
+console.log(state.output);
+```
+
+**Flow:** `map(item*) → reduce → END`
+
+---
+
 ## Composing patterns with SubGraphNode
 
 Patterns can be nested inside a larger graph using `SubGraphNode`:

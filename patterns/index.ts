@@ -50,3 +50,11 @@ export type {
 // Human-in-the-Loop Pattern
 export { createHumanInLoopAgent } from './human-in-loop.js';
 export type { HumanInLoopState, HumanInLoopConfig } from './human-in-loop.js';
+
+// Router Pattern
+export { createRouterAgent } from './router.js';
+export type { RouterState, RouterConfig, RouterHandler } from './router.js';
+
+// Map-Reduce Pattern
+export { createMapReduceAgent } from './map-reduce.js';
+export type { MapReduceState, MapReduceConfig } from './map-reduce.js';
