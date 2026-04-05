@@ -34,6 +34,8 @@ export interface ToolCallResult {
     content:  string
     /** Structured data for programmatic access. Optional. */
     data?:    unknown
+    /** Structured failure classification when ok is false. */
+    errorKind?: 'policy' | 'runtime' | 'timeout' | 'unknown'
 }
 
 // ── Options ───────────────────────────────────────────────────────────────────

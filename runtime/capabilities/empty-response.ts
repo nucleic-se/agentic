@@ -45,11 +45,6 @@ export interface EmptyResponseCapabilityConfig<TState extends GraphState = Graph
      */
     stopKey?: keyof TState & string
     /**
-     * Deprecated alias for stopKey.
-     * Retained temporarily for backwards compatibility.
-     */
-    doneKey?: keyof TState & string
-    /**
      * Max consecutive completely-empty turns before giving up.
      * Default: 2.
      */
@@ -125,9 +120,8 @@ export class EmptyResponseCapability<TState extends GraphState = GraphState>
                     s[config.emptyCountKey] = count
 
                     if (count > maxRetries) {
-                        const stopKey = config.stopKey ?? config.doneKey
-                        if (stopKey) {
-                            s[stopKey] = true
+                        if (config.stopKey) {
+                            s[config.stopKey] = true
                         }
                         return
                     }

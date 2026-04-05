@@ -699,7 +699,7 @@ class EmptyResponseCapability<TState extends GraphState> implements ICapability<
     turnCountKey: keyof TState & string;
     messagesKey: keyof TState & string;
     emptyCountKey: keyof TState & string;
-    doneKey: keyof TState & string;
+    stopKey: keyof TState & string;
     nudgeMidRun?: string;
     nudgeFinal?: string;
   }) {}

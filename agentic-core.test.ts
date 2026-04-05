@@ -962,6 +962,7 @@ describe('ToolRuntimeAdapter', () => {
         const result = await adapter.call('nope', {});
         expect(result.ok).toBe(false);
         expect(result.content).toContain('nope');
+        expect(result.errorKind).toBe('unknown');
     });
 
     it('reports trust tier via trustTierFor', () => {
@@ -985,6 +986,7 @@ describe('ToolRuntimeAdapter', () => {
         const result = await adapter.call('t', {});
         expect(result.ok).toBe(false);
         expect(result.content).toBe('blocked');
+        expect(result.errorKind).toBe('policy');
         expect(executed).not.toHaveBeenCalled();
     });
 });
@@ -1035,6 +1037,7 @@ describe('CompositeToolRuntime', () => {
         const composite = new CompositeToolRuntime([makeRuntime('known', 'standard', '')]);
         const result = await composite.call('unknown', {});
         expect(result.ok).toBe(false);
+        expect(result.errorKind).toBe('unknown');
     });
 });
 

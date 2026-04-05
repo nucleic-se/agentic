@@ -49,7 +49,7 @@ export class ToolRuntimeAdapter implements IToolRuntime {
     async call(name: string, args: Record<string, unknown>, _options?: ToolCallOptions): Promise<ToolCallResult> {
         const tool = this.toolMap.get(name);
         if (!tool) {
-            return { ok: false, content: `unknown tool: ${name}` };
+            return { ok: false, content: `unknown tool: ${name}`, errorKind: 'unknown' };
         }
 
         if (this.policy) {
@@ -60,13 +60,13 @@ export class ToolRuntimeAdapter implements IToolRuntime {
                 trustTier: tool.trustTier,
             });
             if (decision.kind === 'deny') {
-                return { ok: false, content: decision.reason };
+                return { ok: false, content: decision.reason, errorKind: 'policy' };
             }
             if (decision.kind === 'rewrite') {
                 try {
                     return toResult(await tool.execute(decision.args));
                 } catch (err) {
-                    return { ok: false, content: (err as Error).message };
+                    return { ok: false, content: (err as Error).message, errorKind: 'runtime' };
                 }
             }
             // 'allow' and 'confirm' fall through
@@ -75,7 +75,7 @@ export class ToolRuntimeAdapter implements IToolRuntime {
         try {
             return toResult(await tool.execute(args));
         } catch (err) {
-            return { ok: false, content: (err as Error).message };
+            return { ok: false, content: (err as Error).message, errorKind: 'runtime' };
         }
     }
 }

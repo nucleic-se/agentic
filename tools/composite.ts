@@ -50,7 +50,7 @@ export class CompositeToolRuntime implements IToolRuntimeWithMeta {
 
     async call(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
         const rt = this.map.get(name)
-        if (!rt) return { ok: false, content: `Unknown tool: ${name}` }
+        if (!rt) return { ok: false, content: `Unknown tool: ${name}`, errorKind: 'unknown' }
 
         if (this.policy) {
             const trustTier: ToolTrustTier = rt.trustTierFor?.(name) ?? 'standard';
@@ -61,7 +61,7 @@ export class CompositeToolRuntime implements IToolRuntimeWithMeta {
                 trustTier,
             });
             if (decision.kind === 'deny') {
-                return { ok: false, content: decision.reason };
+                return { ok: false, content: decision.reason, errorKind: 'policy' };
             }
             if (decision.kind === 'rewrite') {
                 return rt.call(name, decision.args);
