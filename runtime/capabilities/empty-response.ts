@@ -5,7 +5,7 @@
  *
  * 1. Completely empty (no text, no tool calls) — the model said nothing at all.
  *    Nudges with nudgeMidRun / nudgeFinal based on recent history, then sets
- *    state[doneKey] after maxRetries consecutive occurrences.
+ *    state[stopKey] after maxRetries consecutive occurrences.
  *
  * 2. Text-silent with tool calls — the model made tool calls but wrote no
  *    accompanying text. Common with models that silently chain tools without
@@ -41,7 +41,12 @@ export interface EmptyResponseCapabilityConfig<TState extends GraphState = Graph
     emptyCountKey: keyof TState & string
     /**
      * State key to set to true when max retries are exceeded.
-     * If omitted, the capability only nudges without setting a done flag.
+     * If omitted, the capability only nudges without setting a stop flag.
+     */
+    stopKey?: keyof TState & string
+    /**
+     * Deprecated alias for stopKey.
+     * Retained temporarily for backwards compatibility.
      */
     doneKey?: keyof TState & string
     /**
@@ -120,8 +125,9 @@ export class EmptyResponseCapability<TState extends GraphState = GraphState>
                     s[config.emptyCountKey] = count
 
                     if (count > maxRetries) {
-                        if (config.doneKey) {
-                            s[config.doneKey] = true
+                        const stopKey = config.stopKey ?? config.doneKey
+                        if (stopKey) {
+                            s[stopKey] = true
                         }
                         return
                     }

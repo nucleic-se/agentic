@@ -1428,11 +1428,11 @@ describe('EmptyResponseCapability', () => {
         expect(state.emptyCount).toBe(1);
     });
 
-    it('sets doneKey after maxRetries exceeded', async () => {
+    it('sets stopKey after maxRetries exceeded', async () => {
         const cap = new EmptyResponseCapability<S>({
             messagesKey:   'messages',
             emptyCountKey: 'emptyCount',
-            doneKey:       'done',
+            stopKey:       'done',
             maxRetries:    1,
         });
         const state: S = { messages: [], emptyCount: 0, done: false };
@@ -1445,7 +1445,7 @@ describe('EmptyResponseCapability', () => {
         const cap = new EmptyResponseCapability<S>({
             messagesKey:   'messages',
             emptyCountKey: 'emptyCount',
-            doneKey:       'done',
+            stopKey:       'done',
             maxRetries:    1,
         });
         // First run: exhaust retries
