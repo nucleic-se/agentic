@@ -87,7 +87,19 @@ interface AnthropicRequest {
     messages:     AnthropicMessage[]
     tools?:       AnthropicTool[]
     tool_choice?: { type: 'auto' | 'any' | 'tool'; name?: string }
+    stream?:      boolean
 }
+
+// ── Streaming event types ──────────────────────────────────────────────────────
+
+type AnthropicStreamEvent =
+    | { type: 'message_start'; message: { usage: { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } }
+    | { type: 'content_block_start'; index: number; content_block: { type: 'text' } | { type: 'tool_use'; id: string; name: string } }
+    | { type: 'content_block_delta'; index: number; delta: { type: 'text_delta'; text: string } | { type: 'input_json_delta'; partial_json: string } }
+    | { type: 'content_block_stop'; index: number }
+    | { type: 'message_delta'; delta: { stop_reason: string; stop_sequence: string | null }; usage: { output_tokens: number } }
+    | { type: 'message_stop' }
+    | { type: 'ping' }
 
 interface AnthropicResponse {
     content:     AnthropicBlock[]
@@ -276,6 +288,130 @@ export class AnthropicProvider implements ILLMProvider {
 
         const res = await this.post<AnthropicResponse>('/v1/messages', body)
         return fromAnthropicResponse(res)
+    }
+
+    /**
+     * Streaming turn. Calls onDelta with text chunks as they arrive, then
+     * resolves with the complete TurnResponse. Tool call arguments are
+     * accumulated silently and returned in the final response.
+     *
+     * Retries on 429/529 before reading the stream body — once streaming
+     * starts there is no retry (partial deltas have already fired).
+     */
+    async streamTurn(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse> {
+        const body: AnthropicRequest = {
+            model:      this.model,
+            max_tokens: request.maxTokens ?? this.maxTokens,
+            system:     request.system,
+            stream:     true,
+            messages:   toAnthropicMessages(request.messages),
+            ...(request.tools?.length
+                ? { tools: toAnthropicTools(request.tools), tool_choice: { type: 'auto' } }
+                : {}),
+        }
+
+        // Acquire rate-limit slot and retry on 429/529, same as post().
+        // Once we get a 200 and start reading the body, no retry is possible.
+        const limiterKey = this.limiterKey()
+        let res!: Response
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            await waitForRequestSlot(limiterKey, this.minRequestSpacingMs)
+            res = await fetch(`${this.baseUrl}/v1/messages`, {
+                method:  'POST',
+                headers: {
+                    'Content-Type':      'application/json',
+                    'x-api-key':         this.apiKey,
+                    'anthropic-version': API_VERSION,
+                },
+                body: JSON.stringify(body),
+            })
+
+            if (res.ok) break
+
+            if (RETRY_STATUS.has(res.status) && attempt < MAX_RETRIES) {
+                const delay = retryDelayFromHeaders(res.headers, attempt, ANTHROPIC_RESET_HEADERS)
+                this.onRetry?.(attempt + 1, delay, res.status)
+                pushBackRequestSlot(limiterKey, delay)
+                await res.body?.cancel()
+                await sleep(delay)
+                continue
+            }
+
+            const text = await res.text().catch(() => '(no body)')
+            throw new Error(`AnthropicProvider: HTTP ${res.status} ${res.statusText} — ${text}`)
+        }
+
+        if (!res.ok) throw new Error('AnthropicProvider: max retries exceeded')
+        if (!res.body) throw new Error('AnthropicProvider: streaming response has no body')
+
+        let textContent      = ''
+        let stopReason       = 'end_turn'
+        let inputTokens      = 0
+        let outputTokens     = 0
+        let cacheReadTokens: number | undefined
+        let cacheWriteTokens: number | undefined
+
+        // Tool use blocks accumulated by content block index.
+        const toolBlocks = new Map<number, { id: string; name: string; args: string }>()
+
+        const reader  = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() ?? ''
+
+            for (const line of lines) {
+                const trimmed = line.trim()
+                if (!trimmed || !trimmed.startsWith('data: ')) continue
+                const payload = trimmed.slice(6)
+
+                let event: AnthropicStreamEvent
+                try { event = JSON.parse(payload) } catch { continue }
+
+                if (event.type === 'message_start') {
+                    inputTokens      = event.message.usage.input_tokens
+                    cacheReadTokens  = event.message.usage.cache_read_input_tokens
+                    cacheWriteTokens = event.message.usage.cache_creation_input_tokens
+                } else if (event.type === 'content_block_start') {
+                    if (event.content_block.type === 'tool_use') {
+                        toolBlocks.set(event.index, { id: event.content_block.id, name: event.content_block.name, args: '' })
+                    }
+                } else if (event.type === 'content_block_delta') {
+                    if (event.delta.type === 'text_delta') {
+                        textContent += event.delta.text
+                        onDelta(event.delta.text)
+                    } else if (event.delta.type === 'input_json_delta') {
+                        const block = toolBlocks.get(event.index)
+                        if (block) block.args += event.delta.partial_json
+                    }
+                } else if (event.type === 'message_delta') {
+                    stopReason   = event.delta.stop_reason
+                    outputTokens = event.usage.output_tokens
+                }
+            }
+        }
+
+        const toolCalls: ToolCall[] = [...toolBlocks.values()].map(b => {
+            let args: Record<string, unknown> = {}
+            try { args = JSON.parse(b.args) } catch { /* leave empty if args are malformed */ }
+            return { id: b.id, name: b.name, args }
+        })
+
+        return {
+            message: {
+                role:      'assistant',
+                content:   textContent,
+                toolCalls: toolCalls.length ? toolCalls : undefined,
+            },
+            stopReason: mapStopReason(stopReason),
+            usage:      { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens },
+        }
     }
 
     embed(_texts: string[]): Promise<number[][]> {
