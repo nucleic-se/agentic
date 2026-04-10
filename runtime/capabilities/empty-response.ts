@@ -74,6 +74,13 @@ export interface EmptyResponseCapabilityConfig<TState extends GraphState = Graph
      * Only used when requireTextWithToolUse is true.
      */
     nudgeToolOnly?: string
+    /**
+     * Maximum number of consecutive silent-tool-call nudges to inject before
+     * stopping. Prevents the nudge from accumulating unboundedly in long
+     * investigation chains where the model silently reads multiple files.
+     * Default: 3.
+     */
+    maxToolOnlyNudges?: number
 }
 
 const DEFAULT_NUDGE_MID_RUN =
@@ -102,6 +109,7 @@ export class EmptyResponseCapability<TState extends GraphState = GraphState>
         const nudgeFinal          = config.nudgeFinal          ?? DEFAULT_NUDGE_FINAL
         const requireTextWithTools = config.requireTextWithToolUse ?? false
         const nudgeToolOnly       = config.nudgeToolOnly       ?? DEFAULT_NUDGE_TOOL_ONLY
+        const maxToolOnlyNudges   = config.maxToolOnlyNudges   ?? 3
         const toolOnlyCountKey    = `${config.emptyCountKey}_tool`
 
         this.lifecycle = {
@@ -146,12 +154,15 @@ export class EmptyResponseCapability<TState extends GraphState = GraphState>
                     const count = Number(s[toolOnlyCountKey] ?? 0) + 1
                     s[toolOnlyCountKey] = count
 
-                    // Don't gate on maxRetries — nudge every silent-tool turn
-                    // since each one is an independent planning failure.
-                    const messages = s[config.messagesKey]
-                    const nudge: UserMessage = { role: 'user', content: nudgeToolOnly, sticky: true }
-                    if (Array.isArray(messages)) {
-                        messages.push(nudge)
+                    // Only nudge up to maxToolOnlyNudges times — beyond that the
+                    // model is in a silent investigation chain and extra nudges
+                    // just consume context budget without changing behaviour.
+                    if (count <= maxToolOnlyNudges) {
+                        const messages = s[config.messagesKey]
+                        const nudge: UserMessage = { role: 'user', content: nudgeToolOnly, sticky: true }
+                        if (Array.isArray(messages)) {
+                            messages.push(nudge)
+                        }
                     }
                     return
                 }
