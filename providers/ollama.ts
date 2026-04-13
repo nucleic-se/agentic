@@ -24,6 +24,14 @@ export interface OllamaConfig {
      * Useful when the model's default is too small (e.g. gemma3 defaults to 8k).
      */
     numCtx?: number
+    /**
+     * Extra fields merged into every chat completion request body.
+     * Use for Ollama-specific options not covered by this config, e.g.
+     * `{ think: false }` to disable extended thinking on supported models.
+     * When `numCtx` is also set, `options.num_ctx` is merged in alongside
+     * any `options` key provided here.
+     */
+    extraBody?: Record<string, unknown>
     /** Retry configuration for transient HTTP errors (429, 502, 503, 529). */
     retry?: RetryConfig
 }
@@ -47,16 +55,18 @@ export const OLLAMA_CLOUD_MODEL_DEFAULTS = {
 
 export class OllamaProvider extends OpenAICompatibleProvider {
     constructor(config: OllamaConfig) {
+        const extraBody: Record<string, unknown> = { ...config.extraBody }
+        if (config.numCtx != null) {
+            extraBody['options'] = { num_ctx: config.numCtx, ...(extraBody['options'] as Record<string, unknown> | undefined) }
+        }
         const baseConfig: OpenAICompatibleConfig = {
-            apiKey:        config.apiKey ?? process.env['AGENTIC_OLLAMA_API_KEY'],
-            model:         config.model,
+            apiKey:         config.apiKey ?? process.env['AGENTIC_OLLAMA_API_KEY'],
+            model:          config.model,
             embeddingModel: config.embeddingModel,
-            baseUrl:       config.baseUrl ?? process.env['AGENTIC_OLLAMA_BASE_URL'] ?? OLLAMA_LOCAL_API_BASE,
-            providerName:  'OllamaProvider',
-            retry:         config.retry,
-            ...(config.numCtx != null
-                ? { extraBody: { options: { num_ctx: config.numCtx } } }
-                : {}),
+            baseUrl:        config.baseUrl ?? process.env['AGENTIC_OLLAMA_BASE_URL'] ?? OLLAMA_LOCAL_API_BASE,
+            providerName:   'OllamaProvider',
+            retry:          config.retry,
+            ...(Object.keys(extraBody).length > 0 ? { extraBody } : {}),
         }
         super(baseConfig)
     }
