@@ -148,6 +148,9 @@ export type {
     ContextCandidate,
 } from './agent.js';
 
+// Token counting
+export type { ITokenCounter } from './ITokenCounter.js';
+
 // Fluent AI builders
 export type {
     IAIPromptBuilder,

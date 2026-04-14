@@ -186,3 +186,7 @@ export { ToolRuntimeAdapter, CompositeToolRuntime } from './tools/index.js';
 
 // ── Utilities ──────────────────────────────────────────────────
 export { estimateTokens } from './utils.js';
+
+// ── Token counting ─────────────────────────────────────────────
+export type { ITokenCounter } from './contracts/index.js';
+export { HeuristicTokenCounter } from './runtime/index.js';
