@@ -8,7 +8,7 @@ export {
     OLLAMA_LOCAL_API_BASE,
     OllamaProvider,
 } from './ollama.js'
-export type { OllamaConfig } from './ollama.js'
+export type { OllamaConfig, OllamaReasoningEffort } from './ollama.js'
 export {
     resilientPost,
     retryDelay,

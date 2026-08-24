@@ -247,6 +247,29 @@ describe('OllamaProvider', () => {
         const body = JSON.parse(String(init.body))
         expect(body.options).toEqual({ num_ctx: 32768 })
     })
+
+    it('passes reasoningEffort to the OpenAI-compatible API', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: 'hello' },
+            }],
+            usage: { prompt_tokens: 5, completion_tokens: 1 },
+        }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        }))
+        vi.stubGlobal('fetch', fetchMock)
+
+        const provider = new OllamaProvider({ model: 'gpt-oss:20b', reasoningEffort: 'none' })
+        await provider.turn({
+            messages: [{ role: 'user', content: 'hi' }],
+        })
+
+        const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        const body = JSON.parse(String(init.body))
+        expect(body.reasoning_effort).toBe('none')
+    })
 })
 
 describe('OllamaProvider structured override', () => {

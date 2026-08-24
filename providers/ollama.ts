@@ -6,6 +6,8 @@ import { OpenAICompatibleProvider, toOpenAIMessages, type OpenAICompatibleConfig
 import type { StructuredRequest, StructuredResponse } from '../contracts/llm.js'
 import type { RetryConfig } from './resilient-fetch.js'
 
+export type OllamaReasoningEffort = 'none' | 'low' | 'medium' | 'high'
+
 export interface OllamaConfig {
     /**
      * API key for Ollama Cloud. Falls back to AGENTIC_OLLAMA_API_KEY if omitted.
@@ -25,9 +27,14 @@ export interface OllamaConfig {
      */
     numCtx?: number
     /**
+     * Controls thinking on Ollama's OpenAI-compatible `/v1` API.
+     * Use `none` to disable thinking, or `low`, `medium`, and `high` to
+     * select a reasoning level on supported models.
+     */
+    reasoningEffort?: OllamaReasoningEffort
+    /**
      * Extra fields merged into every chat completion request body.
-     * Use for Ollama-specific options not covered by this config, e.g.
-     * `{ think: false }` to disable extended thinking on supported models.
+     * Use for Ollama-specific options not covered by this config.
      * When `numCtx` is also set, `options.num_ctx` is merged in alongside
      * any `options` key provided here.
      */
@@ -56,6 +63,9 @@ export const OLLAMA_CLOUD_MODEL_DEFAULTS = {
 export class OllamaProvider extends OpenAICompatibleProvider {
     constructor(config: OllamaConfig) {
         const extraBody: Record<string, unknown> = { ...config.extraBody }
+        if (config.reasoningEffort != null && extraBody['reasoning_effort'] == null) {
+            extraBody['reasoning_effort'] = config.reasoningEffort
+        }
         if (config.numCtx != null) {
             extraBody['options'] = { num_ctx: config.numCtx, ...(extraBody['options'] as Record<string, unknown> | undefined) }
         }
