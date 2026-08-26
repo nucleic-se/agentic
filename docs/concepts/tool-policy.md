@@ -33,7 +33,7 @@ type PolicyDecision =
     | { kind: 'allow' }
     | { kind: 'rewrite'; args: Record<string, unknown>; reason: string }
     | { kind: 'deny';    reason: string }
-    | { kind: 'confirm'; reason: string }
+    | { kind: 'confirm'; reason: string; args?: Record<string, unknown> }
 
 interface IToolPolicy {
     evaluate(context: PolicyContext): Promise<PolicyDecision>

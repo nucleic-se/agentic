@@ -29,5 +29,5 @@ export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentL
 export { PlanningCapability, BudgetHintCapability, EmptyResponseCapability } from './capabilities/index.js';
 export type { PlanningCapabilityConfig, BudgetHintCapabilityConfig, BudgetHintThreshold, EmptyResponseCapabilityConfig } from './capabilities/index.js';
 export { HeuristicTokenCounter } from './HeuristicTokenCounter.js';
-export { runAgentKernel } from './AgentKernel.js';
+export { DEFAULT_MAX_TOOL_CALLS_PER_TURN, runAgentKernel } from './AgentKernel.js';
 export type { AgentKernelConfig, AgentKernelContext, BeforeKernelToolCallResult } from './AgentKernel.js';

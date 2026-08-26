@@ -1,5 +1,5 @@
 /** Narrow public entry point for composing the base agent kernel. */
-export { runAgentKernel } from './runtime/AgentKernel.js';
+export { DEFAULT_MAX_TOOL_CALLS_PER_TURN, runAgentKernel } from './runtime/AgentKernel.js';
 export type {
     AgentKernelConfig,
     AgentKernelContext,

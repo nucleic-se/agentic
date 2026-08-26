@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { LLMProtocolError } from '../contracts/llm.js';
+import { LLMProtocolError, LLMRequestBudgetError } from '../contracts/llm.js';
 import type { ILLMProvider, Message, ToolResultMessage, TurnRequest } from '../contracts/llm.js';
 import type {
     AgentEventSink,
@@ -29,6 +29,8 @@ export interface AgentKernelConfig {
     tools: IValidatedToolRuntime;
     policy?: IToolPolicy;
     maxTurns?: number;
+    /** Maximum model-proposed calls accepted in one turn. */
+    maxToolCallsPerTurn?: number;
     autoStop?: boolean;
     maxToolResultChars?: number;
     getSteeringMessages?: () => Promise<Message[]>;
@@ -49,6 +51,7 @@ interface PreparedCall {
 }
 
 const noopSink: AgentEventSink = () => {};
+export const DEFAULT_MAX_TOOL_CALLS_PER_TURN = 16;
 
 function syntheticResult(callId: string, content: string): ToolResultMessage {
     return { role: 'tool_result', toolCallId: callId, content, isError: true };
@@ -148,6 +151,10 @@ async function executeAgentKernel(
     const records: TurnRecord[] = [];
     const maxTurns = config.maxTurns ?? 20;
     const maxResultChars = config.maxToolResultChars ?? 4_000;
+    const maxToolCalls = config.maxToolCallsPerTurn ?? DEFAULT_MAX_TOOL_CALLS_PER_TURN;
+    if (!Number.isSafeInteger(maxToolCalls) || maxToolCalls < 1) {
+        throw new RangeError('maxToolCallsPerTurn must be a positive safe integer');
+    }
 
     while (true) {
         if (records.length >= maxTurns) {
@@ -215,11 +222,13 @@ async function executeAgentKernel(
             const aborted = signal?.aborted ?? false;
             const failure: Failure = {
                 kind: aborted ? 'abort'
+                    : error instanceof LLMRequestBudgetError ? 'context_error'
                     : error instanceof LLMProtocolError ? 'llm_protocol_error'
                     : 'llm_transport_error',
                 message: error instanceof Error ? error.message : String(error),
             };
             const record = failureRecord(turnId, startedAt, request, failure, context.contextUsed);
+            if (error instanceof LLMProtocolError && error.usage) record.tokenUsage = error.usage;
             if (aborted) record.outcome = 'aborted';
             records.push(record);
             await emit({ type: 'turn_end', record });
@@ -274,11 +283,13 @@ async function executeAgentKernel(
             ids.add(call.id);
             return false;
         });
-        if (calls.length === 0 || duplicate) {
+        if (calls.length === 0 || calls.length > maxToolCalls || duplicate) {
             const failure: Failure = {
                 kind: 'llm_protocol_error',
                 message: calls.length === 0
                     ? 'Provider returned tool_use without tool calls'
+                    : calls.length > maxToolCalls
+                    ? `Provider returned ${calls.length} tool calls; maximum is ${maxToolCalls}`
                     : `Provider returned duplicate tool call id '${duplicate?.id}'`,
             };
             const record = failureRecord(turnId, startedAt, request, failure, context.contextUsed);
@@ -321,6 +332,9 @@ async function executeAgentKernel(
                         continue;
                     }
                     if (decision.kind === 'confirm') {
+                        // Confirmation must display the exact arguments that
+                        // will execute, including a composed policy rewrite.
+                        if (decision.args) item.plan.input = decision.args;
                         let confirmed = false;
                         let confirmationError: unknown;
                         if (config.confirmToolCall) {

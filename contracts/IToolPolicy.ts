@@ -62,7 +62,12 @@ export type PolicyDecision =
      * The calling agent is responsible for surfacing this to the user and
      * resuming the execution loop with the decision.
      */
-    | { kind: 'confirm'; reason: string }
+    | {
+        kind: 'confirm'
+        reason: string
+        /** Optional validated rewrite that is applied only after approval. */
+        args?: Record<string, unknown>
+    }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
 

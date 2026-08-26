@@ -222,6 +222,30 @@ describe('runAgentKernel', () => {
         expect(records[0]!.executions[0]!.status).toBe('policy_denied');
     });
 
+    it('rejects oversized native tool batches before validation or execution', async () => {
+        const { tool, execute } = stringTool();
+        const conversation: Message[] = [{ role: 'user', content: 'write many' }];
+        const records = await runAgentKernel(
+            conversation,
+            {
+                provider: providerWith([toolTurn(Array.from({ length: 3 }, (_, index) => ({
+                    id: `call-${index}`,
+                    name: 'write_value',
+                    args: { value: String(index) },
+                })))]),
+                tools: new ToolRuntimeAdapter([tool]),
+                maxToolCallsPerTurn: 2,
+            },
+            () => ({ messages: conversation }),
+        );
+
+        expect(execute).not.toHaveBeenCalled();
+        expect(records[0]).toMatchObject({
+            outcome: 'failed',
+            failure: { kind: 'llm_protocol_error', message: expect.stringContaining('maximum is 2') },
+        });
+    });
+
     it('fails confirmation closed when the resolver throws', async () => {
         const { tool, execute } = stringTool();
         const conversation: Message[] = [{ role: 'user', content: 'write' }];
@@ -244,6 +268,34 @@ describe('runAgentKernel', () => {
             status: 'policy_denied',
             error: expect.stringContaining('failed closed'),
         });
+    });
+
+    it('applies a confirmed policy rewrite before execution and revalidates it', async () => {
+        const { tool, execute } = stringTool();
+        const conversation: Message[] = [{ role: 'user', content: 'write' }];
+        const records = await runAgentKernel(
+            conversation,
+            {
+                provider: providerWith([
+                    toolTurn([{ id: 'confirm-rewrite', name: 'write_value', args: { value: 'unsafe' } }]),
+                    text('done'),
+                ]),
+                tools: new ToolRuntimeAdapter([tool]),
+                policy: { async evaluate() {
+                    return {
+                        kind: 'confirm',
+                        reason: 'approval required',
+                        args: { value: 'approved' },
+                    };
+                } },
+                confirmToolCall: async context => context.args.value === 'approved',
+            },
+            () => ({ messages: conversation }),
+        );
+
+        expect(execute).toHaveBeenCalledWith({ value: 'approved' }, expect.anything());
+        expect(records[0]!.plan[0]!.input).toEqual({ value: 'approved' });
+        expect(records[0]!.executions[0]!.status).toBe('success');
     });
 
     it('normalizes before-model extension failures and closes the lifecycle', async () => {

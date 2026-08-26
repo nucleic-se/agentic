@@ -468,7 +468,7 @@ type PolicyDecision =
   | { kind: 'allow' }
   | { kind: 'rewrite'; args: Record<string, unknown>; reason: string }
   | { kind: 'deny';    reason: string }
-  | { kind: 'confirm'; reason: string }
+  | { kind: 'confirm'; reason: string; args?: Record<string, unknown> }
 
 interface IToolPolicy {
   evaluate(context: PolicyContext): Promise<PolicyDecision>
@@ -547,6 +547,7 @@ await runAgentKernel(conversation, {
   tools,
   policy,
   maxTurns: 12,
+  maxToolCallsPerTurn: 16,
 }, () => ({ system, messages: conversation }), onEvent, signal)
 ```
 

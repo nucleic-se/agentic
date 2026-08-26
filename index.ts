@@ -196,5 +196,5 @@ export { estimateTokens } from './utils.js';
 // ── Token counting ─────────────────────────────────────────────
 export type { ITokenCounter } from './contracts/index.js';
 export { HeuristicTokenCounter } from './runtime/index.js';
-export { runAgentKernel } from './runtime/index.js';
+export { DEFAULT_MAX_TOOL_CALLS_PER_TURN, runAgentKernel } from './runtime/index.js';
 export type { AgentKernelConfig, AgentKernelContext, BeforeKernelToolCallResult } from './runtime/index.js';

@@ -17,6 +17,7 @@ const records = await runAgentKernel(
     tools,
     policy,
     maxTurns: 12,
+    maxToolCallsPerTurn: 16,
     confirmToolCall: requestConfirmation,
   },
   () => ({ system: systemPrompt, messages: conversation }),
@@ -40,6 +41,8 @@ assemble context
 If any executable call is invalid, none of the executable calls run. The model
 receives a validation result for the invalid call and synthetic skipped results
 for otherwise valid calls, then may correct the batch on the next turn.
+The kernel also rejects an oversized proposed batch before validation or policy;
+the default ceiling is 16 calls and callers may lower it explicitly.
 
 Policy is fail closed:
 

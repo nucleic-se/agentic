@@ -18,9 +18,23 @@ import type { JsonSchema } from './shared.js'
 
 /** Provider/adaptor response violated the semantic LLM protocol. */
 export class LLMProtocolError extends Error {
-    constructor(message: string, options?: ErrorOptions) {
+    readonly usage?: TokenUsage
+
+    constructor(message: string, options?: ErrorOptions & { usage?: TokenUsage }) {
         super(message, options)
         this.name = 'LLMProtocolError'
+        this.usage = options?.usage
+    }
+}
+
+/** A caller-owned hard request ceiling was exceeded before transport access. */
+export class LLMRequestBudgetError extends Error {
+    constructor(
+        readonly budget: number,
+        readonly estimatedTokens: number,
+    ) {
+        super(`Provider request requires approximately ${estimatedTokens} tokens but the budget is ${budget}`)
+        this.name = 'LLMRequestBudgetError'
     }
 }
 
