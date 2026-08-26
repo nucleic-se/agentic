@@ -245,12 +245,13 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
                             });
                         }
                         onDelta?.(text);
-                    });
+                    }, { signal: context.signal });
                 } else {
-                    response = await currentProvider.turn(request);
+                    response = await currentProvider.turn(request, { signal: context.signal });
                 }
                 break; // success
             } catch (error) {
+                if (context.signal.aborted) throw error;
                 if (!onError || attempts >= maxRetries) {
                     throw error;
                 }

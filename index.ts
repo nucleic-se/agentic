@@ -36,8 +36,10 @@ export type {
     ICapabilityLifecycle,
     JsonSchema,
     ToolTrustTier,
-    RetryPolicy,
-    RateLimit,
+    ValidationIssue,
+    ValidationResult,
+    RuntimeSchema,
+    ToolExecutionContext,
     ITool,
     ToolResult,
     IToolRegistry,
@@ -70,8 +72,12 @@ export type {
     TurnRequest,
     TurnResponse,
     StopReason,
+    ProviderCallOptions,
     IToolRuntime,
+    IValidatedToolRuntime,
     ToolCallResult,
+    ToolCallOptions,
+    ToolCallValidation,
     IAIPromptBuilder,
     IAIPromptService,
     IAIPipeline,
@@ -92,6 +98,7 @@ export type {
     GraphDeadLetter,
     GraphRunLimits,
     GraphEngineConfig,
+    GraphRunOptions,
     GraphStepResult,
     IGraphEngine,
     IGraphBuilder,
@@ -116,7 +123,7 @@ export {
     ToolPromptRenderer,
     ContextAssembler,
     AgentContextAssembler,
-    AgentRunner,
+    ContextBudgetExceededError,
     AIPromptService,
     AIPromptBuilder,
     AIPipeline,
@@ -135,7 +142,6 @@ export {
 export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentLlmEvent, OnErrorAction, AgentLlmOnError } from './runtime/index.js';
 export type { PlanningCapabilityConfig, BudgetHintCapabilityConfig, BudgetHintThreshold, EmptyResponseCapabilityConfig } from './runtime/index.js';
 export type { ConversationAssemblerConfig } from './runtime/index.js';
-export type { AgentRunnerConfig } from './runtime/index.js';
 
 export type { MigrationState } from './runtime/index.js';
 
@@ -190,3 +196,5 @@ export { estimateTokens } from './utils.js';
 // ── Token counting ─────────────────────────────────────────────
 export type { ITokenCounter } from './contracts/index.js';
 export { HeuristicTokenCounter } from './runtime/index.js';
+export { runAgentKernel } from './runtime/index.js';
+export type { AgentKernelConfig, AgentKernelContext, BeforeKernelToolCallResult } from './runtime/index.js';

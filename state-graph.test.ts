@@ -13,6 +13,7 @@ import {
     StateGraphBuilder,
     CallbackGraphNode,
     LlmGraphNode,
+    AgentLlmNode,
     SubGraphNode,
     InMemoryTracer,
     InMemorySpanTracer,
@@ -483,6 +484,37 @@ describe('CallbackGraphNode', () => {
 });
 
 describe('LlmGraphNode', () => {
+    it('forwards the graph run signal to the provider', async () => {
+        const controller = new AbortController();
+        const turn = vi.fn(async (_request: TurnRequest, options?: { signal?: AbortSignal }) => {
+            expect(options?.signal).toBe(controller.signal);
+            return {
+                message: { role: 'assistant' as const, content: 'done' },
+                stopReason: 'end_turn' as const,
+                usage: { inputTokens: 1, outputTokens: 1 },
+            };
+        });
+        const provider: ILLMProvider = {
+            turn,
+            async structured() { throw new Error('not used'); },
+            async embed() { return []; },
+        };
+        const node = new LlmGraphNode<ResearchState>({
+            id: 'llm-signal', provider,
+            prompt: () => ({ instructions: 'answer', text: 'question' }),
+            outputKey: 'plan',
+        });
+        const graph = new StateGraph<ResearchState>();
+        graph.addNode(node);
+        graph.setEntry(node.id);
+
+        await new StateGraphEngine(graph).run({
+            topic: '', plan: '', sources: '', critique: '', approved: false, draft: '',
+        }, { signal: controller.signal });
+
+        expect(turn).toHaveBeenCalledOnce();
+    });
+
     it('calls LLM and writes result to state', async () => {
         const node = new LlmGraphNode<ResearchState>({
             id: 'research',
@@ -637,6 +669,49 @@ describe('LlmGraphNode', () => {
 
         expect(calls).toHaveLength(1);
         expect(calls[0].schema).toBe(promptSchema);
+    });
+});
+
+describe('AgentLlmNode', () => {
+    it('forwards cancellation and does not invoke retry recovery after abort', async () => {
+        type AgentNodeState = Record<string, unknown> & {
+            system: string;
+            messages: Message[];
+            response?: unknown;
+        };
+        const controller = new AbortController();
+        const onError = vi.fn(async () => 'retry' as const);
+        const turn = vi.fn(async (_request: TurnRequest, options?: { signal?: AbortSignal }) => {
+            expect(options?.signal).toBe(controller.signal);
+            return new Promise<never>(() => {});
+        });
+        const provider: ILLMProvider = {
+            turn,
+            async structured() { throw new Error('not used'); },
+            async embed() { return []; },
+        };
+        const node = new AgentLlmNode<AgentNodeState>({
+            id: 'agent-llm-signal',
+            provider,
+            systemPromptKey: 'system',
+            messagesKey: 'messages',
+            outputKey: 'response',
+            onError,
+        });
+        const graph = new StateGraph<AgentNodeState>();
+        graph.addNode(node);
+        graph.setEntry(node.id);
+
+        const pending = new StateGraphEngine(graph).run({
+            system: 'system', messages: [{ role: 'user', content: 'go' }],
+        }, { signal: controller.signal });
+        await vi.waitFor(() => { expect(turn).toHaveBeenCalledOnce(); });
+        controller.abort(new Error('cancel model node'));
+
+        await expect(pending).rejects.toThrow('cancel model node');
+
+        expect(turn).toHaveBeenCalledOnce();
+        expect(onError).not.toHaveBeenCalled();
     });
 });
 
@@ -804,6 +879,40 @@ describe('SubGraphNode', () => {
 
         await expect(engine.run({ topic: 'test', summary: '', draft: '' }))
             .rejects.toThrow('sub-graph boom');
+    });
+
+    it('propagates parent cancellation into the sub-graph run', async () => {
+        let innerSignal: AbortSignal | undefined;
+        const innerStarted = Promise.withResolvers<void>();
+        const innerEngine = new StateGraphBuilder<SubResearchState>()
+            .addNode(new CallbackGraphNode<SubResearchState>('wait', async (_state, context) => {
+                innerSignal = context.signal;
+                innerStarted.resolve();
+                return new Promise<void>(() => {});
+            }))
+            .setEntry('wait')
+            .build();
+        const outerEngine = new StateGraphBuilder<ArticleState>()
+            .addNode(new SubGraphNode<ArticleState, SubResearchState>({
+                id: 'sub',
+                engine: innerEngine,
+                input: parent => ({ query: parent.topic, sources: '', summary: '' }),
+                output: () => {},
+            }))
+            .setEntry('sub')
+            .build();
+        const controller = new AbortController();
+        const pending = outerEngine.run(
+            { topic: 'test', summary: '', draft: '' },
+            { signal: controller.signal },
+        );
+        await innerStarted.promise;
+
+        controller.abort(new Error('cancel nested graph'));
+
+        await expect(pending).rejects.toThrow('cancel nested graph');
+        expect(innerSignal).toBe(controller.signal);
+        expect(innerSignal?.aborted).toBe(true);
     });
 
     it('sub-graph has independent maxSteps budget', async () => {
@@ -1322,6 +1431,16 @@ describe('Execution Hooks', () => {
 // ── Node Retry Policy ─────────────────────────────────────────
 
 describe('Node Retry Policy', () => {
+    it('requires an explicit retry safety acknowledgement', () => {
+        const node = new CallbackGraphNode<CounterState>('unsafe', async () => {});
+        (node as any).retryPolicy = { maxRetries: 1, initialDelayMs: 1 };
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(node);
+        graph.setEntry('unsafe');
+
+        expect(() => new StateGraphEngine(graph)).toThrow('retryPolicy.retryMode');
+    });
+
     it('succeeds on first attempt without retrying', async () => {
         let calls = 0;
         const graph = new StateGraph<CounterState>();
@@ -1344,7 +1463,9 @@ describe('Node Retry Policy', () => {
             if (attempts < 3) throw new Error('transient');
             s.count = 99;
         });
-        (flakyNode as any).retryPolicy = { maxRetries: 3, initialDelayMs: 1 };
+        (flakyNode as any).retryPolicy = {
+            maxRetries: 3, initialDelayMs: 1, retryMode: 'idempotent',
+        };
 
         const graph = new StateGraph<CounterState>();
         graph.addNode(flakyNode);
@@ -1360,7 +1481,9 @@ describe('Node Retry Policy', () => {
         const alwaysFails = new CallbackGraphNode<CounterState>('boom', async () => {
             throw new Error('permanent');
         });
-        (alwaysFails as any).retryPolicy = { maxRetries: 2, initialDelayMs: 1 };
+        (alwaysFails as any).retryPolicy = {
+            maxRetries: 2, initialDelayMs: 1, retryMode: 'idempotent',
+        };
 
         const graph = new StateGraph<CounterState>();
         graph.addNode(alwaysFails);
@@ -1379,7 +1502,9 @@ describe('Node Retry Policy', () => {
             s.count += 10; // partial mutation
             if (attempts < 2) throw new Error('retry me');
         });
-        (node as any).retryPolicy = { maxRetries: 2, initialDelayMs: 1 };
+        (node as any).retryPolicy = {
+            maxRetries: 2, initialDelayMs: 1, retryMode: 'idempotent',
+        };
 
         const graph = new StateGraph<CounterState>();
         graph.addNode(node);
@@ -1402,6 +1527,7 @@ describe('Node Retry Policy', () => {
         (node as any).retryPolicy = {
             maxRetries: 3,
             initialDelayMs: 1,
+            retryMode: 'idempotent',
             retryOn: ['NetworkError'], // TypeError not in list
         };
 
@@ -1429,6 +1555,7 @@ describe('Node Retry Policy', () => {
         (node as any).retryPolicy = {
             maxRetries: 2,
             initialDelayMs: 1,
+            retryMode: 'idempotent',
             retryOn: ['NetworkError'],
         };
 
@@ -1440,6 +1567,29 @@ describe('Node Retry Policy', () => {
         const result = await engine.run({ count: 0, log: [] });
         expect(result.state.count).toBe(5);
         expect(attempts).toBe(2);
+    });
+
+    it('cancels an in-progress retry backoff', async () => {
+        let attempts = 0;
+        const node = new CallbackGraphNode<CounterState>('retrying', async () => {
+            attempts++;
+            throw new Error('transient');
+        });
+        (node as any).retryPolicy = {
+            maxRetries: 3,
+            initialDelayMs: 1_000,
+            retryMode: 'idempotent',
+        };
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(node);
+        graph.setEntry('retrying');
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new Error('stop retries')), 10);
+
+        await expect(new StateGraphEngine(graph).run(
+            { count: 0, log: [] }, { signal: controller.signal },
+        )).rejects.toThrow('stop retries');
+        expect(attempts).toBe(1);
     });
 });
 
@@ -1459,6 +1609,26 @@ describe('Node Timeout', () => {
         const engine = new StateGraphEngine(graph);
         await expect(engine.run({ count: 0, log: [] })).rejects.toThrow("timed out after 20ms");
         expect(engine.deadLetterQueue).toHaveLength(1);
+    });
+
+    it('isolates committed state from a node that mutates after timeout', async () => {
+        let nodeSignal: AbortSignal | undefined;
+        const slow = new CallbackGraphNode<CounterState>('slow-mutation', async (state, context) => {
+            nodeSignal = context.signal;
+            await new Promise(resolve => setTimeout(resolve, 30));
+            state.count = 99;
+        });
+        (slow as any).timeoutMs = 5;
+        const graph = new StateGraph<CounterState>();
+        graph.addNode(slow);
+        graph.setEntry('slow-mutation');
+        const state = { count: 0, log: [] };
+
+        await expect(new StateGraphEngine(graph).step(state, 'slow-mutation')).rejects.toThrow('timed out');
+        await new Promise(resolve => setTimeout(resolve, 40));
+
+        expect(nodeSignal?.aborted).toBe(true);
+        expect(state.count).toBe(0);
     });
 
     it('does not timeout a fast node', async () => {

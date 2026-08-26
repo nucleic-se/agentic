@@ -42,6 +42,19 @@ export interface ConversationAssemblerConfig {
     onDrop?(msg: Message): void;
 }
 
+/** Raised when protected context cannot fit within the declared hard ceiling. */
+export class ContextBudgetExceededError extends Error {
+    readonly budget: number;
+    readonly estimatedTokens: number;
+
+    constructor(budget: number, estimatedTokens: number) {
+        super(`Context requires approximately ${estimatedTokens} tokens but the budget is ${budget}`);
+        this.name = 'ContextBudgetExceededError';
+        this.budget = budget;
+        this.estimatedTokens = estimatedTokens;
+    }
+}
+
 // ── Group ─────────────────────────────────────────────────────────────────────
 
 interface MessageGroup {
@@ -204,6 +217,13 @@ export class AgentContextAssembler implements IAgentContextAssembler {
     private readonly onDrop?: (msg: Message) => void;
 
     constructor(config: ConversationAssemblerConfig) {
+        if (!Number.isFinite(config.tokenBudget) || config.tokenBudget <= 0) {
+            throw new RangeError('ConversationAssemblerConfig.tokenBudget must be a positive finite number');
+        }
+        if (config.minRecentGroups != null
+            && (!Number.isInteger(config.minRecentGroups) || config.minRecentGroups < 0)) {
+            throw new RangeError('ConversationAssemblerConfig.minRecentGroups must be a non-negative integer');
+        }
         this.systemPrompt = config.systemPrompt;
         this.tokenBudget = config.tokenBudget;
         this.minRecentGroups = config.minRecentGroups ?? 2;
@@ -217,6 +237,15 @@ export class AgentContextAssembler implements IAgentContextAssembler {
         const { messages } = input;
         const tokenBudget = input.tokenBudget ?? this.tokenBudget;
 
+        if (!Number.isFinite(tokenBudget) || tokenBudget <= 0) {
+            throw new RangeError('AgentContextInput.tokenBudget must be a positive finite number');
+        }
+
+        const systemTokens = estimateTokens(this.systemPrompt);
+        if (systemTokens > tokenBudget) {
+            throw new ContextBudgetExceededError(tokenBudget, systemTokens);
+        }
+
         if (messages.length === 0) {
             return { system: this.systemPrompt, messages: [] };
         }
@@ -225,7 +254,6 @@ export class AgentContextAssembler implements IAgentContextAssembler {
         const groups = buildGroups(messages);
 
         // Compute token counts and scores per group
-        const systemTokens = estimateTokens(this.systemPrompt);
         const messageBudget = Math.max(0, tokenBudget - systemTokens);
 
         for (let gi = 0; gi < groups.length; gi++) {
@@ -287,10 +315,16 @@ export class AgentContextAssembler implements IAgentContextAssembler {
         for (const group of candidates) {
             if (currentTotal <= messageBudget) break;
             group.dropped = true;
-            for (const msg of group.messages) {
-                this.onDrop?.(msg);
-            }
             currentTotal -= group.tokens;
+        }
+
+        if (currentTotal > messageBudget) {
+            throw new ContextBudgetExceededError(tokenBudget, systemTokens + currentTotal);
+        }
+
+        for (const group of groups) {
+            if (!group.dropped) continue;
+            for (const msg of group.messages) this.onDrop?.(msg);
         }
 
         // Collect surviving messages in original order

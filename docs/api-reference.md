@@ -11,6 +11,11 @@ Quick reference for all exported types, classes, and functions.
 | `@nucleic-se/agentic` | Everything below, re-exported |
 | `@nucleic-se/agentic/contracts` | TypeScript interfaces — zero runtime code |
 | `@nucleic-se/agentic/runtime` | Concrete implementations |
+| `@nucleic-se/agentic/kernel` | Kernel plus budgeted conversation assembler |
+| `@nucleic-se/agentic/llm` | Provider and message protocols without the full contract barrel |
+| `@nucleic-se/agentic/tool-runtime` | Executable tool-runtime protocols |
+| `@nucleic-se/agentic/agent-contracts` | Kernel records, events, failures, plans, and executions |
+| `@nucleic-se/agentic/tool-policy` | Policy context and decision protocols |
 | `@nucleic-se/agentic/patterns` | Pre-built agent workflows |
 | `@nucleic-se/agentic/tools` | Tool runtime implementations |
 | `@nucleic-se/agentic/providers` | LLM provider implementations |
@@ -204,10 +209,15 @@ Attach to any node to configure automatic retry:
 interface NodeRetryPolicy {
   maxRetries: number;
   initialDelayMs: number;
+  retryMode: 'idempotent' | 'allow_side_effects';
   backoffMultiplier?: number;  // Default: 2.0
   retryOn?: string[];          // Error.name filter
 }
 ```
+
+`retryMode` is required. Use `idempotent` only when repeating the operation is
+safe. `allow_side_effects` is an explicit acknowledgement that an external
+effect may occur more than once; state snapshot restoration cannot undo I/O.
 
 ---
 
@@ -262,10 +272,10 @@ new OllamaProvider({
 
 ```ts
 interface ILLMProvider {
-  structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>>;
-  turn(request: TurnRequest): Promise<TurnResponse>;
-  streamTurn?(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse>;
-  embed(texts: string[]): Promise<number[][]>;
+  structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>>;
+  turn(request: TurnRequest, options?: ProviderCallOptions): Promise<TurnResponse>;
+  streamTurn?(request: TurnRequest, onDelta: (text: string) => void, options?: ProviderCallOptions): Promise<TurnResponse>;
+  embed(texts: string[], options?: ProviderCallOptions): Promise<number[][]>;
 }
 ```
 
@@ -282,6 +292,10 @@ interface IToolRuntime {
   trustTierFor?(name: string): ToolTrustTier | undefined;
 }
 
+interface IValidatedToolRuntime extends IToolRuntime {
+  validate(name: string, args: Record<string, unknown>): ToolCallValidation;
+}
+
 interface ToolCallResult {
   ok: boolean;
   content: string;
@@ -289,15 +303,16 @@ interface ToolCallResult {
 }
 
 interface ToolCallOptions {
+  callId?:   string                             // stable execution identifier
   signal?:    AbortSignal                        // cancellation token
-  onUpdate?:  (details: unknown) => void         // streaming progress; ignored if unsupported
+  onUpdate?:  (details: unknown) => void         // streaming progress
 }
 ```
 
 | Class | Import | Options |
 |---|---|---|
-| `CompositeToolRuntime` | `@nucleic-se/agentic/tools` | `(runtimes: IToolRuntime[], policy?: IToolPolicy)` |
-| `ToolRuntimeAdapter` | `@nucleic-se/agentic/tools` | `(tools: ITool[], policy?: IToolPolicy)` |
+| `CompositeToolRuntime` | `@nucleic-se/agentic/tools` | `(runtimes: IToolRuntime[])` |
+| `ToolRuntimeAdapter` | `@nucleic-se/agentic/tools` | `(tools: ITool[])` |
 | `FsToolRuntime` | `@nucleic-se/agentic/tools` | `{ root: string }` |
 | `FetchToolRuntime` | `@nucleic-se/agentic/tools` | `{ timeoutMs?: number }` |
 | `ShellToolRuntime` | `@nucleic-se/agentic/tools` | `{ timeoutMs?: number }` |
@@ -495,7 +510,7 @@ interface IAgentContextAssembler {
 ### `AgentContextAssembler`
 
 ```ts
-import { AgentContextAssembler } from '@nucleic-se/agentic/runtime'
+import { AgentContextAssembler } from '@nucleic-se/agentic/kernel'
 
 new AgentContextAssembler(config: ConversationAssemblerConfig)
 ```
@@ -513,31 +528,27 @@ interface ConversationAssemblerConfig {
 ```
 
 Grouped, compress-before-drop assembler. It preserves assistant/tool-result atomicity, applies tool-aware compression before dropping context, protects sticky user messages, and keeps recent groups by default.
+If protected content cannot fit the hard token ceiling, it throws
+`ContextBudgetExceededError` rather than returning oversized context.
 
 See [Context assembly](./concepts/context-assembly.md) for the selection model and custom assembler guidance.
 
-### `AgentRunner`
+### `runAgentKernel`
 
 ```ts
-import { AgentRunner } from '@nucleic-se/agentic/runtime'
+import { runAgentKernel } from '@nucleic-se/agentic/kernel'
 
-new AgentRunner({
-  engine,
-  inputKey: 'input',
-  messagesKey: 'messages',
-  outputKey: 'assistantMessage',
-})
+await runAgentKernel(conversation, {
+  provider,
+  tools,
+  policy,
+  maxTurns: 12,
+}, () => ({ system, messages: conversation }), onEvent, signal)
 ```
 
-Lightweight `IAgent` adapter over `IGraphEngine`.
-
-Known limitations:
-
-- `executions[]` is always empty
-- `tokenUsage` is always zero
-- `outcome` is always `'answered'`
-
-Use it as a convenience bridge for custom graphs, not as a full kernel/agent loop.
+Public-alpha bounded agent loop with whole-batch validation, fail-closed policy,
+provider/tool cancellation, and atomic conversation reconciliation. It requires
+an `IValidatedToolRuntime`. See [Agent kernel](./concepts/kernel.md).
 
 ---
 
@@ -630,8 +641,9 @@ import type {
   StructuredRequest, StructuredResponse, TurnRequest, TurnResponse, StopReason,
 
   // Tools
-  IToolRuntime, ToolCallResult, ToolCallOptions,
-  ITool, ToolResult, ToolTrustTier, IToolRegistry, RetryPolicy, RateLimit,
+  IToolRuntime, IValidatedToolRuntime, ToolCallResult, ToolCallOptions,
+  ToolCallValidation, ITool, ToolResult, ToolTrustTier, IToolRegistry,
+  RuntimeSchema, ValidationResult,
 
   // Tool policy
   IToolPolicy, PolicyContext, PolicyDecision,

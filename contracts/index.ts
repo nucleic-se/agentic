@@ -63,8 +63,10 @@ export type { JsonSchema } from './shared.js';
 // Typed tool system
 export type {
     ToolTrustTier,
-    RetryPolicy,
-    RateLimit,
+    ValidationIssue,
+    ValidationResult,
+    RuntimeSchema,
+    ToolExecutionContext,
     ITool,
     ToolResult,
     IToolRegistry,
@@ -112,13 +114,16 @@ export type {
     TurnRequest,
     TurnResponse,
     StopReason,
+    ProviderCallOptions,
 } from './llm.js';
 
 // Tool runtime
 export type {
     IToolRuntime,
+    IValidatedToolRuntime,
     ToolCallResult,
     ToolCallOptions,
+    ToolCallValidation,
 } from './tool-runtime.js';
 
 // Tool policy
@@ -130,8 +135,6 @@ export type {
 
 // Agent runtime contracts
 export type {
-    ExternalArtifact,
-    AgentState,
     ToolPlan,
     ToolExecutionStatus,
     ToolExecution,
@@ -141,7 +144,6 @@ export type {
     TurnRecord,
     AgentEvent,
     AgentEventSink,
-    IAgent,
     ContextSource,
     CandidateLane,
     ContextScore,
@@ -178,6 +180,7 @@ export type {
     GraphDeadLetter,
     GraphRunLimits,
     GraphEngineConfig,
+    GraphRunOptions,
     GraphStepResult,
     IGraphEngine,
     IGraphBuilder,

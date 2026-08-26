@@ -45,6 +45,8 @@ console.log(state.summary);
 | [State graphs](docs/concepts/graphs.md) | Nodes, edges, routing, parallel fan-out |
 | [LLM providers](docs/concepts/providers.md) | Anthropic, OpenAI-compatible, Ollama |
 | [Tool runtimes](docs/concepts/tools.md) | Filesystem, fetch, shell, search, custom tools |
+| [Agent kernel](docs/concepts/kernel.md) | Bounded turns, batch preflight, policy, cancellation |
+| [Ivy runtime boundary](docs/ivy-runtime-boundary.md) | Ownership and migration contract for Ivy's future Agentic runtime |
 | [Tool policy](docs/concepts/tool-policy.md) | Allow/deny/rewrite/confirm before execution |
 | [Memory](docs/concepts/memory.md) | Working, episodic, semantic, procedural memory |
 | [Prompt engine](docs/concepts/prompts.md) | Priority-weighted composition under a token budget |
@@ -61,8 +63,9 @@ console.log(state.summary);
 Recent additions:
 
 - `IPackRegistry` / `PackRegistry` replace the old capability-registry naming for pack wiring
-- `ToolRuntimeAdapter` bridges `ITool[]` to `IToolRuntime`
-- `AgentRunner` provides a lightweight `IAgent` adapter over `IGraphEngine`
+- `RuntimeSchema<T>` keeps provider JSON Schema and runtime validation together
+- `ToolRuntimeAdapter` validates and dispatches `ITool[]`; policy stays in the kernel
+- `runAgentKernel` provides a public alpha turn loop with whole-batch preflight
 - `AgentContextAssembler` now uses grouped, compress-before-drop conversation pruning
 - `ICapability<TState>` / `ICapabilityLifecycle<TState>` define the minimal Wave 2 capability contract
 - `PlanningCapability`, `BudgetHintCapability`, and `EmptyResponseCapability` ship as concrete default capabilities
@@ -77,6 +80,11 @@ Recent additions:
 | `@nucleic-se/agentic` | Everything re-exported |
 | `@nucleic-se/agentic/contracts` | TypeScript interfaces only — zero runtime code |
 | `@nucleic-se/agentic/runtime` | Concrete implementations |
+| `@nucleic-se/agentic/kernel` | Narrow kernel and budgeted context composition surface |
+| `@nucleic-se/agentic/llm` | Narrow provider/message/tool-definition protocols |
+| `@nucleic-se/agentic/tool-runtime` | Narrow executable tool-runtime protocols |
+| `@nucleic-se/agentic/agent-contracts` | Kernel records, events, plans, and failures |
+| `@nucleic-se/agentic/tool-policy` | Tool policy and confirmation-decision protocols |
 | `@nucleic-se/agentic/patterns` | Pre-built agent workflows |
 | `@nucleic-se/agentic/tools` | Tool runtime implementations |
 | `@nucleic-se/agentic/providers` | LLM provider implementations |

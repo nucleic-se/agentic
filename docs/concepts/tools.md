@@ -1,224 +1,150 @@
-# Tool runtimes
+# Tools
 
-Tools give LLM nodes the ability to act on the world — read files, call APIs, run shell commands, and more.
+Agentic separates three responsibilities:
 
----
+1. An `ITool` describes and executes one typed operation.
+2. `ToolRuntimeAdapter` validates and dispatches already-authorized calls.
+3. The agent kernel evaluates policy and resolves confirmation before dispatch.
 
-## How tools work
+Keeping authorization out of adapters prevents a `confirm` decision from being
+mistaken for permission to execute.
 
-An `IToolRuntime` exposes a list of tool definitions and executes calls:
+## Executable schemas
+
+JSON Schema alone is provider guidance, not a runtime safety boundary. Every
+typed tool therefore carries a library-neutral `RuntimeSchema<T>`:
 
 ```ts
-interface IToolRuntime {
-  tools(): ToolDefinition[];                          // What the LLM can call
-  call(name: string, args: unknown): Promise<ToolCallResult>;  // Execute one call
+interface RuntimeSchema<T> {
+  jsonSchema: JsonSchema;
+  validate(value: unknown): ValidationResult<T>;
 }
 ```
 
-`ToolCallResult` never throws — errors are surfaced as `{ ok: false, content: '...' }` so the LLM can see them and recover:
+`jsonSchema` is sent to the model. `validate` is called before execution and,
+when an output schema exists, after execution. Agentic does not depend on a
+schema library. Applications can implement this interface directly or adapt a
+validator outside Agentic.
 
 ```ts
-interface ToolCallResult {
-  ok: boolean;         // false on error
-  content: string;     // Text shown to the LLM
-  data?: unknown;      // Structured output for programmatic use
-}
-```
+import type { ITool, RuntimeSchema } from '@nucleic-se/agentic/contracts';
 
----
+type WeatherInput = { city: string };
+type WeatherOutput = { temp: number };
 
-## Built-in runtimes
-
-### FsToolRuntime
-
-File system operations, scoped to a root directory.
-
-```ts
-import { FsToolRuntime } from '@nucleic-se/agentic/tools';
-
-const fs = new FsToolRuntime({ root: '/workspace' });
-```
-
-| Tool | Args | Description |
-|---|---|---|
-| `fs_read` | `{ path }` | Read file contents (256 KB limit) |
-| `fs_write` | `{ path, content }` | Write file (creates directories as needed) |
-| `fs_delete` | `{ path }` | Delete file or directory |
-| `fs_list` | `{ path?, pattern? }` | List directory contents (200 items max) |
-| `fs_move` | `{ from, to }` | Move or rename a file |
-
-All paths are relative to `root`. Paths that escape `root` are rejected.
-
-### FetchToolRuntime
-
-HTTP requests with retry and timeout:
-
-```ts
-import { FetchToolRuntime } from '@nucleic-se/agentic/tools';
-
-const fetch = new FetchToolRuntime({ timeoutMs: 10_000 });
-```
-
-| Tool | Args | Description |
-|---|---|---|
-| `fetch_json` | `{ url, method?, headers?, body? }` | Fetch and parse JSON |
-| `fetch_text` | `{ url, method?, headers?, body? }` | Fetch raw text |
-| `fetch_head` | `{ url }` | Fetch headers only |
-
-### ShellToolRuntime
-
-Run shell commands with a timeout:
-
-```ts
-import { ShellToolRuntime } from '@nucleic-se/agentic/tools';
-
-const shell = new ShellToolRuntime({ timeoutMs: 30_000 });
-```
-
-| Tool | Args | Description |
-|---|---|---|
-| `shell_exec` | `{ command, cwd? }` | Run a shell command, capture stdout/stderr |
-
-Output is capped to prevent overwhelming the LLM context.
-
-### SearchToolRuntime
-
-Search files by regex or glob:
-
-```ts
-import { SearchToolRuntime } from '@nucleic-se/agentic/tools';
-
-const search = new SearchToolRuntime({ root: process.cwd() });
-```
-
-| Tool | Args | Description |
-|---|---|---|
-| `search_files` | `{ pattern, glob?, maxResults? }` | Regex search across a directory tree |
-
-### WebToolRuntime
-
-Fetch web pages and convert to markdown:
-
-```ts
-import { WebToolRuntime } from '@nucleic-se/agentic/tools';
-
-const web = new WebToolRuntime();
-```
-
-| Tool | Args | Description |
-|---|---|---|
-| `web_fetch` | `{ url }` | Fetch URL and convert HTML to markdown |
-| `web_metadata` | `{ url }` | Return title, description, and open graph tags |
-
-### SkillToolRuntime
-
-Invoke Claude Code skills (only useful inside Claude Code environments):
-
-```ts
-import { SkillToolRuntime } from '@nucleic-se/agentic/tools';
-
-const skills = new SkillToolRuntime();
-```
-
----
-
-## Combining runtimes
-
-`CompositeToolRuntime` merges multiple runtimes into one:
-
-```ts
-import { CompositeToolRuntime, FsToolRuntime, FetchToolRuntime, ShellToolRuntime }
-  from '@nucleic-se/agentic/tools';
-
-const tools = new CompositeToolRuntime([
-  new FsToolRuntime({ root: process.cwd() }),
-  new FetchToolRuntime({ timeoutMs: 10_000 }),
-  new ShellToolRuntime({ timeoutMs: 30_000 }),
-]);
-```
-
-Use the combined runtime anywhere you need one dispatch surface:
-
-```ts
-const result = await tools.call('web_fetch', {
-  url: 'https://example.com',
-});
-```
-
----
-
-## Building a custom tool runtime
-
-Implement `IToolRuntime` for any capability:
-
-```ts
-import type { IToolRuntime, ToolDefinition, ToolCallResult } from '@nucleic-se/agentic/contracts';
-
-class DatabaseRuntime implements IToolRuntime {
-  tools(): ToolDefinition[] {
-    return [{
-      name: 'db_query',
-      description: 'Run a read-only SQL query.',
-      inputSchema: {
-        type: 'object',
-        properties: { sql: { type: 'string' } },
-        required: ['sql'],
-      },
-    }];
-  }
-
-  async call(name: string, args: unknown): Promise<ToolCallResult> {
-    if (name !== 'db_query') return { ok: false, content: `Unknown tool: ${name}` };
-    try {
-      const { sql } = args as { sql: string };
-      const rows = await db.query(sql);
-      return { ok: true, content: JSON.stringify(rows, null, 2), data: rows };
-    } catch (err) {
-      return { ok: false, content: (err as Error).message };
+const weatherInput: RuntimeSchema<WeatherInput> = {
+  jsonSchema: {
+    type: 'object',
+    properties: { city: { type: 'string' } },
+    required: ['city'],
+    additionalProperties: false,
+  },
+  validate(value) {
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      typeof (value as Record<string, unknown>).city === 'string'
+    ) {
+      return { ok: true, value: value as WeatherInput };
     }
-  }
-}
-```
+    return { ok: false, issues: [{ path: ['city'], message: 'must be a string' }] };
+  },
+};
 
----
+const weatherOutput: RuntimeSchema<WeatherOutput> = {
+  jsonSchema: {
+    type: 'object',
+    properties: { temp: { type: 'number' } },
+    required: ['temp'],
+    additionalProperties: false,
+  },
+  validate(value) {
+    if (
+      typeof value === 'object' &&
+      value !== null &&
+      typeof (value as Record<string, unknown>).temp === 'number'
+    ) {
+      return { ok: true, value: value as WeatherOutput };
+    }
+    return { ok: false, issues: [{ path: ['temp'], message: 'must be a number' }] };
+  },
+};
 
-## Typed tools (ITool)
-
-For tools with validated inputs and outputs, implement `ITool<TInput, TOutput>`:
-
-```ts
-import type { ITool } from '@nucleic-se/agentic/contracts';
-
-const myTool: ITool<{ city: string }, { temp: number }> = {
+const weather: ITool<WeatherInput, WeatherOutput> = {
   name: 'get_weather',
-  description: 'Returns current temperature for a city.',
-  inputSchema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
-  outputSchema: { type: 'object', properties: { temp: { type: 'number' } }, required: ['temp'] },
+  description: 'Return the current temperature for a city.',
+  input: weatherInput,
+  output: weatherOutput,
   trustTier: 'standard',
-  timeoutMs: 5000,
-  async execute({ city }) {
-    const data = await fetchWeather(city);
+  timeoutMs: 5_000,
+  async execute({ city }, context) {
+    const data = await fetchWeather(city, { signal: context.signal });
     return { temp: data.temperature };
   },
 };
 ```
 
-Register typed tools in a `ToolRegistry`:
+## Validated dispatch
+
+Wrap typed tools in `ToolRuntimeAdapter`:
 
 ```ts
-import { ToolRegistry } from '@nucleic-se/agentic/runtime';
+import { ToolRuntimeAdapter } from '@nucleic-se/agentic/tools';
 
-const registry = new ToolRegistry();
-registry.register(myTool);
-
-const tool = registry.resolve('get_weather');
-const result = await tool.execute({ city: 'Paris' });
+const tools = new ToolRuntimeAdapter([weather]);
+const result = await tools.call(
+  'get_weather',
+  { city: 'Paris' },
+  { callId: 'call-1', signal: controller.signal },
+);
 ```
 
-### Trust tiers
+The adapter:
 
-| Tier | Use |
+- rejects duplicate and blank tool names at construction;
+- validates input before execution;
+- passes cancellation and progress reporting to the tool;
+- enforces `timeoutMs` and signals the tool when it expires;
+- validates declared output schemas;
+- normalizes failures into `ToolCallResult` instead of throwing.
+
+Tools must cooperate with `context.signal`. A runtime can stop waiting at a
+deadline, but it cannot undo external side effects from a tool that ignores
+cancellation.
+
+## Combining runtimes
+
+`CompositeToolRuntime` merges dispatch surfaces, rejects name collisions, and
+forwards all execution options to the selected child runtime:
+
+```ts
+const tools = new CompositeToolRuntime([
+  domainTools,
+  readOnlyTools,
+]);
+```
+
+The composite does not evaluate policy. Policy is evaluated once by the kernel.
+
+## Built-in host runtimes
+
+Agentic includes filesystem, shell, fetch, search, web, and skill runtimes for
+experimentation. They provide powerful host access and are not a security
+sandbox. In particular:
+
+- shell commands execute with host-process authority;
+- network tools can reach URLs visible to the host;
+- lexical path checks are not a substitute for OS sandboxing.
+
+Production applications should expose narrow domain tools or place host tools
+behind an external sandbox and explicit policy.
+
+## Trust tiers
+
+| Tier | Meaning |
 |---|---|
-| `'trusted'` | Internal tools with no sandboxing needed |
-| `'standard'` | Default — normal validation and limits |
-| `'untrusted'` | External or user-supplied tools — apply extra caution |
+| `trusted` | Internal deterministic operation |
+| `standard` | Caller-provided operation with known behavior |
+| `untrusted` | External service or untrusted content boundary |
+
+Trust tiers are policy input. They do not grant authority by themselves.

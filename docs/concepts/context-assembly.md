@@ -105,7 +105,7 @@ await provider.turn({
 ```
 
 ```ts
-import { AgentContextAssembler } from '@nucleic-se/agentic/runtime'
+import { AgentContextAssembler } from '@nucleic-se/agentic/kernel'
 ```
 
 **`AgentContextAssembler`** — grouped, two-pass conversation assembler. It treats an assistant message plus its immediately following matching `tool_result` messages as an atomic group, tries compression before dropping, preserves sticky user messages, and protects the most recent groups from trimming.
@@ -137,6 +137,12 @@ Default behavior:
 3. Try tool-aware compression on low-priority groups first
 4. Drop whole groups only if still over budget
 5. Never drop messages with `sticky === true`
+
+The budget is a hard ceiling. If the system prompt, sticky groups, and protected
+recent groups cannot fit, `assemble()` throws `ContextBudgetExceededError`
+instead of returning an oversized request. Callers should treat that as a
+configuration or compaction failure and must not call the provider with the
+rejected context.
 
 ---
 

@@ -35,12 +35,14 @@ export interface ToolCallResult {
     /** Structured data for programmatic access. Optional. */
     data?:    unknown
     /** Structured failure classification when ok is false. */
-    errorKind?: 'policy' | 'runtime' | 'timeout' | 'unknown'
+    errorKind?: 'validation' | 'policy' | 'runtime' | 'timeout' | 'cancelled' | 'unknown'
 }
 
 // ── Options ───────────────────────────────────────────────────────────────────
 
 export interface ToolCallOptions {
+    /** Stable call identifier used in execution records and tool context. */
+    callId?: string
     /**
      * Cancellation signal. If fired before the tool returns, the runtime
      * should abort in-progress work and return ok: false with an appropriate
@@ -55,6 +57,10 @@ export interface ToolCallOptions {
     onUpdate?: (details: unknown) => void
 }
 
+export type ToolCallValidation =
+    | { ok: true; args: Record<string, unknown> }
+    | { ok: false; result: ToolCallResult }
+
 // ── Runtime ───────────────────────────────────────────────────────────────────
 
 export interface IToolRuntime {
@@ -67,7 +73,8 @@ export interface IToolRuntime {
     /**
      * Execute a named tool call. Never throws.
      * Unknown tool name → ok: false, content: 'Unknown tool: <name>'.
-     * Options are additive: runtimes that do not support signal or onUpdate ignore them.
+     * Options are additive. Runtimes that advertise cancellation should honour it;
+     * adapters pass the signal and progress callback into each tool.
      */
     call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult>
 
@@ -78,4 +85,12 @@ export interface IToolRuntime {
      * to IToolPolicy.evaluate(). If absent or returning undefined, callers default to 'standard'.
      */
     trustTierFor?(name: string): ToolTrustTier | undefined
+}
+
+/**
+ * Runtime with a side-effect-free preflight boundary. Agent kernels use
+ * this contract to validate a complete batch before executing its first call.
+ */
+export interface IValidatedToolRuntime extends IToolRuntime {
+    validate(name: string, args: Record<string, unknown>): ToolCallValidation
 }

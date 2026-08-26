@@ -26,6 +26,7 @@ import type {
     GraphDeadLetter,
     GraphCheckpoint,
     GraphEngineConfig,
+    GraphRunOptions,
     GraphRunLimits,
     GraphEnd,
     GraphState,
@@ -39,6 +40,50 @@ const noopTracer: ITracer = {
     trace() {},
     recent() { return []; },
 };
+
+const neverAbortedSignal = new AbortController().signal;
+
+function abortReason(signal: AbortSignal): Error {
+    return signal.reason instanceof Error
+        ? signal.reason
+        : new DOMException('Graph execution aborted', 'AbortError');
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+    if (signal.aborted) throw abortReason(signal);
+}
+
+function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) return Promise.reject(abortReason(signal));
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(abortReason(signal));
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(
+            value => { signal.removeEventListener('abort', onAbort); resolve(value); },
+            error => { signal.removeEventListener('abort', onAbort); reject(error); },
+        );
+    });
+}
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(abortReason(signal));
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(abortReason(signal));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
+function replaceState<TState extends GraphState>(target: TState, source: TState): void {
+    for (const key of Object.keys(target)) delete target[key];
+    Object.assign(target, source);
+}
 
 /** Returns true when `tracer` also implements the span-tracing extension. */
 function isSpanTracer(tracer: ITracer): tracer is ISpanTracer {
@@ -77,6 +122,23 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         this.onBeforeNode = config?.onBeforeNode;
         this.onAfterNode = config?.onAfterNode;
 
+        for (const node of graph.getNodes()) {
+            const retry = node.retryPolicy;
+            if (!retry) continue;
+            if (!Number.isInteger(retry.maxRetries) || retry.maxRetries < 0) {
+                throw new Error(`Node '${node.id}' retryPolicy.maxRetries must be a non-negative integer.`);
+            }
+            if (!Number.isFinite(retry.initialDelayMs) || retry.initialDelayMs < 0) {
+                throw new Error(`Node '${node.id}' retryPolicy.initialDelayMs must be a non-negative finite number.`);
+            }
+            if (retry.retryMode !== 'idempotent' && retry.retryMode !== 'allow_side_effects') {
+                throw new Error(
+                    `Node '${node.id}' retryPolicy.retryMode must explicitly be ` +
+                    "'idempotent' or 'allow_side_effects'.",
+                );
+            }
+        }
+
         if (this.maxSteps < 1) {
             throw new Error(`StateGraphEngine: maxSteps must be ≥ 1, got ${this.maxSteps}.`);
         }
@@ -94,7 +156,14 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
      * if isolation is needed. A deep-clone snapshot is still taken for
      * the returned GraphStepResult and DLQ.
      */
-    async step(state: TState, nodeId: string, stepCount: number = 0): Promise<GraphStepResult<TState>> {
+    async step(
+        state: TState,
+        nodeId: string,
+        stepCount: number = 0,
+        options?: GraphRunOptions,
+    ): Promise<GraphStepResult<TState>> {
+        const signal = options?.signal ?? neverAbortedSignal;
+        throwIfAborted(signal);
         if (stepCount >= this.maxSteps) {
             throw new Error(
                 `Max steps (${this.maxSteps}) exceeded at node '${nodeId}'. Possible infinite loop.`,
@@ -117,6 +186,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             stepCount,
             tracer: this.tracer,
             correlationId: this.correlationId,
+            signal,
             reportToolCall: (count = 1) => { this._toolCallCount += count; },
             reportTokens: (count: number) => { this._tokenCount += count; },
         });
@@ -171,7 +241,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         // Resolve next node (router errors are caught separately)
         let nextNodeId: string | GraphEnd;
         try {
-            nextNodeId = await this.resolveNext(nodeId, state);
+            nextNodeId = await this.resolveNext(nodeId, state, signal);
         } catch (error) {
             this.recordError(nodeId, error as Error, structuredClone(state), stepCount);
             throw error;
@@ -185,7 +255,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         });
     }
 
-    async run(initialState: TState): Promise<GraphRunResult<TState>> {
+    async run(initialState: TState, options?: GraphRunOptions): Promise<GraphRunResult<TState>> {
         const entryId = this.graph.getEntryNodeId();
         if (!entryId) {
             throw new Error('No entry node set. Call setEntry() before running.');
@@ -217,6 +287,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
 
         try {
             while (currentNodeId !== END) {
+                throwIfAborted(options?.signal ?? neverAbortedSignal);
                 // Enforce wall-clock limit
                 if (this.limits?.maxTotalMs != null) {
                     const elapsed = Date.now() - startTime;
@@ -244,7 +315,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                     );
                 }
 
-                const result = await this.step(state, currentNodeId as string, steps);
+                const result = await this.step(state, currentNodeId as string, steps, options);
                 snapshots.push(result.snapshot);
                 currentNodeId = result.nextNodeId;
                 steps++;
@@ -288,7 +359,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
      * Resume execution from a previously captured checkpoint.
      * Continues the graph run from the checkpoint's current node.
      */
-    async resume(cp: GraphCheckpoint<TState>): Promise<GraphRunResult<TState>> {
+    async resume(cp: GraphCheckpoint<TState>, options?: GraphRunOptions): Promise<GraphRunResult<TState>> {
         const node = this.graph.getNode(cp.currentNodeId);
         if (!node) {
             throw new Error(`Resume failed: node '${cp.currentNodeId}' not found in graph.`);
@@ -310,6 +381,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         this._runStartTime = startTime;
 
         while (currentNodeId !== END) {
+            throwIfAborted(options?.signal ?? neverAbortedSignal);
             if (this.limits?.maxTotalMs != null) {
                 const elapsed = Date.now() - startTime;
                 if (elapsed >= this.limits.maxTotalMs) {
@@ -334,7 +406,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                 );
             }
 
-            const result = await this.step(state, currentNodeId as string, steps);
+            const result = await this.step(state, currentNodeId as string, steps, options);
             snapshots.push(result.snapshot);
             currentNodeId = result.nextNodeId;
             steps++;
@@ -353,7 +425,12 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
      * For parallel edges, fans out to all targets concurrently, merges
      * results into state, then returns the 'then' node.
      */
-    private async resolveNext(currentNodeId: string, state: TState): Promise<string | GraphEnd> {
+    private async resolveNext(
+        currentNodeId: string,
+        state: TState,
+        signal: AbortSignal,
+    ): Promise<string | GraphEnd> {
+        throwIfAborted(signal);
         // Parallel edge: fan-out, merge, continue
         const parallel = this.graph.getParallelEdge(currentNodeId);
         if (parallel) {
@@ -369,6 +446,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                         stepCount: -1, // parallel branches don't count as top-level steps
                         tracer: this.tracer,
                         correlationId: this.correlationId,
+                        signal,
                         reportToolCall: (count = 1) => { this._toolCallCount += count; },
                         reportTokens: (count: number) => { this._tokenCount += count; },
                     });
@@ -388,7 +466,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
 
         const conditional = this.graph.getConditionalEdge(currentNodeId);
         if (conditional) {
-            const next = await conditional(state);
+            const next = await raceWithSignal(Promise.resolve(conditional(state)), signal);
             if (typeof next !== 'string') {
                 throw new Error(
                     `Router for node '${currentNodeId}' returned ${typeof next} instead of a string.`,
@@ -424,33 +502,32 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         let lastError: Error | undefined;
 
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            // Restore state from pre-snapshot on retry to undo partial mutations.
-            if (attempt > 0) {
-                Object.assign(state, structuredClone(preSnapshot));
-            }
+            throwIfAborted(context.signal);
+            // Each attempt gets isolated state. A timed-out or cancelled node
+            // cannot mutate the committed graph state after the engine moves on.
+            const attemptState = structuredClone(preSnapshot);
+            const timeoutController = new AbortController();
+            const timeoutId = node.timeoutMs != null && node.timeoutMs > 0
+                ? setTimeout(() => timeoutController.abort(new Error(
+                    `Node '${node.id}' timed out after ${node.timeoutMs}ms`,
+                )), node.timeoutMs)
+                : undefined;
+            const attemptSignal = timeoutId
+                ? AbortSignal.any([context.signal, timeoutController.signal])
+                : context.signal;
+            const attemptContext: GraphContext<TState> = Object.freeze({
+                ...context,
+                signal: attemptSignal,
+            });
 
             try {
-                if (node.timeoutMs != null && node.timeoutMs > 0) {
-                    let timeoutId: NodeJS.Timeout | undefined;
-                    try {
-                        await Promise.race([
-                            node.process(state, context),
-                            new Promise<never>((_, reject) => {
-                                timeoutId = setTimeout(
-                                    () => reject(new Error(`Node '${node.id}' timed out after ${node.timeoutMs}ms`)),
-                                    node.timeoutMs,
-                                );
-                            }),
-                        ]);
-                    } finally {
-                        if (timeoutId) clearTimeout(timeoutId);
-                    }
-                } else {
-                    await node.process(state, context);
-                }
+                await raceWithSignal(node.process(attemptState, attemptContext), attemptSignal);
+                replaceState(state, attemptState);
                 return; // success
             } catch (error) {
                 lastError = error as Error;
+
+                if (context.signal.aborted) throw abortReason(context.signal);
 
                 // Stop retrying if this error type is not in the allow-list.
                 if (retryPolicy?.retryOn && retryPolicy.retryOn.length > 0) {
@@ -463,8 +540,10 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
                 if (attempt < maxAttempts - 1) {
                     const multiplier = retryPolicy?.backoffMultiplier ?? 2.0;
                     const delay = (retryPolicy?.initialDelayMs ?? 100) * Math.pow(multiplier, attempt);
-                    await new Promise(r => setTimeout(r, delay));
+                    await abortableDelay(delay, context.signal);
                 }
+            } finally {
+                if (timeoutId) clearTimeout(timeoutId);
             }
         }
 

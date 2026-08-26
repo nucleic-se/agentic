@@ -115,6 +115,13 @@ export interface TurnResponse {
     usage:      TokenUsage
 }
 
+/** Cancellation and deadline shared by every provider operation. */
+export interface ProviderCallOptions {
+    signal?: AbortSignal
+    /** Absolute Unix timestamp in milliseconds. */
+    deadline?: number
+}
+
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export interface ILLMProvider {
@@ -124,26 +131,26 @@ export interface ILLMProvider {
      * and returns the parsed result. Schema enforcement depends on provider
      * capabilities; implementations may not perform client-side validation.
      */
-    structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>>
+    structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>>
 
     /**
      * One turn of an agentic conversation. The model may return text,
      * tool calls, or both. The caller is responsible for executing tool
      * calls (via IToolRuntime) and looping until stopReason = 'end_turn'.
      */
-    turn(request: TurnRequest): Promise<TurnResponse>
+    turn(request: TurnRequest, options?: ProviderCallOptions): Promise<TurnResponse>
 
     /**
      * Streaming variant of turn(). Calls onDelta with text chunks as they
      * arrive, then resolves with the complete TurnResponse. Optional —
      * callers should fall back to turn() when not implemented.
      */
-    streamTurn?(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse>
+    streamTurn?(request: TurnRequest, onDelta: (text: string) => void, options?: ProviderCallOptions): Promise<TurnResponse>
 
     /**
      * Embed one or more texts. Returns one vector per input.
      */
-    embed(texts: string[]): Promise<number[][]>
+    embed(texts: string[], options?: ProviderCallOptions): Promise<number[][]>
 }
 
 // ── Model router ──────────────────────────────────────────────────────────────

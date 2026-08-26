@@ -16,9 +16,8 @@ export { ToolPromptRenderer } from './ToolPromptRenderer.js';
 export { ContextAssembler } from './ContextAssembler.js';
 export { PassThroughContextAssembler } from './PassThroughContextAssembler.js';
 export { AgentContextAssembler } from './AgentContextAssembler.js';
+export { ContextBudgetExceededError } from './AgentContextAssembler.js';
 export type { ConversationAssemblerConfig } from './AgentContextAssembler.js';
-export { AgentRunner } from './AgentRunner.js';
-export type { AgentRunnerConfig } from './AgentRunner.js';
 export { PassThroughToolPolicy, TrustTierToolPolicy } from './ToolPolicy.js';
 export { AIPromptService, AIPromptBuilder } from './AIPromptService.js';
 export { AIPipeline } from './AIPipeline.js';
@@ -30,3 +29,5 @@ export type { LlmGraphNodeConfig, SubGraphNodeConfig, AgentLlmNodeConfig, AgentL
 export { PlanningCapability, BudgetHintCapability, EmptyResponseCapability } from './capabilities/index.js';
 export type { PlanningCapabilityConfig, BudgetHintCapabilityConfig, BudgetHintThreshold, EmptyResponseCapabilityConfig } from './capabilities/index.js';
 export { HeuristicTokenCounter } from './HeuristicTokenCounter.js';
+export { runAgentKernel } from './AgentKernel.js';
+export type { AgentKernelConfig, AgentKernelContext, BeforeKernelToolCallResult } from './AgentKernel.js';

@@ -117,8 +117,23 @@ Purpose-built node for agentic turn interactions. Unlike `LlmGraphNode` (prompt�
 
 ```ts
 import { AgentLlmNode } from '@nucleic-se/agentic/runtime';
+import type {
+  AgentLlmEvent,
+  AssistantMessage,
+  Message,
+  ToolDefinition,
+} from '@nucleic-se/agentic';
 
-const llmNode = new AgentLlmNode<AgentState>({
+type ExampleAgentState = {
+  systemPrompt: string;
+  messages: Message[];
+  lastResponse?: AssistantMessage;
+  toolDefinitions: ToolDefinition[];
+  events: AgentLlmEvent[];
+  fallbackActive: boolean;
+};
+
+const llmNode = new AgentLlmNode<ExampleAgentState>({
   id: 'llm_call',
   provider: (state) => router.select(state.fallbackActive ? 'balanced' : 'capable'),
   systemPromptKey: 'systemPrompt',
@@ -138,6 +153,22 @@ Key features:
 - **Dynamic provider** — pass a function to switch model tiers mid-run (e.g. error cascade fallback)
 - **Error cascade** — `onError` callback returns `'retry'`, `'continue'`, or `'fail'`; on retry, provider is re-resolved from state
 - **Event emission** — emits `turn_start`, `turn_end`, `message_delta` events to a state key
+
+## Cancellation and retries
+
+Pass an `AbortSignal` per execution:
+
+```ts
+await engine.run(initialState, { signal: controller.signal });
+```
+
+The signal reaches every node as `context.signal`, interrupts retry backoff,
+and is combined with node timeouts. Each attempt mutates an isolated state
+clone, so a timed-out node cannot later corrupt committed graph state.
+
+Retry policies require `retryMode: 'idempotent' | 'allow_side_effects'`.
+State can be isolated, but external I/O cannot be rolled back. The second mode
+therefore acknowledges possible duplicate side effects rather than making them safe.
 - **Streaming** — uses `provider.streamTurn()` when available and `eventsKey` is set
 
 ---

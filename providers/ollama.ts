@@ -3,7 +3,7 @@
  */
 
 import { OpenAICompatibleProvider, toOpenAIMessages, type OpenAICompatibleConfig } from './openai-compatible.js'
-import type { StructuredRequest, StructuredResponse } from '../contracts/llm.js'
+import type { ProviderCallOptions, StructuredRequest, StructuredResponse } from '../contracts/llm.js'
 import type { RetryConfig } from './resilient-fetch.js'
 
 export type OllamaReasoningEffort = 'none' | 'low' | 'medium' | 'high'
@@ -41,6 +41,8 @@ export interface OllamaConfig {
     extraBody?: Record<string, unknown>
     /** Retry configuration for transient HTTP errors (429, 502, 503, 529). */
     retry?: RetryConfig
+    /** Opt in to heuristic text-to-tool recovery for incompatible models. */
+    recoverTextToolCalls?: boolean
 }
 
 export const OLLAMA_LOCAL_API_BASE = 'http://localhost:11434/v1'
@@ -76,6 +78,7 @@ export class OllamaProvider extends OpenAICompatibleProvider {
             baseUrl:        config.baseUrl ?? process.env['AGENTIC_OLLAMA_BASE_URL'] ?? OLLAMA_LOCAL_API_BASE,
             providerName:   'OllamaProvider',
             retry:          config.retry,
+            recoverTextToolCalls: config.recoverTextToolCalls,
             ...(Object.keys(extraBody).length > 0 ? { extraBody } : {}),
         }
         super(baseConfig)
@@ -86,7 +89,7 @@ export class OllamaProvider extends OpenAICompatibleProvider {
      * Ollama Cloud doesn't reliably support json_schema — many models ignore it
      * and return plain text. json_object works with schema in the prompt.
      */
-    async structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>> {
+    async structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>> {
         const schemaHint = `You MUST respond with ONLY a JSON object (no markdown, no code fences) matching this schema:\n${JSON.stringify(request.schema)}`
         // Use toOpenAIMessages to correctly map library roles (e.g. tool_result → tool)
         // before appending the schema hint as a final user message.
@@ -104,7 +107,7 @@ export class OllamaProvider extends OpenAICompatibleProvider {
             stream:   false,
             response_format: { type: 'json_object' },
             ...this.extraBody,
-        })
+        }, options)
 
         const content = res.choices?.[0]?.message?.content
         if (!content) throw new Error('OllamaProvider: structured response was empty')

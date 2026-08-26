@@ -1,9 +1,8 @@
 /**
  * Typed tool system contracts.
  *
- * Structured tool definitions with schemas, trust tiers, provenance,
- * rate limits, and retry policies. Replaces stringly-typed ToolFunction
- * for production use.
+ * Structured tool definitions with executable schemas, trust tiers, and
+ * provenance. Replaces stringly-typed ToolFunction where runtime validation is required.
  *
  * @module contracts
  */
@@ -20,18 +19,34 @@ export type ToolTrustTier =
     /** External APIs, web fetch, anything from the internet. */
     | 'untrusted';
 
-// ── Policies ───────────────────────────────────────────────────
+// ── Runtime schemas ────────────────────────────────────────────
 
-export interface RetryPolicy {
-    maxRetries: number;
-    initialDelayMs: number;
-    /** Multiplier applied to delay after each retry. Default: 2.0. */
-    backoffMultiplier?: number;
+export interface ValidationIssue {
+    readonly message: string;
+    readonly path?: ReadonlyArray<string | number>;
 }
 
-export interface RateLimit {
-    maxCallsPerTurn?: number;
-    maxCallsPerSession?: number;
+export type ValidationResult<T> =
+    | { readonly ok: true; readonly value: T }
+    | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
+
+/**
+ * A library-neutral executable schema.
+ *
+ * `jsonSchema` is sent to the model. `validate` is the authority at the
+ * runtime boundary. Agentic deliberately does not depend on a schema library;
+ * callers may implement this contract directly or adapt their validator of
+ * choice outside Agentic.
+ */
+export interface RuntimeSchema<T> {
+    readonly jsonSchema: JsonSchema;
+    validate(value: unknown): ValidationResult<T>;
+}
+
+export interface ToolExecutionContext {
+    readonly callId: string;
+    readonly signal: AbortSignal;
+    readonly onUpdate?: (details: unknown) => void;
 }
 
 // ── Tool ───────────────────────────────────────────────────────
@@ -48,13 +63,11 @@ export interface RateLimit {
 export interface ITool<TInput = unknown, TOutput = unknown> {
     readonly name: string;
     readonly description: string;
-    readonly inputSchema: JsonSchema;
-    readonly outputSchema?: JsonSchema;
+    readonly input: RuntimeSchema<TInput>;
+    readonly output?: RuntimeSchema<TOutput>;
     readonly trustTier: ToolTrustTier;
     readonly timeoutMs?: number;
-    readonly retryPolicy?: RetryPolicy;
-    readonly rateLimit?: RateLimit;
-    execute(input: TInput): Promise<TOutput>;
+    execute(input: TInput, context: ToolExecutionContext): Promise<TOutput>;
 }
 
 // ── Result ─────────────────────────────────────────────────────

@@ -97,12 +97,12 @@ export class SubGraphNode<
         this.config = config;
     }
 
-    async process(state: TParent, _context: GraphContext<TParent>): Promise<void> {
+    async process(state: TParent, context: GraphContext<TParent>): Promise<void> {
         const engine = typeof this.config.engine === 'function'
             ? this.config.engine(state)
             : this.config.engine;
         const subInitial = this.config.input(state);
-        const result = await engine.run(subInitial);
+        const result = await engine.run(subInitial, { signal: context.signal });
         this.lastRunResult = result;
         this.config.output(result.state, state);
     }

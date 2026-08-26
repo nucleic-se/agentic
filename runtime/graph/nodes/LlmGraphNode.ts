@@ -79,7 +79,7 @@ export class LlmGraphNode<TState extends GraphState = GraphState>
         this.config = config;
     }
 
-    async process(state: TState, _context: GraphContext<TState>): Promise<void> {
+    async process(state: TState, context: GraphContext<TState>): Promise<void> {
         const { instructions, text, schema: promptSchema } = this.config.prompt(state);
         const schema = promptSchema ?? this.config.schema;
 
@@ -89,13 +89,13 @@ export class LlmGraphNode<TState extends GraphState = GraphState>
                 system: instructions,
                 messages: [{ role: 'user', content: text }],
                 schema,
-            });
+            }, { signal: context.signal });
             value = response.value;
         } else {
             const response = await this.config.provider.turn({
                 system: instructions,
                 messages: [{ role: 'user', content: text }],
-            });
+            }, { signal: context.signal });
             value = response.message.content;
         }
 

@@ -23,7 +23,7 @@ import {
     ToolPromptRenderer,
     ContextAssembler,
     AgentContextAssembler,
-    AgentRunner,
+    ContextBudgetExceededError,
     ToolRuntimeAdapter,
     CompositeToolRuntime,
     PlanningCapability,
@@ -49,6 +49,7 @@ import type {
     PolicyDecision,
     TurnRecord,
     JsonSchema,
+    RuntimeSchema,
 } from './index.js';
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -67,6 +68,13 @@ function section(id: string, priority: number, weight: number, tokens: number, o
 
 function manifest(id: string, provides: string[] = [], requires: string[] = []): IPackManifest {
     return { id, version: '1.0.0', provides, requires, migrations: [] };
+}
+
+function accepts<T>(jsonSchema: JsonSchema = { type: 'object' }): RuntimeSchema<T> {
+    return {
+        jsonSchema,
+        validate: (value): ReturnType<RuntimeSchema<T>['validate']> => ({ ok: true, value: value as T }),
+    };
 }
 
 const fakeLLM: ILLMProvider = {
@@ -493,7 +501,7 @@ describe('ToolRegistry', () => {
         return {
             name,
             description: `tool ${name}`,
-            inputSchema: { type: 'object' },
+            input: accepts(),
             trustTier: tier,
             execute: async (input: unknown) => input,
         };
@@ -541,12 +549,15 @@ describe('ToolRegistry', () => {
         const tool: ITool<{ x: number }, number> = {
             name: 'double',
             description: 'doubles input',
-            inputSchema: { type: 'object' },
+            input: accepts<{ x: number }>(),
             trustTier: 'trusted',
             execute: async ({ x }) => x * 2,
         };
         reg.register(tool as ITool);
-        const result = await reg.resolve('double')!.execute({ x: 5 });
+        const result = await reg.resolve('double')!.execute({ x: 5 }, {
+            callId: 'test-call',
+            signal: new AbortController().signal,
+        });
         expect(result).toBe(10);
     });
 });
@@ -935,7 +946,7 @@ describe('ToolRuntimeAdapter', () => {
             name,
             description: `tool ${name}`,
             trustTier: tier,
-            inputSchema: { type: 'object', properties: {} },
+            input: accepts({ type: 'object', properties: {} }),
             execute: async (_args: Record<string, unknown>) => value,
         };
     }
@@ -975,19 +986,56 @@ describe('ToolRuntimeAdapter', () => {
         expect(adapter.trustTierFor('missing')).toBeUndefined();
     });
 
-    it('applies policy deny before executing', async () => {
-        const policy: IToolPolicy = {
-            evaluate: async (_ctx: PolicyContext): Promise<PolicyDecision> => ({ kind: 'deny', reason: 'blocked' }),
-        };
+    it('rejects invalid input before executing', async () => {
         const executed = vi.fn();
         const tool = makeTool('t', 'ok');
         tool.execute = executed;
-        const adapter = new ToolRuntimeAdapter([tool], policy);
+        tool.input = {
+            jsonSchema: { type: 'object', required: ['value'] },
+            validate: () => ({ ok: false, issues: [{ path: ['value'], message: 'is required' }] }),
+        };
+        const adapter = new ToolRuntimeAdapter([tool]);
         const result = await adapter.call('t', {});
         expect(result.ok).toBe(false);
-        expect(result.content).toBe('blocked');
-        expect(result.errorKind).toBe('policy');
+        expect(result.content).toContain('value: is required');
+        expect(result.errorKind).toBe('validation');
         expect(executed).not.toHaveBeenCalled();
+    });
+
+    it('rejects invalid output', async () => {
+        const tool = makeTool('t', 'not-a-number');
+        tool.output = {
+            jsonSchema: { type: 'number' },
+            validate: () => ({ ok: false, issues: [{ message: 'must be a number' }] }),
+        };
+        const result = await new ToolRuntimeAdapter([tool]).call('t', {});
+        expect(result.ok).toBe(false);
+        expect(result.errorKind).toBe('validation');
+        expect(result.content).toContain('must be a number');
+    });
+
+    it('throws on duplicate tool names', () => {
+        expect(() => new ToolRuntimeAdapter([
+            makeTool('duplicate', 'a'),
+            makeTool('duplicate', 'b'),
+        ])).toThrow("Tool 'duplicate' is already registered");
+    });
+
+    it('signals and returns a timeout for overdue tools', async () => {
+        const tool: ITool = {
+            ...makeTool('slow', 'late'),
+            timeoutMs: 5,
+            execute: async (_input, context) => {
+                await new Promise<void>((_resolve, reject) => {
+                    context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
+                });
+                return 'unreachable';
+            },
+        };
+
+        const result = await new ToolRuntimeAdapter([tool]).call('slow', {});
+        expect(result.ok).toBe(false);
+        expect(result.errorKind).toBe('timeout');
     });
 });
 
@@ -999,7 +1047,7 @@ describe('CompositeToolRuntime', () => {
             name: toolName,
             description: toolName,
             trustTier: tier,
-            inputSchema: { type: 'object', properties: {} },
+            input: accepts({ type: 'object', properties: {} }),
             execute: async () => returnValue,
         }]);
     }
@@ -1015,22 +1063,33 @@ describe('CompositeToolRuntime', () => {
         expect(b.content).toBe('result-b');
     });
 
-    it('forwards accurate trust tier to policy', async () => {
-        const seen: string[] = [];
-        const policy: IToolPolicy = {
-            evaluate: async (ctx: PolicyContext): Promise<PolicyDecision> => {
-                seen.push(`${ctx.name}:${ctx.trustTier}`);
-                return { kind: 'allow' };
-            },
-        };
+    it('reports accurate trust tiers from child runtimes', () => {
         const composite = new CompositeToolRuntime([
             makeRuntime('internal', 'trusted', 'x'),
             makeRuntime('external', 'untrusted', 'y'),
-        ], policy);
-        await composite.call('internal', {});
-        await composite.call('external', {});
-        expect(seen).toContain('internal:trusted');
-        expect(seen).toContain('external:untrusted');
+        ]);
+        expect(composite.trustTierFor('internal')).toBe('trusted');
+        expect(composite.trustTierFor('external')).toBe('untrusted');
+    });
+
+    it('throws on collisions between child runtimes', () => {
+        expect(() => new CompositeToolRuntime([
+            makeRuntime('duplicate', 'trusted', 'a'),
+            makeRuntime('duplicate', 'standard', 'b'),
+        ])).toThrow("Tool 'duplicate' is already registered");
+    });
+
+    it('forwards execution options to the selected child runtime', async () => {
+        const signal = new AbortController().signal;
+        const child = {
+            tools: () => [{ name: 'observed', description: 'observed', parameters: { type: 'object' } }],
+            call: vi.fn().mockResolvedValue({ ok: true, content: 'ok' }),
+        };
+        const composite = new CompositeToolRuntime([child]);
+
+        await composite.call('observed', {}, { callId: 'call-123', signal });
+
+        expect(child.call).toHaveBeenCalledWith('observed', {}, { callId: 'call-123', signal });
     });
 
     it('returns ok:false for unknown tool', async () => {
@@ -1041,102 +1100,7 @@ describe('CompositeToolRuntime', () => {
     });
 });
 
-// ── AgentRunner ────────────────────────────────────────────────
-
-describe('AgentRunner', () => {
-    function makeEngine(responses: string[]): IGraphEngine<GraphState & { input: string; messages: unknown[]; output: string }> {
-        let call = 0;
-        type S = GraphState & { input: string; messages: unknown[]; output: string };
-        return {
-            run: async (state: S) => {
-                const response = responses[call++ % responses.length];
-                const result: S = { ...state, output: response };
-                return { state: result, snapshots: [], steps: 1 } as GraphRunResult<S>;
-            },
-            step: async () => { throw new Error('not used'); },
-            checkpoint: () => { throw new Error('not used'); },
-            resume: async () => { throw new Error('not used'); },
-            deadLetterQueue: [],
-        } as unknown as IGraphEngine<S>;
-    }
-
-    it('appends user message and returns TurnRecord with assistant reply', async () => {
-        const engine = makeEngine(['hello back']);
-        const runner = new AgentRunner({ engine, inputKey: 'input', messagesKey: 'messages', outputKey: 'output' });
-        const records = await runner.prompt('hello');
-        expect(records).toHaveLength(1);
-        expect(records[0].modelResponse.content).toBe('hello back');
-        expect(records[0].userInput).toBe('hello');
-    });
-
-    it('accumulates conversation across turns', async () => {
-        const engine = makeEngine(['reply1', 'reply2']);
-        const runner = new AgentRunner({ engine, inputKey: 'input', messagesKey: 'messages', outputKey: 'output' });
-        await runner.prompt('turn1');
-        await runner.prompt('turn2');
-        const conv = runner.getConversation();
-        // user, assistant, user, assistant
-        expect(conv).toHaveLength(4);
-        expect(conv[0]).toMatchObject({ role: 'user', content: 'turn1' });
-        expect(conv[1]).toMatchObject({ role: 'assistant', content: 'reply1' });
-        expect(conv[2]).toMatchObject({ role: 'user', content: 'turn2' });
-        expect(conv[3]).toMatchObject({ role: 'assistant', content: 'reply2' });
-    });
-
-    it('preserves graph state between turns', async () => {
-        const seenStates: unknown[] = [];
-        type S = GraphState & { input: string; messages: unknown[]; output: string; counter: number };
-        const engine: IGraphEngine<S> = {
-            run: async (state: S) => {
-                seenStates.push(state.counter);
-                const result: S = { ...state, output: 'ok', counter: (state.counter ?? 0) + 1 };
-                return { state: result, snapshots: [], steps: 1 } as GraphRunResult<S>;
-            },
-        } as unknown as IGraphEngine<S>;
-
-        const runner = new AgentRunner({ engine, inputKey: 'input', messagesKey: 'messages', outputKey: 'output' });
-        await runner.prompt('first');
-        await runner.prompt('second');
-        // first turn: counter was undefined (0-ish), second turn: counter should be 1
-        expect(seenStates[0]).toBeUndefined(); // no prior state
-        expect(seenStates[1]).toBe(1);         // carried from first run
-    });
-
-    it('preserves AssistantMessage with toolCalls when output key holds one', async () => {
-        type S = GraphState & { input: string; messages: unknown[]; output: unknown };
-        const assistantMsg = { role: 'assistant' as const, content: 'using tools', toolCalls: [{ id: 'c1', name: 'read', args: {} }] };
-        const engine: IGraphEngine<S> = {
-            run: async (state: S) => ({ state: { ...state, output: assistantMsg }, snapshots: [], steps: 1 }) as GraphRunResult<S>,
-        } as unknown as IGraphEngine<S>;
-
-        const runner = new AgentRunner({ engine, inputKey: 'input', messagesKey: 'messages', outputKey: 'output' });
-        const [record] = await runner.prompt('go');
-        expect(record.modelResponse.toolCalls).toHaveLength(1);
-        expect(record.plan).toHaveLength(1);
-        expect(record.plan[0].name).toBe('read');
-    });
-
-    it('clearSession resets conversation, history, and preserved state', async () => {
-        const seenStates: unknown[] = [];
-        type S = GraphState & { input: string; messages: unknown[]; output: string; counter: number };
-        const engine: IGraphEngine<S> = {
-            run: async (state: S) => {
-                seenStates.push(state.counter);
-                return { state: { ...state, output: 'ok', counter: (state.counter ?? 0) + 1 }, snapshots: [], steps: 1 } as GraphRunResult<S>;
-            },
-        } as unknown as IGraphEngine<S>;
-
-        const runner = new AgentRunner({ engine, inputKey: 'input', messagesKey: 'messages', outputKey: 'output' });
-        await runner.prompt('first');
-        runner.clearSession();
-        await runner.prompt('after clear');
-        // After clear, counter should be undefined again (fresh state)
-        expect(seenStates[1]).toBeUndefined();
-        expect(runner.getConversation()).toHaveLength(2); // user + assistant from second session
-    });
-});
-
-// ── AgentContextAssembler ──────────────────────────────────────
+// ── AgentContextAssembler ───────────────────────────────────────────────────────────────────────────
 
 describe('AgentContextAssembler', () => {
     function makeAssembler(budget = 10_000) {
@@ -1168,7 +1132,9 @@ describe('AgentContextAssembler', () => {
 
     it('never splits an assistant+tool_result group when dropping', async () => {
         // Tiny budget — forces the assembler to drop old groups
-        const assembler = makeAssembler(20);
+        const assembler = new AgentContextAssembler({
+            systemPrompt: 'SYS', tokenBudget: 20, minRecentGroups: 1,
+        });
         // user1 + assistant/tool_result pair + user2 — budget forces dropping user1 + the pair
         const msgs = [
             { role: 'user' as const, content: 'old user message that is somewhat long' },
@@ -1184,7 +1150,9 @@ describe('AgentContextAssembler', () => {
     });
 
     it('sticky user messages are never dropped', async () => {
-        const assembler = makeAssembler(15); // tight budget
+        const assembler = new AgentContextAssembler({
+            systemPrompt: 'SYS', tokenBudget: 15, minRecentGroups: 1,
+        });
         const msgs = [
             { role: 'user' as const, content: 'keep me', sticky: true },
             { role: 'user' as const, content: 'a long disposable message that should be dropped when over budget' },
@@ -1192,6 +1160,37 @@ describe('AgentContextAssembler', () => {
         ];
         const result = await assembler.assemble({ messages: msgs });
         expect(result.messages.some(m => m.role === 'user' && m.content === 'keep me')).toBe(true);
+    });
+
+    it('throws instead of silently exceeding the budget with protected groups', async () => {
+        const assembler = new AgentContextAssembler({
+            systemPrompt: 'SYS', tokenBudget: 10, minRecentGroups: 2,
+        });
+
+        await expect(assembler.assemble({
+            userInput: 'continue',
+            tokenBudget: 10,
+            messages: [
+                { role: 'user', content: 'a protected recent message that cannot fit' },
+                { role: 'assistant', content: 'another protected recent message that cannot fit' },
+            ],
+        })).rejects.toBeInstanceOf(ContextBudgetExceededError);
+    });
+
+    it('throws when the system prompt alone exceeds the budget', async () => {
+        const assembler = new AgentContextAssembler({
+            systemPrompt: 'a system prompt that is much too large for this ceiling', tokenBudget: 2,
+        });
+
+        await expect(assembler.assemble({
+            userInput: '', tokenBudget: 2, messages: [],
+        })).rejects.toMatchObject({ budget: 2 });
+    });
+
+    it('rejects invalid configured budgets', () => {
+        expect(() => new AgentContextAssembler({
+            systemPrompt: 'SYS', tokenBudget: 0,
+        })).toThrow(RangeError);
     });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@nucleic-se/agentic",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Lean domain-agnostic agent primitives for prompts, graphs, tools, providers, and runtime composition.",
   "license": "ISC",
   "repository": {
@@ -23,9 +23,29 @@
       "types": "./dist/contracts/index.d.ts",
       "import": "./dist/contracts/index.js"
     },
+    "./llm": {
+      "types": "./dist/contracts/llm.d.ts",
+      "import": "./dist/contracts/llm.js"
+    },
+    "./tool-runtime": {
+      "types": "./dist/contracts/tool-runtime.d.ts",
+      "import": "./dist/contracts/tool-runtime.js"
+    },
+    "./agent-contracts": {
+      "types": "./dist/contracts/agent.d.ts",
+      "import": "./dist/contracts/agent.js"
+    },
+    "./tool-policy": {
+      "types": "./dist/contracts/IToolPolicy.d.ts",
+      "import": "./dist/contracts/IToolPolicy.js"
+    },
     "./runtime": {
       "types": "./dist/runtime/index.d.ts",
       "import": "./dist/runtime/index.js"
+    },
+    "./kernel": {
+      "types": "./dist/kernel.d.ts",
+      "import": "./dist/kernel.js"
     },
     "./patterns": {
       "types": "./dist/patterns/index.d.ts",
@@ -38,10 +58,6 @@
     "./providers": {
       "types": "./dist/providers/index.d.ts",
       "import": "./dist/providers/index.js"
-    },
-    "./agent": {
-      "types": "./dist/demo/agent/index.d.ts",
-      "import": "./dist/demo/agent/index.js"
     }
   },
   "files": [

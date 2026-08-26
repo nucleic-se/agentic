@@ -44,6 +44,12 @@ export type GraphEnd = typeof END;
 export interface NodeRetryPolicy {
     maxRetries: number;
     initialDelayMs: number;
+    /**
+     * Required acknowledgement of retry semantics.
+     * `idempotent` asserts duplicate execution is safe. `allow_side_effects`
+     * explicitly accepts that external effects may occur more than once.
+     */
+    retryMode: 'idempotent' | 'allow_side_effects';
     /** Multiplier applied to delay after each retry. Default: 2.0. */
     backoffMultiplier?: number;
     /** Only retry on these error types (matched by error.name). Default: all. */
@@ -94,6 +100,9 @@ export interface GraphContext<TState extends GraphState = GraphState> {
 
     /** Correlation ID propagated from engine config. */
     readonly correlationId: string;
+
+    /** Per-run cancellation, combined with the node timeout when configured. */
+    readonly signal: AbortSignal;
 
     /**
      * Report tool call(s) made during this node's execution.
@@ -291,6 +300,11 @@ export interface GraphEngineConfig {
     onAfterNode?: (nodeId: string, state: Readonly<GraphState>, stepCount: number) => void | Promise<void>;
 }
 
+/** Options that belong to one execution, not the reusable engine. */
+export interface GraphRunOptions {
+    signal?: AbortSignal;
+}
+
 /** Result of a single step execution. */
 export interface GraphStepResult<TState> {
     /** The node that was executed. */
@@ -311,7 +325,7 @@ export interface GraphStepResult<TState> {
  */
 export interface IGraphEngine<TState extends GraphState = GraphState> {
     /** Run the graph from its entry node with the given initial state. */
-    run(initialState: TState): Promise<GraphRunResult<TState>>;
+    run(initialState: TState, options?: GraphRunOptions): Promise<GraphRunResult<TState>>;
 
     /**
      * Execute a single node.
@@ -326,13 +340,13 @@ export interface IGraphEngine<TState extends GraphState = GraphState> {
      * @param nodeId    The node to execute.
      * @param stepCount Steps completed so far (for context and maxSteps).
      */
-    step(state: TState, nodeId: string, stepCount?: number): Promise<GraphStepResult<TState>>;
+    step(state: TState, nodeId: string, stepCount?: number, options?: GraphRunOptions): Promise<GraphStepResult<TState>>;
 
     /** Capture current execution state as a serialisable checkpoint. */
     checkpoint(state: TState, currentNodeId: string, stepCount: number): GraphCheckpoint<TState>;
 
     /** Resume execution from a previously captured checkpoint. */
-    resume(checkpoint: GraphCheckpoint<TState>): Promise<GraphRunResult<TState>>;
+    resume(checkpoint: GraphCheckpoint<TState>, options?: GraphRunOptions): Promise<GraphRunResult<TState>>;
 
     /** Errors captured during execution — survives across multiple runs. */
     readonly deadLetterQueue: readonly GraphDeadLetter<TState>[];

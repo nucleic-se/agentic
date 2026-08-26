@@ -7,6 +7,7 @@ import type {
     AssistantMessage,
     ILLMProvider,
     Message,
+    ProviderCallOptions,
     StopReason,
     StructuredRequest,
     StructuredResponse,
@@ -18,6 +19,7 @@ import type {
 } from '../contracts/llm.js'
 import type { JsonSchema } from '../contracts/shared.js'
 import { resilientPost, type RetryConfig } from './resilient-fetch.js'
+import { providerSignal } from './cancellation.js'
 
 export interface OpenAICompatibleConfig {
     /** API key. Falls back to AGENTIC_OPENAI_API_KEY when omitted. */
@@ -39,6 +41,11 @@ export interface OpenAICompatibleConfig {
     extraBody?: Record<string, unknown>
     /** Retry configuration for transient HTTP errors (429, 502, 503, 529). */
     retry?: RetryConfig
+    /**
+     * Recover tool calls from ordinary response text for incompatible models.
+     * Disabled by default because text is not executable authority.
+     */
+    recoverTextToolCalls?: boolean
 }
 
 type OpenAIRole = 'system' | 'user' | 'assistant' | 'tool'
@@ -337,6 +344,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     protected readonly headers: Record<string, string>
     protected readonly extraBody: Record<string, unknown>
     protected readonly retryConfig: RetryConfig
+    protected readonly textToolRecovery: boolean
 
     constructor(config: OpenAICompatibleConfig) {
         if (!config.model) throw new Error('OpenAICompatibleProvider: model is required')
@@ -351,9 +359,10 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         this.headers = config.headers ?? {}
         this.extraBody = config.extraBody ?? {}
         this.retryConfig = config.retry ?? {}
+        this.textToolRecovery = config.recoverTextToolCalls ?? false
     }
 
-    async structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>> {
+    async structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>> {
         const body: OpenAIChatRequest = {
             model:    this.model,
             messages: toOpenAIMessages(request.system, request.messages),
@@ -368,7 +377,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
             },
         }
 
-        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody })
+        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody }, options)
         const content = res.choices?.[0]?.message?.content
         if (!content) {
             throw new Error(`${this.providerName}: structured response was empty`)
@@ -384,7 +393,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         }
     }
 
-    async turn(request: TurnRequest): Promise<TurnResponse> {
+    async turn(request: TurnRequest, options?: ProviderCallOptions): Promise<TurnResponse> {
         const body: OpenAIChatRequest = {
             model:      this.model,
             messages:   toOpenAIMessages(request.system, request.messages),
@@ -399,12 +408,12 @@ export class OpenAICompatibleProvider implements ILLMProvider {
             ...(request.maxTokens != null ? { max_tokens: request.maxTokens } : {}),
         }
 
-        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody })
+        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody }, options)
         const result = fromOpenAIResponse(res)
 
         // Recover tool calls emitted as text by models that intermittently
         // ignore the function calling protocol (e.g. deepseek on Ollama Cloud).
-        if (!result.message.toolCalls?.length && request.tools?.length && result.message.content) {
+        if (this.textToolRecovery && !result.message.toolCalls?.length && request.tools?.length && result.message.content) {
             const toolNames = new Set(request.tools.map(t => t.name))
             const recovered = recoverTextToolCalls(result.message.content, toolNames)
             if (recovered.length) {
@@ -417,7 +426,11 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         return result
     }
 
-    async streamTurn(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse> {
+    async streamTurn(
+        request: TurnRequest,
+        onDelta: (text: string) => void,
+        options?: ProviderCallOptions,
+    ): Promise<TurnResponse> {
         const body: OpenAIChatRequest = {
             model:      this.model,
             messages:   toOpenAIMessages(request.system, request.messages),
@@ -443,6 +456,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
             method: 'POST',
             headers,
             body: JSON.stringify({ ...body, ...this.extraBody }),
+            signal: providerSignal(options),
         })
         if (!res.ok) {
             const text = await res.text().catch(() => '(no body)')
@@ -526,18 +540,18 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         }
     }
 
-    async embed(texts: string[]): Promise<number[][]> {
+    async embed(texts: string[], options?: ProviderCallOptions): Promise<number[][]> {
         const res = await this.post<OpenAIEmbeddingResponse>('/embeddings', {
             model: this.embeddingModel,
             input: texts,
-        })
+        }, options)
 
         const vectors = res.data?.map(item => item.embedding).filter((value): value is number[] => Array.isArray(value))
         if (!vectors?.length) throw new Error(`${this.providerName}: embed response missing embeddings`)
         return vectors
     }
 
-    protected async post<T>(path: string, body: unknown): Promise<T> {
+    protected async post<T>(path: string, body: unknown, options?: ProviderCallOptions): Promise<T> {
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             ...this.headers,
@@ -546,7 +560,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
 
         return resilientPost<T>(
             `${this.baseUrl}${path}`,
-            { method: 'POST', headers, body: JSON.stringify(body) },
+            { method: 'POST', headers, body: JSON.stringify(body), signal: providerSignal(options) },
             this.providerName,
             this.retryConfig,
         )

@@ -9,16 +9,21 @@ All providers implement `ILLMProvider` from `@nucleic-se/agentic/contracts`. You
 ```ts
 interface ILLMProvider {
   /** Single call, returns structured JSON. No tool loop. */
-  structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>>;
+  structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>>;
 
   /** Agentic turn — may return text, tool calls, or both. Caller runs the loop. */
-  turn(request: TurnRequest): Promise<TurnResponse>;
+  turn(request: TurnRequest, options?: ProviderCallOptions): Promise<TurnResponse>;
 
   /** Optional streaming variant of turn(). */
-  streamTurn?(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse>;
+  streamTurn?(request: TurnRequest, onDelta: (text: string) => void, options?: ProviderCallOptions): Promise<TurnResponse>;
 
   /** Embed strings into vectors. */
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[], options?: ProviderCallOptions): Promise<number[][]>;
+}
+
+interface ProviderCallOptions {
+  signal?: AbortSignal;
+  deadline?: number; // absolute Unix timestamp in milliseconds
 }
 ```
 
@@ -88,6 +93,10 @@ const llm = new OpenAICompatibleProvider({
 });
 ```
 
+Heuristic recovery of tool calls from ordinary response text is disabled by
+default. Incompatible models can opt in with `recoverTextToolCalls: true`; do
+not enable it for models that support structured tool calling correctly.
+
 ---
 
 ## OllamaProvider
@@ -119,13 +128,13 @@ import type { ILLMProvider, StructuredRequest, StructuredResponse, TurnRequest, 
   from '@nucleic-se/agentic/contracts';
 
 class MyProvider implements ILLMProvider {
-  async structured<T>(req: StructuredRequest): Promise<StructuredResponse<T>> {
-    const raw = await callMyApi(req.messages, req.schema);
+  async structured<T>(req: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>> {
+    const raw = await callMyApi(req.messages, req.schema, { signal: options?.signal });
     return { value: raw as T, usage: { inputTokens: 0, outputTokens: 0 } };
   }
 
-  async turn(req: TurnRequest): Promise<TurnResponse> {
-    const raw = await callMyApi(req.messages, req.tools);
+  async turn(req: TurnRequest, options?: ProviderCallOptions): Promise<TurnResponse> {
+    const raw = await callMyApi(req.messages, req.tools, { signal: options?.signal });
     return {
       message: {
         role: 'assistant',

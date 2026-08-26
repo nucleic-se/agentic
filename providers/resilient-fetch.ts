@@ -35,8 +35,38 @@ export interface RetryConfig {
 
 // ── Public helpers ─────────────────────────────────────────────────────────────
 
-export function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms))
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(signal.reason)
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort)
+            resolve()
+        }, ms)
+        const onAbort = () => {
+            clearTimeout(timer)
+            reject(signal?.reason)
+        }
+        signal?.addEventListener('abort', onAbort, { once: true })
+    })
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!signal) return promise
+    if (signal.aborted) return Promise.reject(signal.reason)
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(signal.reason)
+        signal.addEventListener('abort', onAbort, { once: true })
+        promise.then(
+            value => {
+                signal.removeEventListener('abort', onAbort)
+                resolve(value)
+            },
+            error => {
+                signal.removeEventListener('abort', onAbort)
+                reject(error)
+            },
+        )
+    })
 }
 
 /**
@@ -130,21 +160,23 @@ const requestStartGate = new Map<string, Promise<void>>()
  * Per-key request rate limiting.  Awaiting this guarantees at least
  * `minSpacingMs` between consecutive request starts for the same key.
  */
-export async function waitForRequestSlot(key: string, minSpacingMs: number): Promise<void> {
+export async function waitForRequestSlot(key: string, minSpacingMs: number, signal?: AbortSignal): Promise<void> {
     const previous = requestStartGate.get(key) ?? Promise.resolve()
     let release!: () => void
     const current = new Promise<void>(resolve => { release = resolve })
-    requestStartGate.set(key, previous.then(() => current))
+    const gate = previous.then(() => current)
+    requestStartGate.set(key, gate)
 
-    await previous
     try {
+        if (signal?.aborted) throw signal.reason
+        await abortable(previous, signal)
         const now  = Date.now()
         const next = nextRequestAt.get(key) ?? 0
-        if (next > now) await sleep(next - now)
+        if (next > now) await sleep(next - now, signal)
         nextRequestAt.set(key, Date.now() + minSpacingMs)
     } finally {
         release()
-        if (requestStartGate.get(key) === current) requestStartGate.delete(key)
+        if (requestStartGate.get(key) === gate) requestStartGate.delete(key)
     }
 }
 
@@ -183,7 +215,7 @@ export async function resilientPost<T>(
             const delay = retryDelayFromHeaders(res.headers, attempt, resetHdrs, baseDelay, maxDelay)
             config.onRetry?.(attempt + 1, delay, res.status)
             await res.body?.cancel()
-            await sleep(delay)
+            await sleep(delay, init.signal ?? undefined)
             continue
         }
 

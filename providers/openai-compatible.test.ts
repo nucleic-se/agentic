@@ -160,6 +160,76 @@ describe('OpenAICompatibleProvider', () => {
         })
     })
 
+    it('does not turn ordinary response text into executable tool calls by default', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: 'I could use search with {"query":"docs"}.' },
+            }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+        const request = {
+            messages: [{ role: 'user' as const, content: 'explain' }],
+            tools: [{ name: 'search', description: 'Search', parameters: { type: 'object' } }],
+        }
+
+        const provider = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1',
+            model: 'test-model',
+        })
+        const result = await provider.turn(request)
+
+        expect(result.stopReason).toBe('end_turn')
+        expect(result.message.toolCalls).toBeUndefined()
+        expect(result.message.content).toContain('I could use search')
+    })
+
+    it('supports explicit text-to-tool recovery for incompatible models', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{
+                finish_reason: 'stop',
+                message: { role: 'assistant', content: 'search\n{"query":"docs"}' },
+            }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+        const provider = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1',
+            model: 'test-model',
+            recoverTextToolCalls: true,
+        })
+
+        const result = await provider.turn({
+            messages: [{ role: 'user', content: 'search' }],
+            tools: [{ name: 'search', description: 'Search', parameters: { type: 'object' } }],
+        })
+
+        expect(result.stopReason).toBe('tool_use')
+        expect(result.message.toolCalls?.[0]).toMatchObject({ name: 'search', args: { query: 'docs' } })
+    })
+
+    it('propagates cancellation to fetch', async () => {
+        const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+        }))
+        vi.stubGlobal('fetch', fetchMock)
+        const provider = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1',
+            model: 'test-model',
+        })
+        const controller = new AbortController()
+        const pending = provider.turn(
+            { messages: [{ role: 'user', content: 'wait' }] },
+            { signal: controller.signal },
+        )
+
+        controller.abort(new Error('cancelled by test'))
+
+        await expect(pending).rejects.toThrow('cancelled by test')
+        expect((fetchMock.mock.calls[0]?.[1] as RequestInit).signal).toBeDefined()
+    })
+
     it('embed() calls the embeddings endpoint', async () => {
         const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
             data: [
@@ -286,6 +356,7 @@ describe('OllamaProvider structured override', () => {
         vi.stubGlobal('fetch', fetchMock)
 
         const provider = new OllamaProvider({ model: 'gemma3:12b' })
+        const signal = new AbortController().signal
         const result = await provider.structured<{ name: string; value: number }>({
             messages: [{ role: 'user', content: 'extract data' }],
             schema: {
@@ -293,12 +364,13 @@ describe('OllamaProvider structured override', () => {
                 properties: { name: { type: 'string' }, value: { type: 'number' } },
                 required: ['name', 'value'],
             },
-        })
+        }, { signal })
 
         expect(result.value).toEqual({ name: 'test', value: 42 })
         expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 10 })
 
         const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(init.signal).toBe(signal)
         const body = JSON.parse(String(init.body))
         // Should use json_object, NOT json_schema
         expect(body.response_format).toEqual({ type: 'json_object' })

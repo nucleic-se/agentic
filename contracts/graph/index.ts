@@ -25,6 +25,7 @@ export type {
     GraphDeadLetter,
     GraphRunLimits,
     GraphEngineConfig,
+    GraphRunOptions,
     GraphStepResult,
     IGraphEngine,
     IGraphBuilder,

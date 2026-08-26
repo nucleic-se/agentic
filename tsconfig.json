@@ -15,6 +15,7 @@
     },
     "include": [
         "index.ts",
+        "kernel.ts",
         "utils.ts",
         "contracts/**/*.ts",
         "runtime/**/*.ts",

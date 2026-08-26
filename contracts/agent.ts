@@ -1,55 +1,16 @@
 /**
- * CodingAgent contracts — shared types for the agent runtime.
+ * Shared protocol types for the agent kernel.
  *
  * Pure protocol types only. No imports from demo/. No implementation.
  *
- * Covers: state machine, tool planning, execution records, failure taxonomy,
- * event stream, and the IAgent interface.
+ * Covers tool planning, execution records, failure taxonomy, and events.
  *
  * @module contracts
  */
 
-import type { Message, AssistantMessage, TokenUsage, TurnRequest } from './llm.js'
+import type { AssistantMessage, TokenUsage, TurnRequest } from './llm.js'
 import type { ToolCallResult } from './tool-runtime.js'
 import type { ToolTrustTier } from './ITool.js'
-
-// ── State machine ─────────────────────────────────────────────────────────────
-
-/**
- * The kernel's internal state. Transitions are explicit; the loop is a driver.
- * State transitions are: idle → deliberating → planning → executing → reconciling → idle | done | failed | aborted.
- */
-export type AgentState =
-  | { kind: 'idle' }
-  | { kind: 'deliberating';  turnId: string }
-  | { kind: 'planning';      turnId: string; response: AssistantMessage }
-  | { kind: 'executing';     turnId: string; plan: ToolPlan[]; completed: ToolExecution[] }
-  | { kind: 'reconciling';   turnId: string; plan: ToolPlan[]; executions: ToolExecution[] }
-  | { kind: 'done' }
-  | { kind: 'failed';        failure: Failure }
-  | { kind: 'aborted' }
-
-// ── External artifact ─────────────────────────────────────────────────────────
-
-/**
- * Typed external content from an untrusted tool result.
- * Implementation helpers (normalizeArtifact, labeledContent) live in demo/agent/artifact.ts.
- */
-export interface ExternalArtifact {
-  id:                   string
-  source:               'fetch' | 'search' | 'shell' | 'fs'
-  trustTier:            ToolTrustTier
-  /** Possibly clipped content — this is what entered context. */
-  content:              string
-  /** Byte offset at which content was clipped, if truncation occurred. */
-  clippedAt?:           number
-  /** Phase F: path to a temp file holding the full response body. */
-  fullContentPath?:     string
-  metadata:             Record<string, unknown>
-  /** Heuristic: content appears to contain imperative instructions. */
-  containsInstructions: boolean
-  timestamp:            number
-}
 
 // ── Tool plan and execution ───────────────────────────────────────────────────
 
@@ -61,7 +22,7 @@ export interface ToolPlan {
   callId:     string
   name:       string
   input:      unknown
-  /** Phase B: trust tier resolved from IToolRegistry at plan time. */
+  /** Trust tier resolved by the tool runtime before authorization. */
   trustTier?: ToolTrustTier
 }
 
@@ -69,7 +30,7 @@ export type ToolExecutionStatus =
   | 'success'          // tools.call() returned ok: true
   | 'runtime_failure'  // tools.call() returned ok: false
   | 'timeout'          // tool exceeded timeoutMs — did not return
-  | 'policy_denied'    // Phase B — ToolPolicy denied or confirmed-as-deny
+  | 'policy_denied'    // ToolPolicy denied or confirmed-as-deny
   | 'cancelled'        // AbortSignal fired before this call ran
   | 'skipped'          // steering interrupted before this call ran
 
@@ -81,12 +42,6 @@ export interface ToolExecution {
   latencyMs?: number
   /** Error message for runtime_failure / timeout; denial reason for policy_denied. */
   error?:     string
-  /**
-   * Phase B: set for untrusted tool results. Carries provenance metadata,
-   * clipping info, and the containsInstructions flag. The ToolResultMessage
-   * in conversation uses labeledContent(artifact) — not the raw result string.
-   */
-  artifact?:  ExternalArtifact
 }
 
 // ── Context selection ─────────────────────────────────────────────────────────
@@ -131,6 +86,7 @@ export type FailureKind =
   | 'max_turns_exceeded'   // safety turn limit reached
   | 'max_tokens_stop'      // model output was truncated
   | 'context_error'        // ContextBroker.assemble() threw before turn_start
+  | 'extension_error'      // caller hook or runtime extension violated its contract
   | 'abort'                // AbortSignal fired
   | 'unknown_error'        // unrecognised exception; promote to named category on investigation
 
@@ -177,7 +133,7 @@ export interface TurnRecord {
   interrupted?: {
     plannedCalls:  string[]          // all call IDs the model intended
     executedCalls: string[]          // those that actually ran
-    reason:        'steering' | 'abort'
+    reason:        'steering' | 'abort' | 'extension_error'
     // Note: policy denials (status='policy_denied') do NOT set interrupted —
     // they mark individual calls and execution continues for remaining calls.
   }
@@ -212,28 +168,3 @@ export type AgentEvent =
   | { type: 'error';       failure: Failure }
 
 export type AgentEventSink = (event: AgentEvent) => void | Promise<void>
-
-// ── IAgent ────────────────────────────────────────────────────────────────────
-
-export interface IAgent {
-  /**
-   * Append a user message and run until the agent reaches end_turn or a
-   * terminal failure. Returns the TurnRecord(s) produced during this call.
-   */
-  prompt(input: string, sink?: AgentEventSink): Promise<TurnRecord[]>
-
-  /**
-   * Resume without appending a new user message — used when the agent was
-   * interrupted or when driving continuation from an external signal.
-   */
-  continue(sink?: AgentEventSink): Promise<TurnRecord[]>
-
-  /** The full LLM-visible conversation history. Never trimmed. */
-  getConversation(): readonly Message[]
-
-  /** Full execution history — one TurnRecord per turn, always. */
-  getExecutionHistory(): readonly TurnRecord[]
-
-  /** Reset all stores — conversation, execution history, and (Phase C) summaries. */
-  clearSession(): void
-}

@@ -10,6 +10,7 @@
 
 import type {
     ILLMProvider,
+    ProviderCallOptions,
     StructuredRequest,
     StructuredResponse,
     TurnRequest,
@@ -28,6 +29,7 @@ import {
     waitForRequestSlot,
     pushBackRequestSlot,
 } from './resilient-fetch.js'
+import { providerSignal } from './cancellation.js'
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -244,7 +246,7 @@ export class AnthropicProvider implements ILLMProvider {
      * Defines a synthetic `structured_output` tool with the caller's schema
      * and requires the model to call it — guaranteeing schema-conformant JSON.
      */
-    async structured<T>(request: StructuredRequest): Promise<StructuredResponse<T>> {
+    async structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>> {
         const body: AnthropicRequest = {
             model:      this.model,
             max_tokens: this.maxTokens,
@@ -258,7 +260,7 @@ export class AnthropicProvider implements ILLMProvider {
             tool_choice: { type: 'tool', name: 'structured_output' },
         }
 
-        const res = await this.post<AnthropicResponse>('/v1/messages', body)
+        const res = await this.post<AnthropicResponse>('/v1/messages', body, options)
 
         const toolBlock = res.content.find(
             (b): b is AnthropicBlock & { type: 'tool_use' } =>
@@ -275,7 +277,7 @@ export class AnthropicProvider implements ILLMProvider {
     }
 
     /** One agentic turn. The model may return text, tool calls, or both. */
-    async turn(request: TurnRequest): Promise<TurnResponse> {
+    async turn(request: TurnRequest, options?: ProviderCallOptions): Promise<TurnResponse> {
         const body: AnthropicRequest = {
             model:      this.model,
             max_tokens: request.maxTokens ?? this.maxTokens,
@@ -286,7 +288,7 @@ export class AnthropicProvider implements ILLMProvider {
                 : {}),
         }
 
-        const res = await this.post<AnthropicResponse>('/v1/messages', body)
+        const res = await this.post<AnthropicResponse>('/v1/messages', body, options)
         return fromAnthropicResponse(res)
     }
 
@@ -298,7 +300,11 @@ export class AnthropicProvider implements ILLMProvider {
      * Retries on 429/529 before reading the stream body — once streaming
      * starts there is no retry (partial deltas have already fired).
      */
-    async streamTurn(request: TurnRequest, onDelta: (text: string) => void): Promise<TurnResponse> {
+    async streamTurn(
+        request: TurnRequest,
+        onDelta: (text: string) => void,
+        options?: ProviderCallOptions,
+    ): Promise<TurnResponse> {
         const body: AnthropicRequest = {
             model:      this.model,
             max_tokens: request.maxTokens ?? this.maxTokens,
@@ -313,9 +319,10 @@ export class AnthropicProvider implements ILLMProvider {
         // Acquire rate-limit slot and retry on 429/529, same as post().
         // Once we get a 200 and start reading the body, no retry is possible.
         const limiterKey = this.limiterKey()
+        const signal = providerSignal(options)
         let res!: Response
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            await waitForRequestSlot(limiterKey, this.minRequestSpacingMs)
+            await waitForRequestSlot(limiterKey, this.minRequestSpacingMs, signal)
             res = await fetch(`${this.baseUrl}/v1/messages`, {
                 method:  'POST',
                 headers: {
@@ -324,6 +331,7 @@ export class AnthropicProvider implements ILLMProvider {
                     'anthropic-version': API_VERSION,
                 },
                 body: JSON.stringify(body),
+                signal,
             })
 
             if (res.ok) break
@@ -333,7 +341,7 @@ export class AnthropicProvider implements ILLMProvider {
                 this.onRetry?.(attempt + 1, delay, res.status)
                 pushBackRequestSlot(limiterKey, delay)
                 await res.body?.cancel()
-                await sleep(delay)
+                await sleep(delay, signal)
                 continue
             }
 
@@ -398,8 +406,12 @@ export class AnthropicProvider implements ILLMProvider {
         }
 
         const toolCalls: ToolCall[] = [...toolBlocks.values()].map(b => {
-            let args: Record<string, unknown> = {}
-            try { args = JSON.parse(b.args) } catch { /* leave empty if args are malformed */ }
+            let args: Record<string, unknown>
+            try {
+                args = JSON.parse(b.args)
+            } catch {
+                throw new Error(`AnthropicProvider: protocol error: malformed arguments for tool '${b.name}'`)
+            }
             return { id: b.id, name: b.name, args }
         })
 
@@ -414,14 +426,15 @@ export class AnthropicProvider implements ILLMProvider {
         }
     }
 
-    embed(_texts: string[]): Promise<number[][]> {
+    embed(_texts: string[], _options?: ProviderCallOptions): Promise<number[][]> {
         throw new Error('AnthropicProvider: Anthropic does not provide an embeddings API')
     }
 
-    private async post<T>(path: string, body: unknown): Promise<T> {
+    private async post<T>(path: string, body: unknown, options?: ProviderCallOptions): Promise<T> {
         const limiterKey = this.limiterKey()
+        const signal = providerSignal(options)
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-            await waitForRequestSlot(limiterKey, this.minRequestSpacingMs)
+            await waitForRequestSlot(limiterKey, this.minRequestSpacingMs, signal)
             const res = await fetch(`${this.baseUrl}${path}`, {
                 method:  'POST',
                 headers: {
@@ -430,6 +443,7 @@ export class AnthropicProvider implements ILLMProvider {
                     'anthropic-version': API_VERSION,
                 },
                 body: JSON.stringify(body),
+                signal,
             })
 
             if (res.ok) return res.json() as Promise<T>
@@ -439,7 +453,7 @@ export class AnthropicProvider implements ILLMProvider {
                 this.onRetry?.(attempt + 1, delay, res.status)
                 pushBackRequestSlot(limiterKey, delay)
                 await res.body?.cancel()
-                await sleep(delay)
+                await sleep(delay, signal)
                 continue
             }
 
