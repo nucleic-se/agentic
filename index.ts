@@ -104,7 +104,7 @@ export type {
     IGraphBuilder,
 } from './contracts/index.js';
 
-export { END, GraphRunLimitError } from './contracts/index.js';
+export { END, GraphRunLimitError, LLMProtocolError } from './contracts/index.js';
 
 // ── Runtimes ───────────────────────────────────────────────────
 export {

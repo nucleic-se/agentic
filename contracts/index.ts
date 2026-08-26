@@ -98,6 +98,7 @@ export type {
 } from './IAgentContextAssembler.js';
 
 // LLM provider v2 — message threading, tool calls, token usage
+export { LLMProtocolError } from './llm.js';
 export type {
     ILLMProvider,
     IModelRouter,

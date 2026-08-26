@@ -6,6 +6,7 @@ import type {
     TurnRequest,
     TurnResponse,
 } from '../contracts/llm.js';
+import { LLMProtocolError } from '../contracts/llm.js';
 import type { ITool } from '../contracts/ITool.js';
 import type { IToolPolicy } from '../contracts/IToolPolicy.js';
 import type { AgentEvent } from '../contracts/agent.js';
@@ -72,6 +73,23 @@ function stringTool(execute = vi.fn(async ({ value }: { value: string }) => ({ v
 }
 
 describe('runAgentKernel', () => {
+    it('distinguishes provider protocol failures from transport failures', async () => {
+        const conversation: Message[] = [{ role: 'user', content: 'hello' }];
+        const provider: ILLMProvider = {
+            async turn() { throw new LLMProtocolError('invalid provider response'); },
+            async structured() { throw new Error('not used'); },
+            async embed() { return []; },
+        };
+        const records = await runAgentKernel(
+            conversation,
+            { provider, tools: new ToolRuntimeAdapter([]) },
+            () => ({ messages: conversation }),
+        );
+        expect(records[0]!.failure).toEqual({
+            kind: 'llm_protocol_error',
+            message: 'invalid provider response',
+        });
+    });
     it('passes cancellation to the provider and commits an end turn', async () => {
         const turn = vi.fn(async (_request: TurnRequest, options?: ProviderCallOptions) => {
             expect(options?.signal).toBe(signal);

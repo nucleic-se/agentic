@@ -16,6 +16,10 @@ Quick reference for all exported types, classes, and functions.
 | `@nucleic-se/agentic/tool-runtime` | Executable tool-runtime protocols |
 | `@nucleic-se/agentic/agent-contracts` | Kernel records, events, failures, plans, and executions |
 | `@nucleic-se/agentic/tool-policy` | Policy context and decision protocols |
+
+Provider adapters may throw `LLMProtocolError` when a response violates the
+semantic provider protocol. The kernel records it as `llm_protocol_error`;
+other provider exceptions remain `llm_transport_error` unless cancellation won.
 | `@nucleic-se/agentic/patterns` | Pre-built agent workflows |
 | `@nucleic-se/agentic/tools` | Tool runtime implementations |
 | `@nucleic-se/agentic/providers` | LLM provider implementations |

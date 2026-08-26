@@ -16,6 +16,14 @@
 
 import type { JsonSchema } from './shared.js'
 
+/** Provider/adaptor response violated the semantic LLM protocol. */
+export class LLMProtocolError extends Error {
+    constructor(message: string, options?: ErrorOptions) {
+        super(message, options)
+        this.name = 'LLMProtocolError'
+    }
+}
+
 // ── Messages ──────────────────────────────────────────────────────────────────
 
 export type MessageProvenance = 'human' | 'model' | 'deterministic'

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { LLMProtocolError } from '../contracts/llm.js';
 import type { ILLMProvider, Message, ToolResultMessage, TurnRequest } from '../contracts/llm.js';
 import type {
     AgentEventSink,
@@ -213,7 +214,9 @@ async function executeAgentKernel(
         } catch (error) {
             const aborted = signal?.aborted ?? false;
             const failure: Failure = {
-                kind: aborted ? 'abort' : 'llm_transport_error',
+                kind: aborted ? 'abort'
+                    : error instanceof LLMProtocolError ? 'llm_protocol_error'
+                    : 'llm_transport_error',
                 message: error instanceof Error ? error.message : String(error),
             };
             const record = failureRecord(turnId, startedAt, request, failure, context.contextUsed);
