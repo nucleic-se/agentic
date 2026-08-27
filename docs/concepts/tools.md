@@ -130,7 +130,9 @@ The composite does not evaluate policy. Policy is evaluated once by the kernel.
 
 Agentic includes filesystem, shell, fetch, search, web, and skill runtimes for
 experimentation. They provide powerful host access and are not a security
-sandbox. In particular:
+sandbox. They also do not implement the schema preflight required by
+`runAgentKernel()`; kernel integrations should use `ToolRuntimeAdapter` or
+another `IValidatedToolRuntime`. In particular:
 
 - shell commands execute with host-process authority;
 - network tools can reach URLs visible to the host;

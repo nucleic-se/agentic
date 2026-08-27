@@ -77,7 +77,7 @@ Recent additions:
 
 | Entry point | Contents |
 |---|---|
-| `@nucleic-se/agentic` | Everything re-exported |
+| `@nucleic-se/agentic` | Core contracts, runtimes, patterns, and basic tool adapters |
 | `@nucleic-se/agentic/contracts` | TypeScript interfaces only — zero runtime code |
 | `@nucleic-se/agentic/runtime` | Concrete implementations |
 | `@nucleic-se/agentic/kernel` | Narrow kernel and budgeted context composition surface |

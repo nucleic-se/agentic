@@ -83,7 +83,7 @@ class ProductionPolicy extends TrustTierToolPolicy {
             return { kind: 'confirm', reason: 'External content requires approval' }
         }
         // Deny destructive shell commands
-        if (ctx.name === 'shell_exec') {
+        if (ctx.name === 'shell_run') {
             const cmd = ctx.args['command'] as string ?? ''
             if (/rm\s+-rf|mkfs|dd\s+if/.test(cmd)) {
                 return { kind: 'deny', reason: 'Destructive command blocked by policy' }

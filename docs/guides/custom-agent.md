@@ -44,8 +44,8 @@ const llm = new AnthropicProvider({
 });
 
 const tools = new CompositeToolRuntime([
-  new FsToolRuntime({ root: '/workspace' }),
-  new ShellToolRuntime({ timeoutMs: 30_000 }),
+  new FsToolRuntime('/workspace'),
+  new ShellToolRuntime('/workspace'),
 ]);
 ```
 
@@ -78,7 +78,7 @@ import { CallbackGraphNode } from '@nucleic-se/agentic/runtime';
 
 const saveNode = new CallbackGraphNode<CodingState>('save', async (state) => {
   await tools.call('fs_write', {
-    path: '/workspace/solution.ts',
+    path: 'solution.ts',
     content: state.code,
   });
 });
@@ -90,9 +90,9 @@ const saveNode = new CallbackGraphNode<CodingState>('save', async (state) => {
 import { CallbackGraphNode } from '@nucleic-se/agentic/runtime';
 
 const testNode = new CallbackGraphNode<CodingState>('test', async (state) => {
-  const result = await tools.call('shell_exec', {
-    command: 'npx tsx --test /workspace/solution.test.ts',
-    cwd: '/workspace',
+  const result = await tools.call('shell_run', {
+    command: 'npx tsx --test solution.test.ts',
+    cwd: '.',
   });
   state.testOutput = result.content;
   state.attempts += 1;
@@ -213,8 +213,8 @@ async function runCodingAgent(task: string) {
   });
 
   const tools = new CompositeToolRuntime([
-    new FsToolRuntime({ root: '/workspace' }),
-    new ShellToolRuntime({ timeoutMs: 30_000 }),
+    new FsToolRuntime('/workspace'),
+    new ShellToolRuntime('/workspace'),
   ]);
 
   const tracer = new InMemoryTracer();
@@ -233,14 +233,14 @@ async function runCodingAgent(task: string) {
     }))
     .addNode(new CallbackGraphNode<CodingState>('save', async (state) => {
       await tools.call('fs_write', {
-        path: '/workspace/solution.ts',
+        path: 'solution.ts',
         content: state.code,
       });
     }))
     .addNode(new CallbackGraphNode<CodingState>('test', async (state) => {
-      const result = await tools.call('shell_exec', {
-        command: 'npx tsx --test /workspace/solution.test.ts',
-        cwd: '/workspace',
+      const result = await tools.call('shell_run', {
+        command: 'npx tsx --test solution.test.ts',
+        cwd: '.',
       });
       state.testOutput = result.content;
       state.attempts += 1;

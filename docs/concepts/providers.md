@@ -51,7 +51,6 @@ const llm = new AnthropicProvider({
   model: 'claude-sonnet-4-6',
 
   // Optional
-  temperature: 0.2,
   maxTokens: 4096,
   baseUrl: 'https://api.anthropic.com',      // Override for proxies
   minRequestSpacingMs: 1000,                 // Rate-limit guard
@@ -116,7 +115,7 @@ output, cancellation, token usage, and provider continuation.
 import { CodexSubscriptionProvider } from '@nucleic-se/agentic/providers';
 
 const llm = new CodexSubscriptionProvider({
-  model: 'gpt-5.3-codex',
+  model: 'gpt-5.6-terra',
   reasoningEffort: 'low',
   verbosity: 'low',
 });

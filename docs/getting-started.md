@@ -23,7 +23,8 @@ const llm = new AnthropicProvider({
 });
 ```
 
-See [LLM providers](./concepts/providers.md) for OpenAI-compatible and Ollama alternatives.
+See [LLM providers](./concepts/providers.md) for Codex subscription,
+OpenAI-compatible, and Ollama alternatives.
 
 ### 2. Build a graph
 
@@ -80,19 +81,23 @@ Create an `IToolRuntime` when your agent flow needs external capabilities:
 import { CompositeToolRuntime, FsToolRuntime, FetchToolRuntime } from '@nucleic-se/agentic/tools';
 
 const tools = new CompositeToolRuntime([
-  new FsToolRuntime({ root: process.cwd() }),
-  new FetchToolRuntime({ timeoutMs: 10_000 }),
+  new FsToolRuntime(process.cwd()),
+  new FetchToolRuntime(),
 ]);
 ```
 
-You can call tools directly from callback nodes, or pass the runtime into higher-level agent flows that support tool use:
+You can call these host runtimes directly from callback nodes:
 
 ```ts
 const lookupNode = new CallbackGraphNode<MyState>('lookup', async (state) => {
-  const result = await tools.call('web_fetch', { url: state.url });
+  const result = await tools.call('fetch_get', { url: state.url });
   state.findings = result.content;
 });
 ```
+
+These experimental host runtimes do not provide the schema preflight required
+by `runAgentKernel()`. Kernel integrations should define `ITool` values and use
+`ToolRuntimeAdapter`, or supply another `IValidatedToolRuntime` implementation.
 
 See [Tool runtimes](./concepts/tools.md) for a full breakdown of available runtimes.
 

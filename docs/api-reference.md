@@ -8,7 +8,7 @@ Quick reference for all exported types, classes, and functions.
 
 | Import path | Contents |
 |---|---|
-| `@nucleic-se/agentic` | Everything below, re-exported |
+| `@nucleic-se/agentic` | Core contracts, runtimes, patterns, and basic tool adapters |
 | `@nucleic-se/agentic/contracts` | TypeScript interfaces — zero runtime code |
 | `@nucleic-se/agentic/runtime` | Concrete implementations |
 | `@nucleic-se/agentic/kernel` | Kernel plus budgeted conversation assembler |
@@ -16,13 +16,13 @@ Quick reference for all exported types, classes, and functions.
 | `@nucleic-se/agentic/tool-runtime` | Executable tool-runtime protocols |
 | `@nucleic-se/agentic/agent-contracts` | Kernel records, events, failures, plans, and executions |
 | `@nucleic-se/agentic/tool-policy` | Policy context and decision protocols |
+| `@nucleic-se/agentic/patterns` | Pre-built agent workflows |
+| `@nucleic-se/agentic/tools` | Tool runtime implementations |
+| `@nucleic-se/agentic/providers` | LLM provider implementations |
 
 Provider adapters may throw `LLMProtocolError` when a response violates the
 semantic provider protocol. The kernel records it as `llm_protocol_error`;
 other provider exceptions remain `llm_transport_error` unless cancellation won.
-| `@nucleic-se/agentic/patterns` | Pre-built agent workflows |
-| `@nucleic-se/agentic/tools` | Tool runtime implementations |
-| `@nucleic-se/agentic/providers` | LLM provider implementations |
 
 ---
 
@@ -70,11 +70,15 @@ interface GraphRunLimits {
 
 ```ts
 interface IGraphEngine<TState> {
-  run(initialState: TState): Promise<GraphRunResult<TState>>;
-  step(state: TState, nodeId: string, stepCount?: number): Promise<GraphStepResult<TState>>;
+  run(initialState: TState, options?: GraphRunOptions): Promise<GraphRunResult<TState>>;
+  step(state: TState, nodeId: string, stepCount?: number, options?: GraphRunOptions): Promise<GraphStepResult<TState>>;
   checkpoint(state: TState, currentNodeId: string, stepCount: number): GraphCheckpoint<TState>;
-  resume(checkpoint: GraphCheckpoint<TState>): Promise<GraphRunResult<TState>>;
+  resume(checkpoint: GraphCheckpoint<TState>, options?: GraphRunOptions): Promise<GraphRunResult<TState>>;
   readonly deadLetterQueue: readonly GraphDeadLetter<TState>[];
+}
+
+interface GraphRunOptions {
+  signal?: AbortSignal;
 }
 ```
 
@@ -200,6 +204,7 @@ interface GraphContext<TState> {
   stepCount: number;
   tracer: ITracer;
   correlationId: string;
+  signal: AbortSignal;
   reportToolCall(count?: number): void;
   reportTokens(count: number): void;
 }
@@ -233,7 +238,7 @@ effect may occur more than once; state snapshot restoration cannot undo I/O.
 import { AnthropicProvider } from '@nucleic-se/agentic/providers';
 
 new AnthropicProvider({
-  apiKey: string;
+  apiKey?: string; // Falls back to AGENTIC_ANTHROPIC_API_KEY
   model: string;
   maxTokens?: number;
   baseUrl?: string;
@@ -248,7 +253,7 @@ new AnthropicProvider({
 import { OpenAICompatibleProvider } from '@nucleic-se/agentic/providers';
 
 new OpenAICompatibleProvider({
-  baseUrl: string;
+  baseUrl?: string; // Falls back to AGENTIC_OPENAI_BASE_URL
   apiKey?: string;
   model: string;
   embeddingModel?: string;
@@ -258,6 +263,24 @@ new OpenAICompatibleProvider({
   retry?: RetryConfig;
 })
 ```
+
+### `CodexSubscriptionProvider`
+
+```ts
+import { CodexSubscriptionProvider } from '@nucleic-se/agentic/providers';
+
+new CodexSubscriptionProvider({
+  model: string;
+  authFilePath?: string;
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
+  verbosity?: 'low' | 'medium' | 'high';
+})
+```
+
+Uses an existing local Codex login and the authenticated subscription
+Responses transport directly. It does not require Codex CLI, Gears, Pi, or a
+localhost proxy. Continuation state is process-local and suitable for a live
+tool loop, not durable conversation memory.
 
 ### `OllamaProvider`
 
@@ -269,6 +292,12 @@ new OllamaProvider({
   model: string;
   baseUrl?: string;   // Default: OLLAMA_LOCAL_API_BASE
   apiKey?: string;
+  embeddingModel?: string;
+  numCtx?: number;
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  extraBody?: Record<string, unknown>;
+  retry?: RetryConfig;
+  recoverTextToolCalls?: boolean;
 })
 ```
 
@@ -317,12 +346,12 @@ interface ToolCallOptions {
 |---|---|---|
 | `CompositeToolRuntime` | `@nucleic-se/agentic/tools` | `(runtimes: IToolRuntime[])` |
 | `ToolRuntimeAdapter` | `@nucleic-se/agentic/tools` | `(tools: ITool[])` |
-| `FsToolRuntime` | `@nucleic-se/agentic/tools` | `{ root: string }` |
-| `FetchToolRuntime` | `@nucleic-se/agentic/tools` | `{ timeoutMs?: number }` |
-| `ShellToolRuntime` | `@nucleic-se/agentic/tools` | `{ timeoutMs?: number }` |
-| `SearchToolRuntime` | `@nucleic-se/agentic/tools` | `{ root: string }` |
-| `WebToolRuntime` | `@nucleic-se/agentic/tools` | `{}` |
-| `SkillToolRuntime` | `@nucleic-se/agentic/tools` | `{}` |
+| `FsToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
+| `FetchToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
+| `ShellToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
+| `SearchToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
+| `WebToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
+| `SkillToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
 
 ---
 
@@ -636,7 +665,7 @@ import type {
   IGraphEngine, IGraphBuilder, IGraphNode, GraphContext,
   GraphState, GraphRunResult, GraphCheckpoint, GraphDeadLetter,
   RouterFn, AsyncRouterFn, ParallelEdge, ParallelMergeFn,
-  GraphEngineConfig, GraphRunLimits, NodeRetryPolicy,
+  GraphEngineConfig, GraphRunLimits, GraphRunOptions, NodeRetryPolicy,
   GraphEnd,
 
   // LLM
