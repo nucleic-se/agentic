@@ -46,6 +46,11 @@ export interface OpenAICompatibleConfig {
      * Disabled by default because text is not executable authority.
      */
     recoverTextToolCalls?: boolean
+    /**
+     * Enable the Chat Completions previous_response_id extension. Disabled by
+     * default because ordinary OpenAI-compatible servers may reject it.
+     */
+    previousResponseContinuation?: boolean
 }
 
 type OpenAIRole = 'system' | 'user' | 'assistant' | 'tool'
@@ -93,9 +98,11 @@ interface OpenAIChatRequest {
     }
     stop?: string[]
     max_tokens?: number
+    previous_response_id?: string
 }
 
 interface OpenAIStreamDelta {
+    id?: string
     choices?: Array<{
         delta?: {
             content?: string | null
@@ -115,6 +122,7 @@ interface OpenAIStreamDelta {
 }
 
 interface OpenAIChatResponse {
+    id?: string
     choices?: Array<{
         finish_reason?: string | null
         message?: {
@@ -332,6 +340,7 @@ function fromOpenAIResponse(res: OpenAIChatResponse): TurnResponse {
         message: assistant,
         stopReason: mapStopReason(choice?.finish_reason, toolCalls),
         usage:      extractUsage(res.usage),
+        ...(res.id ? { responseId: res.id } : {}),
     }
 }
 
@@ -345,6 +354,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     protected readonly extraBody: Record<string, unknown>
     protected readonly retryConfig: RetryConfig
     protected readonly textToolRecovery: boolean
+    protected readonly previousResponseContinuation: boolean
 
     constructor(config: OpenAICompatibleConfig) {
         if (!config.model) throw new Error('OpenAICompatibleProvider: model is required')
@@ -360,6 +370,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         this.extraBody = config.extraBody ?? {}
         this.retryConfig = config.retry ?? {}
         this.textToolRecovery = config.recoverTextToolCalls ?? false
+        this.previousResponseContinuation = config.previousResponseContinuation ?? false
     }
 
     async structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>> {
@@ -394,6 +405,9 @@ export class OpenAICompatibleProvider implements ILLMProvider {
     }
 
     async turn(request: TurnRequest, options?: ProviderCallOptions): Promise<TurnResponse> {
+        if (request.previousResponseId && !this.previousResponseContinuation) {
+            throw new Error(`${this.providerName}: previous-response continuation is not enabled`)
+        }
         const body: OpenAIChatRequest = {
             model:      this.model,
             messages:   toOpenAIMessages(request.system, request.messages),
@@ -406,6 +420,9 @@ export class OpenAICompatibleProvider implements ILLMProvider {
                 : {}),
             ...(request.stopSequences?.length ? { stop: request.stopSequences } : {}),
             ...(request.maxTokens != null ? { max_tokens: request.maxTokens } : {}),
+            ...(request.previousResponseId
+                ? { previous_response_id: request.previousResponseId }
+                : {}),
         }
 
         const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody }, options)
@@ -431,6 +448,9 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         onDelta: (text: string) => void,
         options?: ProviderCallOptions,
     ): Promise<TurnResponse> {
+        if (request.previousResponseId && !this.previousResponseContinuation) {
+            throw new Error(`${this.providerName}: previous-response continuation is not enabled`)
+        }
         const body: OpenAIChatRequest = {
             model:      this.model,
             messages:   toOpenAIMessages(request.system, request.messages),
@@ -444,6 +464,9 @@ export class OpenAICompatibleProvider implements ILLMProvider {
                 : {}),
             ...(request.stopSequences?.length ? { stop: request.stopSequences } : {}),
             ...(request.maxTokens != null ? { max_tokens: request.maxTokens } : {}),
+            ...(request.previousResponseId
+                ? { previous_response_id: request.previousResponseId }
+                : {}),
         }
 
         const headers: Record<string, string> = {
@@ -468,6 +491,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         let content = ''
         let finishReason: string | null = null
         let usage: OpenAIChatResponse['usage'] = undefined
+        let responseId: string | undefined
         const toolCallAccum = new Map<number, { id: string; name: string; args: string }>()
 
         const reader = res.body.getReader()
@@ -490,6 +514,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
 
                 let chunk: OpenAIStreamDelta
                 try { chunk = JSON.parse(payload) } catch { continue }
+                if (chunk.id) responseId = chunk.id
 
                 const choice = chunk.choices?.[0]
                 if (choice?.delta?.content) {
@@ -537,6 +562,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
             message:    assistant,
             stopReason: mapStopReason(finishReason, toolCalls),
             usage:      extractUsage(usage),
+            ...(responseId ? { responseId } : {}),
         }
     }
 

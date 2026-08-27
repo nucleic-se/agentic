@@ -2,6 +2,13 @@
 
 All providers implement `ILLMProvider` from `@nucleic-se/agentic/contracts`. You can swap providers without changing your graph logic.
 
+`TurnResponse.responseId` and `TurnRequest.previousResponseId` provide optional,
+opaque provider continuation. The generic OpenAI-compatible adapter forwards
+the `previous_response_id` extension only when constructed with
+`previousResponseContinuation: true`; it is fail-closed by default because not
+every compatible endpoint implements that extension. The application remains
+responsible for scoping, persisting, expiring, and invalidating response IDs.
+
 ---
 
 ## ILLMProvider interface

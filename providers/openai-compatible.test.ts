@@ -69,6 +69,7 @@ describe('OpenAICompatibleProvider', () => {
 
     it('turn() sends tools and maps tool_calls back into the contract', async () => {
         const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            id: 'chatcmpl-next',
             choices: [{
                 finish_reason: 'tool_calls',
                 message: {
@@ -129,6 +130,7 @@ describe('OpenAICompatibleProvider', () => {
             args: { query: 'ollama' },
         }])
         expect(result.usage).toEqual({ inputTokens: 30, outputTokens: 10 })
+        expect(result.responseId).toBe('chatcmpl-next')
 
         const [_, init] = fetchMock.mock.calls[0] as [string, RequestInit]
         expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer secret')
@@ -158,6 +160,34 @@ describe('OpenAICompatibleProvider', () => {
             tool_call_id: 'call_old',
             content: '{"ok":true}',
         })
+    })
+
+    it('forwards previous_response_id only when continuation is explicitly enabled', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            id: 'chatcmpl-next',
+            choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'continued' } }],
+            usage: { prompt_tokens: 2, completion_tokens: 1 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+        vi.stubGlobal('fetch', fetchMock)
+        const request = {
+            previousResponseId: 'chatcmpl-previous',
+            messages: [{ role: 'user' as const, content: 'next' }],
+        }
+
+        const disabled = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1', model: 'test-model',
+        })
+        await expect(disabled.turn(request)).rejects.toThrow('continuation is not enabled')
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const enabled = new OpenAICompatibleProvider({
+            baseUrl: 'http://localhost:11434/v1', model: 'test-model',
+            previousResponseContinuation: true,
+        })
+        await expect(enabled.turn(request)).resolves.toMatchObject({ responseId: 'chatcmpl-next' })
+        const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))
+        expect(body.previous_response_id).toBe('chatcmpl-previous')
+        expect(body.messages).toEqual([{ role: 'user', content: 'next' }])
     })
 
     it('does not turn ordinary response text into executable tool calls by default', async () => {
@@ -454,7 +484,7 @@ describe('OpenAICompatibleProvider streamTurn', () => {
 
     it('streams text content deltas and returns complete response', async () => {
         const fetchMock = vi.fn().mockResolvedValue(sseResponse([
-            JSON.stringify({ choices: [{ index: 0, delta: { content: 'Hello ' }, finish_reason: null }] }),
+            JSON.stringify({ id: 'chatcmpl-stream', choices: [{ index: 0, delta: { content: 'Hello ' }, finish_reason: null }] }),
             JSON.stringify({ choices: [{ index: 0, delta: { content: 'world' }, finish_reason: 'stop' }] }),
             JSON.stringify({ usage: { prompt_tokens: 5, completion_tokens: 2 } }),
         ]))
@@ -475,6 +505,7 @@ describe('OpenAICompatibleProvider streamTurn', () => {
         expect(result.message.content).toBe('Hello world')
         expect(result.stopReason).toBe('end_turn')
         expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 2 })
+        expect(result.responseId).toBe('chatcmpl-stream')
     })
 
     it('accumulates tool call deltas from stream', async () => {

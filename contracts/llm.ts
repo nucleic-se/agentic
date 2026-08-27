@@ -129,12 +129,20 @@ export interface TurnRequest {
     stopSequences?:  string[]
     /** Max tokens to generate. Provider default if omitted. */
     maxTokens?:      number
+    /**
+     * Opaque ID of the immediately preceding provider response. Providers
+     * that support continuation may use this instead of replaying history.
+     * Callers must still supply the new messages and unchanged tool settings.
+     */
+    previousResponseId?: string
 }
 
 export interface TurnResponse {
     message:    AssistantMessage
     stopReason: StopReason
     usage:      TokenUsage
+    /** Opaque ID that may be supplied as previousResponseId on the next turn. */
+    responseId?: string
 }
 
 /** Cancellation and deadline shared by every provider operation. */
