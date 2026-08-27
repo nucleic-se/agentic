@@ -83,5 +83,9 @@
     "typescript": "^5.9.3",
     "vitest": "^4.0.17",
     "zod": "^4.3.6"
+  },
+  "dependencies": {
+    "@openai-oauth/core": "2.0.0",
+    "@openai-oauth/local": "2.0.0"
   }
 }

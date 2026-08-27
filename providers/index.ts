@@ -2,6 +2,11 @@ export { AnthropicProvider } from './anthropic.js'
 export type { AnthropicConfig } from './anthropic.js'
 export { OpenAICompatibleProvider } from './openai-compatible.js'
 export type { OpenAICompatibleConfig } from './openai-compatible.js'
+export { CodexSubscriptionProvider } from './codex-subscription.js'
+export type {
+    CodexSubscriptionConfig,
+    CodexSubscriptionTransport,
+} from './codex-subscription.js'
 export {
     OLLAMA_CLOUD_API_BASE,
     OLLAMA_CLOUD_MODEL_DEFAULTS,

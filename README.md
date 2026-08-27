@@ -43,7 +43,7 @@ console.log(state.summary);
 |---|---|
 | [Getting started](docs/getting-started.md) | Install, first agent, common patterns |
 | [State graphs](docs/concepts/graphs.md) | Nodes, edges, routing, parallel fan-out |
-| [LLM providers](docs/concepts/providers.md) | Anthropic, OpenAI-compatible, Ollama |
+| [LLM providers](docs/concepts/providers.md) | Anthropic, OpenAI-compatible, Codex subscription, Ollama |
 | [Tool runtimes](docs/concepts/tools.md) | Filesystem, fetch, shell, search, custom tools |
 | [Agent kernel](docs/concepts/kernel.md) | Bounded turns, batch preflight, policy, cancellation |
 | [Ivy runtime boundary](docs/ivy-runtime-boundary.md) | Ownership and migration contract for Ivy's future Agentic runtime |

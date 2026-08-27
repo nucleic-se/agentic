@@ -106,6 +106,45 @@ not enable it for models that support structured tool calling correctly.
 
 ---
 
+## CodexSubscriptionProvider
+
+Uses an existing local Codex login to call the ChatGPT Codex Responses transport
+directly. It supports streaming text, native function tools, structured JSON
+output, cancellation, token usage, and provider continuation.
+
+```ts
+import { CodexSubscriptionProvider } from '@nucleic-se/agentic/providers';
+
+const llm = new CodexSubscriptionProvider({
+  model: 'gpt-5.3-codex',
+  reasoningEffort: 'low',
+  verbosity: 'low',
+});
+```
+
+Authentication defaults to `CODEX_HOME/auth.json`, or `~/.codex/auth.json` when
+`CODEX_HOME` is unset. `authFilePath` can select a different credential file.
+The credential source and authenticated transport are injectable for hosted
+composition and testing.
+
+This provider deliberately depends only on the narrow `@openai-oauth/core` and
+`@openai-oauth/local` packages. It does not depend on Codex CLI, Pi, Gears, or a
+localhost proxy.
+
+Important boundaries:
+
+- This is a ChatGPT subscription integration, not the public OpenAI API. Its
+  backend transport is not a stable public API, so applications should keep this
+  provider replaceable and pin dependency versions.
+- Continuation state is held by the transport in the current process. A response
+  ID can reduce repeated context during a live tool loop, but must not be treated
+  as durable across process restarts.
+- Stop sequences and embeddings are not available through this provider.
+- Agentic still validates tool calls before execution; provider tool schemas are
+  therefore sent with `strict: false` instead of overstating schema compliance.
+
+---
+
 ## OllamaProvider
 
 Local inference via [Ollama](https://ollama.com). Defaults to `localhost:11434`.
