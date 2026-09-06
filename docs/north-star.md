@@ -45,6 +45,15 @@ decisions inspectable: what was included, shortened or omitted, and why. Treat
 token estimates honestly and test whether selected evidence helps complete the
 task, not only whether a request fits a ceiling.
 
+## Make the machinery observable
+
+Inspection is a foundation requirement. While a run is active or after it ends,
+we must be able to inspect committed state, exact submitted model context,
+context-budget decisions and execution traces. Correlate requests and outcomes
+by operation identity. Inspection must read recorded evidence without rerunning
+selection or changing the task. Distinguish live state, captured snapshots and
+unknown outcomes; never present a reconstructed request as what the model saw.
+
 ## Make long work trustworthy
 
 Subagents, durable progress and scheduled continuation should compose under clear

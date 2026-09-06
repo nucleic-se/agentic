@@ -128,10 +128,10 @@ class HarnessSessionClient implements SessionClient {
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
             onIntent: intent => this.change(id, 'model.intent', record => {
                 record.operations.push({ id: intent.operationId, runId, kind: 'model', status: 'intent', input: intent.request, createdAt: intent.startedAt, ...(report ? { contextReport: structuredClone(report) } : {}) });
-            }).then(() => undefined),
+            }, { operationId }).then(() => undefined),
             onOutcome: async outcome => {
                 const completed = outcome.outcome === 'completed' || outcome.outcome === 'partial';
-                const data: Record<string, unknown> = { operationId, outcome: outcome.outcome, dispatched: outcome.dispatched };
+                const data: Record<string, unknown> = { operationId, outcome: outcome.outcome, dispatched: outcome.dispatched, durationMs: outcome.durationMs };
                 let projectionError: unknown;
                 let projectionFailed = false;
                 await this.change(id, completed ? 'model.completed' : 'model.failed', record => {

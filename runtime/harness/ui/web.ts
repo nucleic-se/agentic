@@ -1,3 +1,4 @@
+import { inspectHarness } from '../inspection.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Extension, SessionClient } from '../types.js';
@@ -103,10 +104,13 @@ export async function startWebUi(client: SessionClient, options: WebUiOptions): 
                     json(res, 201, await client.create(input.title as string | undefined)); return;
                 }
             }
-            const match = /^\/api\/sessions\/([^/]+)(?:\/(events|submit|cancel|approve|fork|resume))?$/.exec(url.pathname);
+            const match = /^\/api\/sessions\/([^/]+)(?:\/(inspect|events|submit|cancel|approve|fork|resume))?$/.exec(url.pathname);
             if (!match) throw new HttpError(404, 'Route not found');
             const id = decodeURIComponent(match[1]); const action = match[2];
             if (req.method === 'GET' && !action) { json(res, 200, await client.get(id)); return; }
+            if (req.method === 'GET' && action === 'inspect') {
+                json(res, 200, await inspectHarness(client, id, Number(url.searchParams.get('after') ?? 0))); return;
+            }
             if (req.method === 'GET' && action === 'events') {
                 const after = Number(url.searchParams.get('after') ?? 0);
                 if (!Number.isSafeInteger(after) || after < 0) throw new HttpError(400, 'Invalid event cursor');

@@ -423,3 +423,29 @@ forcing an immediate rewrite of the repository into a large monorepo.
 Before publishing the extension SDK, prove at least two implementations of the
 important slots. Defer marketplaces, arbitrary hot reload, distributed scheduling,
 and untrusted plugin sandboxing until the local product and contracts are stable.
+
+## Runtime inspection
+
+Use **Inspect session** in the browser, or call
+`inspectHarness(client, sessionId, afterSequence)` from `@nucleic-se/agentic/harness`.
+The authenticated HTTP equivalent is `GET /api/sessions/:id/inspect?after=0`.
+A snapshot contains capture time, state revision, committed state and up to 200
+trace events. `nextSequence` is the next page's `after` cursor. Events newer than
+the captured state are excluded; refreshing captures a new revision. A downloaded
+JSON file contains the displayed state and trace page, not every historical page.
+
+For each model operation, `state.operations[].input` is the exact `TurnRequest`
+admitted to the provider adapter, recorded before dispatch. It includes selected
+system/messages, tools and output cap. `contextReport` records selection decisions
+and token estimates when the strategy supplies them. Operations retain outcomes;
+trace events expose transitions and model duration. The inspector also exposes
+queued input, approvals, usage and interrupted effects. Inspection never calls
+the context strategy, tools or model and does not interrupt execution.
+
+This is a committed-state view, not a debugger of arbitrary extension internals.
+Before admission there may be no selected request yet. Pending intent does not
+prove a network dispatch occurred. Provider-specific wire transformations, hidden
+provider history and private model reasoning are outside this boundary. Raw history
+is distinct from the selected request. Snapshots contain task/tool content and
+use the same authentication as the session; credentials used by transport are not
+added to them. No automatic trace retention or redaction policy is introduced.

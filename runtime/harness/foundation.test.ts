@@ -116,3 +116,50 @@ it('does not claim a bounded context when an opaque provider continuation retain
     await expect(execution.model({ messages: [], previousResponseId: 'hidden-history', maxTokens: 100 }, { onIntent: intent })).rejects.toThrow('opaque provider continuation');
     expect(turn).not.toHaveBeenCalled(); expect(intent).not.toHaveBeenCalled();
 });
+
+it('inspects the exact admitted request during execution without rebuilding context', async () => {
+    const { inspectHarness } = await import('./inspection.js');
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let dispatched: unknown;
+    const context = { assemble: vi.fn(budgetedContext('selected system', 2000).assemble) };
+    const client = await createHarness().compose({ extensions: [{ id: 'fixture', version: '1', apiVersion: 1,
+        roles: { store: () => new MemorySessionStore(), context: () => context,
+            provider: () => ({ structured: vi.fn(), turn: async request => {
+                dispatched = structuredClone(request); entered(); await gate;
+                return { message: { role: 'assistant', content: 'done' }, stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 2 } };
+            } }), loop: () => conversationalLoop({ maxTokens: 100 }),
+            tools: () => ({ tools: () => [], validate: (_name, args) => ({ ok: true, args }), call: vi.fn() }),
+            policy: () => ({ evaluate: async () => ({ kind: 'allow' }) }),
+        } }] });
+    try {
+        const session = await client.create();
+        await client.submit(session.id, 'original objective', { commandId: 'inspect' });
+        await started;
+        const snapshot = await inspectHarness(client, session.id);
+        const op = snapshot.state.operations[0];
+        expect(op.status).toBe('intent');
+        expect(op.input).toEqual(dispatched);
+        expect(op.contextReport?.usage.reservedOutputTokens).toBe(100);
+        expect(snapshot.events.every(event => event.sequence <= snapshot.revision)).toBe(true);
+        await inspectHarness(client, session.id);
+        expect(context.assemble).toHaveBeenCalledOnce();
+        snapshot.state.messages.length = 0;
+        expect((await client.get(session.id)).messages).toHaveLength(1);
+        release(); await client.wait(session.id);
+        const finished = await inspectHarness(client, session.id);
+        expect(finished.state.operations[0].input).toEqual(dispatched);
+        expect(finished.state.operations[0].status).toBe('completed');
+    } finally { release(); await client.close(); }
+});
+
+it('excludes trace events newer than the captured state', async () => {
+    const { inspectHarness } = await import('./inspection.js');
+    const store = { get: async () => ({ revision: 3 }), events: vi.fn(async () => [{ sequence: 2 }, { sequence: 3 }, { sequence: 4 }]) };
+    const snapshot = await inspectHarness(store, 'test', 1);
+    expect(snapshot.events).toEqual([{ sequence: 2 }, { sequence: 3 }]);
+    expect(snapshot.nextSequence).toBe(3);
+    expect(store.events).toHaveBeenCalledWith('test', 1, 200);
+    await expect(inspectHarness(store, 'test', -1)).rejects.toThrow('cursor');
+});

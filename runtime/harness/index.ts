@@ -9,3 +9,6 @@ export type { HarnessClient, HarnessDriver, HarnessExtension, DriverComposition 
 export { compositionFingerprint } from './composition.js';
 export { createHarnessExecution } from './execution.js';
 export type { HarnessExecution, HarnessExecutionRoles, HarnessModelOptions } from './execution.js';
+
+export { inspectHarness } from './inspection.js';
+export type { HarnessSnapshot } from './inspection.js';

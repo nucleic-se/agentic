@@ -59,6 +59,9 @@ describe('web UI adapter',()=>{
         await s.request('/api/sessions/session-1/events?after=4&limit=2',undefined,h);
         expect(s.client.events).toHaveBeenCalledWith('session-1',4,2);
         expect((await (await s.request('/api/sessions/session-1',undefined,h)).json()).id).toBe('session-1');
+        const inspection = await (await s.request('/api/sessions/session-1/inspect',undefined,h)).json();
+        expect(inspection.state.id).toBe('session-1'); expect(inspection.revision).toBe(1);
+        expect((await s.request('/api/sessions/session-1/inspect?after=-1',undefined,h)).status).toBe(400);
         await s.request('/api/sessions/session-1/events?after=4',undefined,h); expect(s.client.events).toHaveBeenCalledWith('session-1',4);
         expect((await s.request('/api/sessions/session-1/submit',{content:'hello',commandId:'c1',mode:'enqueue'},h)).status).toBe(202);
         expect(s.client.submit).toHaveBeenCalledWith('session-1','hello',{commandId:'c1',mode:'enqueue'});
