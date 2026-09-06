@@ -194,3 +194,38 @@ describe('shared section policy', () => {
         expect(context.usage.totalTokens).toBe(context.usage.schemaTokens+20);
     });
 });
+
+it('projects recent error output only with a recoverable source and preserves exact originals', async () => {
+    const messages: Message[] = [
+        { role: 'user', content: 'repair the failing test', sticky: true },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call', name: 'shell', args: {} }] },
+        { role: 'tool_result', toolCallId: 'call', toolName: 'shell', isError: true, content: 'Failure at test.ts:12\n' + 'x'.repeat(37000) + '\nExit code: 1' },
+    ];
+    const original = structuredClone(messages);
+    const input = { messages, tokenBudget: 2000 };
+    await expect(composeAgentContext(input)).rejects.toBeInstanceOf(ContextBudgetExceededError);
+    const options = { maxToolResultCharacters: 1200, referenceToolResult: () => 'read_tool_result({"messageIndex":2})' };
+    const selected = await composeAgentContext(input, options);
+    expect(selected.messages[2]).toMatchObject({ role: 'tool_result', toolCallId: 'call', isError: true });
+    expect(selected.messages[2].content).toContain('Failure at test.ts:12');
+    expect(selected.messages[2].content).toContain('Exit code: 1');
+    expect(selected.messages[2].content).toContain('read_tool_result');
+    expect(selected.messages[2].content.length).toBeLessThanOrEqual(1200);
+    expect(selected.decisions.some(d => d.protected && d.references?.[0]?.messageIndex === 2)).toBe(true);
+    expect(messages).toEqual(original);
+    await expect(composeAgentContext(input, { ...options, referenceToolResult: () => null })).rejects.toBeInstanceOf(ContextBudgetExceededError);
+    await expect(composeAgentContext(input, { maxToolResultCharacters: 1200 })).rejects.toThrow('requires referenceToolResult');
+});
+
+it('bounds output presentation including its reference and avoids splitting surrogate pairs', async () => {
+    const { projectToolOutput } = await import('./ToolOutput.js');
+    const text = '😀'.repeat(2000);
+    for (const cap of [120, 201, 1000]) {
+        const output = projectToolOutput(text, 'retrieve(1)', cap)!;
+        expect(output.length).toBeLessThanOrEqual(cap);
+        expect(output.isWellFormed()).toBe(true);
+        expect(output).toContain('omitted');
+    }
+    expect(projectToolOutput('small', 'retrieve(1)', 100)).toBeNull();
+    expect(projectToolOutput(text, 'long-reference'.repeat(50), 100)).toBeNull();
+});

@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
+import { projectToolOutput } from './ToolOutput.js';
+export { projectToolOutput } from './ToolOutput.js';
 import type { Message, ToolDefinition, ToolResultMessage } from '../contracts/llm.js';
 import type { ITokenCounter } from '../contracts/ITokenCounter.js';
 import type { IPromptContributor, PromptContributionContext, PromptSection } from '../contracts/IPromptEngine.js';
@@ -28,8 +30,12 @@ export interface ContextTokenOptions {
 }
 export interface ContextCompositionOptions extends ContextTokenOptions {
     minRecentGroups?: number;
-    /** Under budget pressure, return an exact-source retrieval instruction for an older text result.
-     * Lower-priority groups are considered first; fitting contexts stay intact.
+    /** Opt-in model-facing cap for recoverable text tool results, including recent errors.
+     * Requires referenceToolResult; originals and call identity remain intact. */
+    maxToolResultCharacters?: number;
+    /** Return an exact-source retrieval instruction for retained text.
+     * Without maxToolResultCharacters, only older results under budget pressure are considered,
+     * in priority order; fitting contexts stay intact.
      * Return null when the source cannot be recovered with the current tool grants.
      * The host must preserve the original message at this index. */
     referenceToolResult?(message: ToolResultMessage, messageIndex: number, tools: readonly ToolDefinition[]): string | null;
@@ -184,6 +190,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         section.estimatedTokens = count(counter.countTokens(section.text()));
     }
     const messageGroups = groups(input.messages);
+    const sourceText = messageGroups.flatMap(group => group.messages.map(message => message.content));
     type Item = { kind: 'messages'; group: Group; } | { kind: 'section'; section: PromptSection; };
     type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; references?: ContextDecision['references']; order: number };
     const candidates: Candidate[] = sections.map((section, index) => ({ kind: 'section', section, id: section.id,
@@ -209,6 +216,28 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         const usage = estimateContextTokens({ system: finalSystem, messages, tools, responseSchema, reservedOutputTokens: input.reservedOutputTokens }, tokenOptions);
         return { system: finalSystem, messages, includedSections: rendered.included, usage };
     };
+    if (options.maxToolResultCharacters !== undefined) {
+        integer(options.maxToolResultCharacters, 'maxToolResultCharacters', 1);
+        if (!options.referenceToolResult) throw new TypeError('Tool output presentation requires referenceToolResult');
+        for (const item of candidates) {
+            if (item.kind !== 'messages') continue;
+            for (const [offset, message] of item.group.messages.entries()) {
+                input.signal?.throwIfAborted();
+                if (message.role !== 'tool_result' || message.contentBlocks?.length || message.content.length <= options.maxToolResultCharacters) continue;
+                const messageIndex = item.group.firstIndex + offset;
+                const reference = options.referenceToolResult(structuredClone(message), messageIndex, structuredClone(tools));
+                if (reference === null) continue;
+                if (typeof reference !== 'string' || !reference.trim()) throw new ContextCompressionError('Tool result reference must be nonempty text or null');
+                const content = projectToolOutput(message.content, reference, options.maxToolResultCharacters);
+                if (content === null) continue;
+                const before = render().usage.totalTokens;
+                item.group.messages[offset] = { ...message, content };
+                if (render().usage.totalTokens >= before) { item.group.messages[offset] = message; continue; }
+                item.action = 'compressed';
+                (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
+            }
+        }
+    }
     const minimum = render(true);
     if (minimum.usage.totalTokens > budget) throw new ContextBudgetExceededError(budget, minimum.usage.totalTokens);
     let result = render();
@@ -222,17 +251,19 @@ export async function composeAgentContext(input: ContextCompositionInput, option
                 if (result.usage.totalTokens <= budget) break;
                 if (message.role !== 'tool_result' || message.isError || message.contentBlocks?.length || message.content.length <= 1200) continue;
                 const messageIndex = item.group.firstIndex + offset;
-                const reference = options.referenceToolResult(structuredClone(message), messageIndex, structuredClone(tools));
+                const existing = item.references?.find(reference => reference.messageIndex === messageIndex);
+                const reference = existing?.reference ?? options.referenceToolResult(structuredClone(message), messageIndex, structuredClone(tools));
                 if (reference === null) continue;
                 if (typeof reference !== 'string' || !reference.trim()) throw new ContextCompressionError('Tool result reference must be nonempty text or null');
-                const content = `[Earlier tool result; exact saved text: ${reference}]\nPreview (not the full result):\n${message.content.slice(0, 400)}`;
+                const content = `[Earlier tool result; exact saved text: ${reference}]\nPreview (not the full result):\n${sourceText[messageIndex].slice(0, 400)}`;
                 if (content.length >= message.content.length) continue;
                 item.group.messages[offset] = { ...message, content };
                 const trial = render();
                 if (trial.usage.totalTokens >= result.usage.totalTokens) { item.group.messages[offset] = message; continue; }
                 result = trial;
                 item.action = 'compressed';
-                (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
+                if (existing) existing.retainedCharacters = content.length;
+                else (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
             }
             if (result.usage.totalTokens <= budget) break;
             const compressed: Message[] = [];

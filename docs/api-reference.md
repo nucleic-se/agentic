@@ -728,3 +728,20 @@ import type {
   JsonSchema,
 } from '@nucleic-se/agentic/contracts';
 ```
+
+
+`projectToolOutput(text, reference, maxCharacters)` from `@nucleic-se/agentic/context`
+creates a bounded head/tail view of retained text, including its retrieval reference
+and omission count. Limits and counts use UTF-16 code units; boundaries do not
+split surrogate pairs. It returns `null` when no shortening is needed or the
+reference cannot fit. It neither stores evidence nor claims that storage succeeded.
+
+`composeAgentContext` can opt into this presentation with
+`maxToolResultCharacters` and `referenceToolResult`. The host must retain originals
+at their exact indices and return `null` when the current tool grants cannot
+retrieve them. Presentation also covers recent error results; identity, error
+flags, tool pairing and raw input remain unchanged. Native content blocks are
+excluded. Context reports record original/retained sizes and retrieval references.
+Older successful previews may shrink further under existing priority-driven
+pressure. The final complete-request budget still applies; this is a per-result
+presentation cap, not an assurance that arbitrary batches fit.
