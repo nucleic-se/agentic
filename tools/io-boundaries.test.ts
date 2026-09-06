@@ -87,6 +87,50 @@ it('bounds count mode as well as content mode', async () => {
     expect(result.data).toMatchObject({ fileCount: 2 })
 })
 
+it('bounds coding search modes without splitting returned paths or match lines', async () => {
+    const names = Array.from({ length: 45 }, (_, i) => `${i.toString().padStart(2, '0')}-${'é'.repeat(70)}.ts`)
+    for (const name of names) await writeFile(join(root, name), 'needle 🌱\nneedle again')
+    const runtime = codingToolRuntime(root)
+    for (const output of ['content', 'files_only', 'count']) {
+        const result = await runtime.call('search_grep', { pattern: 'needle', output })
+        expect(result.ok).toBe(true)
+        expect(Buffer.byteLength(result.content)).toBeLessThanOrEqual(4000)
+        expect(result.data).toMatchObject({ truncated: true })
+        expect(result.content).toContain('[truncated; narrow')
+        const entries = result.content.split('\n').filter(line => line && !line.startsWith('[') && !line.startsWith('Total:'))
+        for (const entry of entries) expect(names.some(name => entry === name || entry.startsWith(`${name}:`))).toBe(true)
+        if (output === 'count') expect(result.data).toMatchObject({ fileCount: entries.length, totalMatches: entries.length * 2 })
+    }
+    const found = await runtime.call('search_find', { pattern: '*.ts' })
+    expect(Buffer.byteLength(found.content)).toBeLessThanOrEqual(4000)
+    expect(found.data).toMatchObject({ truncated: true })
+    for (const entry of found.content.split('\n').filter(line => !line.startsWith('['))) expect(names).toContain(entry)
+})
+
+it('keeps the matching line when its surrounding context exceeds the page', async () => {
+    const lines = Array.from({ length: 21 }, () => '🌱'.repeat(160))
+    lines[10] = 'the unique needle'
+    await writeFile(join(root, 'context.txt'), lines.join('\n'))
+    const result = await codingToolRuntime(root).call('search_grep', { path: 'context.txt', pattern: 'needle', context_lines: 10 })
+    expect(result).toMatchObject({ ok: true, data: { count: 1, truncated: false, contextOmitted: true } })
+    expect(result.content).toContain('context.txt:11: the unique needle')
+    expect(result.content).toContain('[context omitted')
+    expect(Buffer.byteLength(result.content)).toBeLessThanOrEqual(4000)
+    const composed = await composeAgentContext({ tokenBudget: 16000, messages: [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'search', name: 'search_grep', args: { pattern: 'needle' } }] },
+        { role: 'tool_result', toolCallId: 'search', toolName: 'search_grep', content: result.content },
+    ] }, { maxToolResultCharacters: 4000, referenceToolResult: () => 'retrieve original' })
+    expect(composed.messages[1].content).toBe(result.content)
+    expect(await new SearchToolRuntime(root).call('search_grep', { path: 'context.txt', pattern: 'needle', context_lines: 10 })).toMatchObject({ ok: true, data: { contextOmitted: false } })
+})
+
+it('validates search output ceilings without changing other instances', () => {
+    for (const maxOutputBytes of [511, 262145, 4000.5, NaN])
+        expect(() => new SearchToolRuntime(root, { maxOutputBytes })).toThrow(RangeError)
+    expect(new SearchToolRuntime(root, { maxOutputBytes: 4000 }).tools()[0].description).toContain('4000')
+    expect(new SearchToolRuntime(root).tools()[0].description).toContain('262144')
+})
+
 it.skipIf(process.platform === 'win32')('rejects a FIFO without waiting for a writer', () => {
     expect(spawnSync('mkfifo', [join(root, 'pipe')]).status).toBe(0)
     // A subprocess timeout contains a regression in blocking open/read.

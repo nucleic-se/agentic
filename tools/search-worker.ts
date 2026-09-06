@@ -8,6 +8,23 @@ import type { ToolCallResult } from '../contracts/tool-runtime.js'
 const MAX_MATCHES    = 100
 const MAX_LINE_LEN   = 500
 const MAX_FILE_BYTES = 1024 * 1024   // skip files > 1 MB
+const OUTPUT_NOTICE = '\n[truncated; narrow pattern/path or reduce context_lines]'
+
+/** Reserve space for notices and count summaries; never split a result entry. */
+class SearchOutput {
+    readonly entries: string[] = []
+    private bytes = 0
+    constructor(readonly limit: number) {}
+    fits(entry: string): boolean { return Buffer.byteLength(entry) <= this.limit - 256 }
+    add(entry: string): boolean {
+        const size = Buffer.byteLength(entry) + (this.entries.length ? 1 : 0)
+        if (this.bytes + size > this.limit - 256) return false
+        this.entries.push(entry)
+        this.bytes += size
+        return true
+    }
+    text(truncated: boolean): string { return this.entries.join('\n') + (truncated ? OUTPUT_NOTICE : '') }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -63,7 +80,7 @@ function* walkFiles(dir: string, root: string, include?: string): Generator<stri
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult {
+function handleGrep(root: string, args: Record<string, unknown>, maxOutputBytes: number): ToolCallResult {
     const patternStr    = String(args['pattern'] ?? '').trim()
     if (!patternStr) return fail('pattern is required')
 
@@ -74,6 +91,7 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
     const contextLines  = Math.min(Math.max(Number(args['context_lines'] ?? 0), 0), 10)
     const maxResults    = Math.min(Math.max(Number(args['max_results'] ?? MAX_MATCHES), 1), MAX_MATCHES)
     const output        = String(args['output'] ?? 'content') as 'content' | 'files_only' | 'count'
+    const result = new SearchOutput(maxOutputBytes)
 
     const searchRoot = subdir ? path.resolve(root, subdir) : root
     if (!withinRoot(root, searchRoot)) return fail(`Path escapes working root: ${subdir}`)
@@ -105,6 +123,10 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
                 if (regex.test(line)) count++
             }
             if (count > 0) {
+                if (!result.add(output === 'count' ? `${rel}: ${count}` : rel)) {
+                    if (!fileCounts.size) return fail('Search entry exceeds output ceiling; use a narrower search path.')
+                    truncated = true; break
+                }
                 fileCounts.set(rel, count)
                 if (fileCounts.size >= maxResults) { truncated = true; break }
             }
@@ -113,20 +135,18 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
         if (fileCounts.size === 0) return ok('No matches found.')
 
         if (output === 'files_only') {
-            const text = [...fileCounts.keys()].join('\n')
-            return ok(text + (truncated ? '\n[matching-file limit reached]' : ''), { fileCount: fileCounts.size, truncated })
+            return ok(result.text(truncated), { fileCount: fileCounts.size, truncated })
         }
         // count mode
-        const entries = [...fileCounts.entries()].map(([f, c]) => `${f}: ${c}`)
         const total = [...fileCounts.values()].reduce((a, b) => a + b, 0)
-        return ok(entries.join('\n') + `\n\nTotal: ${total} matches in ${fileCounts.size} files` +
-            (truncated ? '\n[matching-file limit reached]' : ''), { fileCount: fileCounts.size, totalMatches: total, truncated })
+        return ok(result.text(truncated) + `\n\nTotal: ${total} matches in ${fileCounts.size} returned files`,
+            { fileCount: fileCounts.size, totalMatches: total, truncated })
     }
 
     // content mode — matching lines with optional context
-    const matches: string[] = []
     let truncated = false
     let matchCount = 0
+    let contextOmitted = false
 
     for (const abs of walkFiles(searchRoot, root, include)) {
         if (truncated) break
@@ -146,6 +166,7 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
             if (regex.test(lines[i])) hitIndices.push(i)
         }
         if (hitIndices.length === 0) continue
+        const hits = new Set(hitIndices)
 
         // Build context-aware output
         const emittedLines = new Set<number>()
@@ -155,20 +176,34 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
             const rangeStart = Math.max(0, hitIdx - contextLines)
             const rangeEnd   = Math.min(lines.length - 1, hitIdx + contextLines)
 
+            let block: string[] = []
+            let included: number[] = []
             // Separator between non-contiguous ranges
             if (emittedLines.size > 0 && !emittedLines.has(rangeStart - 1)) {
-                matches.push('--')
+                block.push('--')
             }
 
             for (let i = rangeStart; i <= rangeEnd; i++) {
                 if (emittedLines.has(i)) continue
-                emittedLines.add(i)
+                included.push(i)
 
                 const line = lines[i].length > MAX_LINE_LEN ? lines[i].slice(0, MAX_LINE_LEN) + '…' : lines[i]
-                const marker = i === hitIdx ? ':' : '-'  // : for match, - for context
-                matches.push(`${rel}:${i + 1}${marker} ${line}`)
+                const marker = hits.has(i) ? ':' : '-'  // : for match, - for context
+                block.push(`${rel}:${i + 1}${marker} ${line}`)
             }
 
+            let omitted = false
+            if (!result.fits(block.join('\n'))) {
+                block = [`${rel}:${hitIdx + 1}: ${lines[hitIdx].slice(0, MAX_LINE_LEN)}${lines[hitIdx].length > MAX_LINE_LEN ? '…' : ''}`, '[context omitted for this match; use fs_read]']
+                included = [hitIdx]
+                omitted = true
+            }
+            if (!result.add(block.join('\n'))) {
+                if (!matchCount) return fail('Search entry exceeds output ceiling; use a narrower search path.')
+                truncated = true; break
+            }
+            contextOmitted ||= omitted
+            for (const index of included) emittedLines.add(index)
             matchCount++
             if (matchCount >= maxResults) { truncated = true; break }
         }
@@ -176,11 +211,10 @@ function handleGrep(root: string, args: Record<string, unknown>): ToolCallResult
 
     if (matchCount === 0) return ok('No matches found.')
 
-    const content = matches.join('\n') + (truncated ? `\n(truncated at ${maxResults} matches)` : '')
-    return ok(content, { count: matchCount, truncated })
+    return ok(result.text(truncated), { count: matchCount, truncated, contextOmitted })
 }
 
-function handleFind(root: string, args: Record<string, unknown>): ToolCallResult {
+function handleFind(root: string, args: Record<string, unknown>, maxOutputBytes: number): ToolCallResult {
     const pattern = String(args['pattern'] ?? '').trim()
     if (!pattern) return fail('pattern is required')
 
@@ -189,28 +223,30 @@ function handleFind(root: string, args: Record<string, unknown>): ToolCallResult
     if (!withinRoot(root, searchRoot)) return fail(`Path escapes working root: ${subdir}`)
     if (!fs.existsSync(searchRoot)) return fail(`Path not found: ${subdir || '.'}`)
 
-    const results: string[] = []
+    const results = new SearchOutput(maxOutputBytes)
     let truncated = false
 
     for (const abs of walkFiles(searchRoot, root)) {
         const rel = path.relative(root, abs)
         if (matchesGlob(rel, pattern) || matchesGlob(path.basename(abs), pattern)) {
-            results.push(rel)
-            if (results.length >= MAX_MATCHES) { truncated = true; break }
+            if (!results.add(rel)) {
+                if (!results.entries.length) return fail('Search entry exceeds output ceiling; use a narrower search path.')
+                truncated = true; break
+            }
+            if (results.entries.length >= MAX_MATCHES) { truncated = true; break }
         }
     }
 
-    if (results.length === 0) return ok('No files found.')
+    if (results.entries.length === 0) return ok('No files found.')
 
-    const content = results.join('\n') + (truncated ? `\n(truncated at ${MAX_MATCHES} results)` : '')
-    return ok(content, { count: results.length, truncated })
+    return ok(results.text(truncated), { count: results.entries.length, truncated })
 }
 
 
 try {
-    const { root, name, args } = workerData
+    const { root, name, args, maxOutputBytes } = workerData
     parentPort!.postMessage({ phase: 'searching' })
-    parentPort!.postMessage(name === 'search_grep' ? handleGrep(root, args) : handleFind(root, args))
+    parentPort!.postMessage(name === 'search_grep' ? handleGrep(root, args, maxOutputBytes) : handleFind(root, args, maxOutputBytes))
 } catch (error) {
     parentPort!.postMessage({ ok: false, content: `Search failed: ${String(error)}`, errorKind: 'runtime' })
 }

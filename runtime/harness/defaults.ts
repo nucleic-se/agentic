@@ -145,7 +145,7 @@ export function codingToolRuntime(workingRoot: string, options: { outputDirector
     const root = realpathSync(workingRoot);
     const outputStore = new FileToolOutputStore(options.outputDirectory ?? path.join(tmpdir(), 'agentic-output', createHash('sha256').update(root).digest('hex')));
     const fs = new FsToolRuntime(root, { textPageBytes: 4000 });
-    const search = new SearchToolRuntime(root);
+    const search = new SearchToolRuntime(root, { maxOutputBytes: 4000 });
     const shell = new ShellToolRuntime(root);
     const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), {
         name: 'read_output', description: 'Read exact saved shell text by output ID. Offset and nextOffset use UTF-16 code units; returns up to 4000 units. Continue until eof. Saved output may be incomplete if capture reached its limit.',

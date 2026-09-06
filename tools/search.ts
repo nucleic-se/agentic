@@ -40,9 +40,19 @@ const DEFINITIONS: ToolDefinition[] = [
 
 /** Each call owns one worker; cancellation and the finite timeout terminate it. */
 export class SearchToolRuntime implements IToolRuntime {
-    constructor(private readonly root: string) {}
+    private readonly maxOutputBytes: number
 
-    tools(): ToolDefinition[] { return structuredClone(DEFINITIONS) }
+    constructor(private readonly root: string, options: { maxOutputBytes?: number } = {}) {
+        this.maxOutputBytes = options.maxOutputBytes ?? 256 * 1024
+        if (!Number.isSafeInteger(this.maxOutputBytes) || this.maxOutputBytes < 512 || this.maxOutputBytes > 256 * 1024)
+            throw new RangeError('maxOutputBytes must be an integer between 512 and 262144')
+    }
+
+    tools(): ToolDefinition[] {
+        return structuredClone(DEFINITIONS).map(tool => ({ ...tool,
+            description: `${tool.description} Output is bounded to ${this.maxOutputBytes} bytes. Truncated results require a narrower pattern/path. Oversized context is omitted with a notice; use fs_read for source lines. Files over 1 MiB are skipped.`,
+        }))
+    }
 
     async call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
         if (!['search_grep', 'search_find'].includes(name)) return { ok: false, content: `Unknown tool: ${name}` }
@@ -50,7 +60,7 @@ export class SearchToolRuntime implements IToolRuntime {
         return new Promise(resolve => {
             let worker: Worker
             try {
-                worker = new Worker(new URL('./search-worker.js', import.meta.url), { workerData: { root: this.root, name, args },
+                worker = new Worker(new URL('./search-worker.js', import.meta.url), { workerData: { root: this.root, name, args, maxOutputBytes: this.maxOutputBytes },
                     execArgv: process.execArgv.filter((arg, index, all) => !arg.startsWith('--input-type') && all[index - 1] !== '--input-type') })
             } catch (error) {
                 resolve({ ok: false, content: `Search failed: ${String(error)}`, errorKind: 'runtime' }); return

@@ -349,7 +349,7 @@ interface ToolCallOptions {
 | `FsToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string, { textPageBytes?: number }?)` |
 | `FetchToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
 | `ShellToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
-| `SearchToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
+| `SearchToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string, { maxOutputBytes?: number }?)` |
 | `WebToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
 | `SkillToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
 
@@ -363,7 +363,7 @@ lines within that ceiling; truncated output names the next `offset`
 and includes `data.nextOffset`. A single line that cannot fit is rejected
 explicitly. `data.totalLines` is present only when the scan reaches EOF. Base64
 is supported for full reads, not line ranges. Reads check cancellation between
-asynchronous chunks. The default coding extension is version 5: UTF-8 pages
+asynchronous chunks. Since coding extension version 5, UTF-8 pages
 are bounded to 4,000 bytes so complete lines and their continuation cursor fit
 the harness's 4,000-character presentation cap. Larger `limit` values do not
 override the byte ceiling. An oversized individual line is rejected; use another
@@ -372,6 +372,15 @@ Older persisted sessions require their original composition.
 
 `SearchToolRuntime` accepts an explicit file or directory path in every output
 mode, applies include filters to either, and canonicalizes paths against its root.
+`maxOutputBytes` bounds returned entries and notices (512 bytes to 256 KiB;
+default 256 KiB). Coding extension version 6 selects 4,000 bytes for search.
+Content results retain complete match blocks; when one block cannot fit even
+an empty output, only its matching line is returned with a context-omission
+notice and `data.contextOmitted: true`. Lines retain the 500-character snippet
+limit; use `fs_read` for source text. A matching entry that cannot fit is an
+explicit error. Byte or result limits set `data.truncated` and request a narrower
+query; these are bounded search results, not resumable snapshots. Count totals
+cover returned files only. Files larger than 1 MiB are skipped.
 A symlink cannot point a search outside that root. Each call owns a worker, allowing
 cancellation to stop regex evaluation and traversal. Without cancellation, a
 30-second deadline still applies. The worker is terminated before the result
