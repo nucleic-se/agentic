@@ -22,6 +22,23 @@ async function settled(client: SessionClient, id: string) {
     return client.get(id);
 }
 describe('empty harness and effects', () => {
+    it('journals the decoded wire request between model intent and completion', async () => {
+        const config = setup();
+        const request = { url: 'https://provider.example/responses', body: { input: [], parallel_tool_calls: true } };
+        config.provider.turn = vi.fn(async (_request, options) => {
+            await options?.onRequest?.(request);
+            return answer;
+        });
+        const client = await createHarness().compose(config);
+        try {
+            const session = await client.create();
+            await client.submit(session.id, 'go', { commandId: randomUUID() });
+            const record = await settled(client, session.id);
+            const events = (await client.events(session.id)).filter(event => event.type.startsWith('model.'));
+            expect(events.map(event => event.type)).toEqual(['model.intent', 'model.request', 'model.completed']);
+            expect(events[1].data).toEqual({ operationId: record.operations[0].id, request });
+        } finally { await client.close(); }
+    });
     it('commits unknown timeout before stopping remaining tool effects and model calls', async () => {
         const batch: TurnResponse = { ...proposal, message: { ...proposal.message, toolCalls: [
             { id: 'first', name: 'write', args: { path: 'one' } },

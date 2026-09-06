@@ -60,7 +60,8 @@ export type {
 } from './ICapability.js';
 
 // Shared types
-export type { JsonSchema } from './shared.js';
+export type { JsonSchema, JsonValue } from './shared.js';
+export type { ProviderContinuation, ProviderCapabilities, ProviderRequestObservation } from './llm.js';
 
 // Typed tool system
 export type {

@@ -4,6 +4,9 @@
  * @module contracts
  */
 
+/** Serializable data shared across adapters and persistence. */
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+
 /** Minimal JSON Schema type for tool input/output contracts. */
 export type JsonSchema = {
     type: string;

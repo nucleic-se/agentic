@@ -105,7 +105,7 @@ Do not initially expose arbitrary nesting or child-priority multiplication. Sele
 2. Correct pipeline typing/retry/deadline behavior and builder result types.
 3. Unify context selection, simplify scoring, then add budget-aware builders, atomic groups and preparation reports.
 4. Add explicit recovery resolution, clean provider capabilities and expose common run limits.
-5. Validate these contracts with a minimal Gears consumer and reusable adapter conformance tests. Keep jobs, scheduler and distributed ownership in Gears; keep Assembly's Pi runtime default and Agentic experimental.
+5. Validate these contracts with a minimal Gears consumer and reusable adapter conformance tests. Keep jobs, scheduler and distributed ownership in Gears; keep Assembly's existing runtime default and Agentic experimental.
 
 Defer recursive context trees, automatic model-driven compression, general dependency-injection/capability registries, and distributed workflow machinery. Each should require demonstrated value from real consumers before entering the library.
 

@@ -78,8 +78,7 @@ agent policies and effects should not be copied into a second implementation.
 
 The branch now contains an empty typed host, a maintained-reference-agent starting
 point, durable local sessions, a terminal client, and an authenticated browser
-client. It is an initial implementation, not an established competitor to Pi or
-Hermes. Earlier audit fixes remain part of the working tree.
+client. It is an initial implementation. Earlier audit fixes remain part of the working tree.
 
 | Surface | Current implementation |
 | --- | --- |
@@ -178,19 +177,9 @@ persistent assistant workflows. This is a sequencing recommendation, not a
 restriction on the harness. Equal first-release emphasis on coding, messaging,
 automation, long-term memory, and remote fleets would dilute the first product.
 
-Pi already offers TypeScript customization, package distribution, TUI/JSON/RPC/SDK
-modes, and branching session history. Those are competitive baselines, not new
-claims of differentiation. [Pi's official README](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/README.md)
-
-Hermes already has pluggable context and memory, SQLite session persistence,
-multiple entry points, and a messaging ecosystem. It demonstrates the importance
-of durable sessions and a useful default experience.
-[Hermes architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture/)
-
-Our proposed distinction: replace context, orchestration, storage, or UI without
-losing execution history, approval semantics, cancellation, or recovery behavior.
-This is a hypothesis to validate with working integrations and evaluations, not
-an established advantage over either competitor.
+The design should let applications replace context, orchestration, storage, or UI
+while preserving execution history, approval semantics, cancellation, and recovery.
+Validate this through working integrations and evaluations.
 
 ## Specialist debate and decisions
 
@@ -406,13 +395,12 @@ Gate: the same task can run headless or in the TUI, resume after restart, handle
 cancellation and approval, and preserve records when the UI disconnects. Run
 real coding tasks with visible changes and tests; a mocked happy path is not enough.
 
-### 5. Competitive evaluation and expansion
+### 5. Evaluation and expansion
 
 Measure task completion and regression rate, cost/tokens per successful task,
 time to first output, cancellation latency, recovery correctness, and the effort
-to write an extension. Compare selected workflows against Pi/Hermes using the
-same model, tasks, tool permissions, and budget where possible. Publish limitations
-and avoid claims of superiority without measurements.
+to write an extension. Use repeatable tasks with documented model, tool permissions
+and budgets. Record limitations alongside measurements.
 
 Expand into MCP/skills interoperability, richer TUI, editor protocols, memory,
 background jobs, and channel adapters in response to measured needs. The external

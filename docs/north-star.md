@@ -87,12 +87,10 @@ construction and accounting, recovery, and conformance between compositions.
 Resolve accumulated debt as part of that work. Add features once they have a clear
 place in this foundation and can be exercised in real tasks.
 
-Use Pi and Hermes as external benchmarks across the whole harness: context,
-execution, tools, permissions, sessions, recovery, delegation, scheduling, memory,
-providers, extensions and UI. Compare mechanisms and failure behavior as well as
-feature presence. Validate comparisons against source code and distinguish
-implemented behavior from proposals and measured results from expectations.
-Keep the detailed competitor research outside the repositories.
+Evaluate context, execution, tools, permissions, sessions, recovery, delegation,
+scheduling, memory, providers, extensions and UI. Verify mechanisms and failure
+behavior against source code and real runs. Distinguish implemented behavior from
+proposals and measured results from expectations.
 
 Our intended strength is coherent composition with less code and less integration
 work. Demonstrate that strength through shared conformance tests, realistic task

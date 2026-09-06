@@ -47,14 +47,14 @@ export async function assertProviderConformance(create: ProviderScenarioFactory,
         assert.equal(response.stopReason, 'end_turn');
         validUsage(response.usage);
         assert.ok(calls.length > 0, 'Fixture must observe the real transport');
-        assert.equal(calls[0].maxTokens, 37, 'Turn output limit must reach transport');
+        if (provider.capabilities?.outputLimit !== 'advisory') assert.equal(calls[0].maxTokens, 37, 'Turn output limit must reach transport');
     });
     await scenario('structured response and output limit', 'structured', async ({ provider, calls }) => {
         const response = await provider.structured({ messages, schema: { type: 'object' }, maxTokens: 37 });
         assert.deepEqual(response.value, { answer: 'ok' });
         validUsage(response.usage);
         assert.ok(calls.length > 0, 'Fixture must observe the real transport');
-        assert.equal(calls[0].maxTokens, 37, 'Structured output limit must reach transport');
+        if (provider.capabilities?.outputLimit !== 'advisory') assert.equal(calls[0].maxTokens, 37, 'Structured output limit must reach transport');
     });
     await scenario('parseable truncated structured output is rejected with usage', 'truncated', async ({ provider }) => {
         await assert.rejects(provider.structured({ messages, schema: { type: 'object' }, maxTokens: 37 }), error => {

@@ -20,6 +20,14 @@ function event(sequence: number): SessionEvent { return { schemaVersion: 1, id: 
 for (const backend of ['memory', 'sqlite']) {
     describe(`${backend} session store conformance`, () => {
         async function open() { const store = backend === 'memory' ? new MemorySessionStore() : await createSqliteSessionStore(await path()); stores.push(store); return store; }
+        it('persists opaque continuation with its assistant message', async () => {
+            const store = await open(), initial = record();
+            initial.messages.push({ role: 'assistant', content: 'Done', continuation: {
+                format: 'fixture/v1', identity: 'provider/api/model', contentHash: 'fixture', data: { signature: 'opaque' },
+            } });
+            await store.create(initial);
+            expect((await store.get(initial.id))?.messages).toEqual(initial.messages);
+        });
         it('isolates state and events, filters cursors and rejects duplicates', async () => {
             const store = await open(), initial = record();
             await store.create(initial); initial.title = 'mutated';

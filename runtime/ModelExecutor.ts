@@ -113,7 +113,8 @@ async function execute<Request, Response extends { usage: TokenUsage }>(
         try {
             signal.throwIfAborted();
             dispatched = true;
-            response = await dispatch(structuredClone(intent.request), { signal, ...(options.deadline !== undefined ? { deadline: options.deadline } : {}) });
+            response = await dispatch(structuredClone(intent.request), { signal, ...(options.deadline !== undefined ? { deadline: options.deadline } : {}),
+                ...(options.onRequest ? { onRequest: request => options.onRequest!(snapshot(request)) } : {}) });
             validate(response);
         } catch (error) {
             const knownUsage = error instanceof LLMProtocolError ? error.usage : undefined;

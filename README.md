@@ -63,12 +63,15 @@ the same database.
 
 ### Assemble your own agent
 
+For the subscription backend below, install `@earendil-works/pi-ai@0.85.1`
+and use Node >=22.19. The core remains independent of this optional backend.
+
 ```ts
 import {
   createHarness, MemorySessionStore, conversationalLoop,
   fullHistoryContext, codingToolRuntime, defaultCodingPolicy,
 } from '@nucleic-se/agentic/harness';
-import { CodexSubscriptionProvider } from '@nucleic-se/agentic/providers';
+import { SubscriptionProvider } from '@nucleic-se/agentic/providers/subscription';
 import { terminalUiExtension } from '@nucleic-se/agentic/harness/terminal';
 
 const client = await createHarness().compose({
@@ -79,7 +82,7 @@ const client = await createHarness().compose({
         store: () => new MemorySessionStore(),
         loop: () => conversationalLoop({ maxTurns: 20 }),
         context: () => fullHistoryContext('Inspect, implement, and verify changes.'),
-        provider: () => new CodexSubscriptionProvider({ model: 'gpt-6-astra' }),
+        provider: () => new SubscriptionProvider({ model: 'gpt-6-astra' }),
         tools: () => codingToolRuntime(process.cwd()),
         policy: () => defaultCodingPolicy(),
       },
@@ -112,7 +115,7 @@ Recovery never automatically repeats tools with unknown outcomes. See the
 
 ```ts
 import { StateGraphBuilder, LlmGraphNode, END } from '@nucleic-se/agentic/runtime';
-import { AnthropicProvider } from '@nucleic-se/agentic/providers';
+import { AnthropicProvider } from '@nucleic-se/agentic/providers/subscription';
 
 type State = { topic: string; summary: string };
 

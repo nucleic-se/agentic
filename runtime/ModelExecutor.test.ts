@@ -15,6 +15,23 @@ function provider(): ILLMProvider {
 }
 
 describe('shared model execution', () => {
+    it('awaits immutable decoded-request observations between intent and receipt', async () => {
+        const transport = provider(), order: string[] = [];
+        transport.turn = async (_request, options) => {
+            await options?.onRequest?.({ url: 'https://fixture.invalid', body: { input: ['exact'] } });
+            order.push('http');
+            return response();
+        };
+        await executeModelTurn(transport, request, {
+            onIntent: () => { order.push('intent'); },
+            onRequest: async observation => {
+                expect(Object.isFrozen(observation.body)).toBe(true);
+                await Promise.resolve(); order.push('request');
+            },
+            onOutcome: () => { order.push('receipt'); },
+        });
+        expect(order).toEqual(['intent', 'request', 'http', 'receipt']);
+    });
     it('journals immutable request and response receipts once, preserving continuation IDs', async () => {
         const transport = provider();
         const order: string[] = [];

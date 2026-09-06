@@ -1,11 +1,11 @@
 /** Explicit opt-in subscription evaluation; never invoked by the ordinary test suite. */
-import { CodexSubscriptionProvider } from '../../providers/codex-subscription.js';
+import { SubscriptionProvider } from '../../providers/subscription.js';
 import { executeModelTurn } from '../ModelExecutor.js';
 import { composeAgentContext } from '../ContextPipeline.js';
 import { contextEvaluationCases } from './context.js';
 
 const model = process.env.AGENTIC_EVAL_MODEL ?? 'gpt-5.6-terra';
-const provider = new CodexSubscriptionProvider({ model, reasoningEffort: 'low' });
+const provider = new SubscriptionProvider({ model, reasoningEffort: 'low' });
 const results: unknown[] = [];
 let passed = true;
 for (const test of contextEvaluationCases().filter(test => test.id.startsWith('priority-over-recency-'))) {

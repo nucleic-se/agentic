@@ -1,3 +1,4 @@
+import { zstdDecompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,8 @@ import type { ProviderScenarioFactory } from './provider.js';
 import { MemorySessionStore, createSqliteSessionStore } from '../harness/stores.js';
 import { OpenAICompatibleProvider } from '../../providers/openai-compatible.js';
 import { AnthropicProvider } from '../../providers/anthropic.js';
-import { CodexSubscriptionProvider } from '../../providers/codex-subscription.js';
+import { SubscriptionProvider } from '../../providers/subscription.js';
+const subscriptionToken = `x.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'fixture' } })).toString('base64')}.x`;
 
 type Kind = 'openai' | 'anthropic' | 'codex';
 function factory(kind: Kind): ProviderScenarioFactory {
@@ -17,7 +19,8 @@ function factory(kind: Kind): ProviderScenarioFactory {
         const started = new Promise<void>(resolve => { start = resolve; });
         const previousFetch = globalThis.fetch;
         const transport = async (_url: unknown, init?: RequestInit): Promise<Response> => {
-            const body = JSON.parse(String(init?.body));
+            const raw = new Headers(init?.headers).get('content-encoding') === 'zstd' ? zstdDecompressSync(Buffer.from(init!.body as Uint8Array)).toString() : String(init?.body);
+            const body = JSON.parse(raw);
             calls.push({ maxTokens: body.max_tokens ?? body.max_output_tokens, signal: init?.signal });
             start();
             if (scenario === 'blocked') {
@@ -38,8 +41,10 @@ function factory(kind: Kind): ProviderScenarioFactory {
                 stop_reason: truncated ? 'max_tokens' : scenario === 'turn' ? 'end_turn' : 'tool_use',
                 usage: { input_tokens: 1, output_tokens: 1 },
             });
+            const item = scenario === 'turn' ? { type: 'message', id: 'msg_test', role: 'assistant', content: [{ type: 'output_text', text }] } : { type: 'function_call', id: 'fc_test', call_id: 'call_test', name: 'structured_output', arguments: text };
             const events = [
-                { type: 'response.output_text.delta', delta: text },
+                { type: 'response.output_item.added', output_index: 0, item },
+                { type: 'response.output_item.done', output_index: 0, item },
                 { type: 'response.completed', response: { id: 'response', status: truncated ? 'incomplete' : 'completed',
                     ...(truncated ? { incomplete_details: { reason: 'max_output_tokens' } } : {}), usage: { input_tokens: 1, output_tokens: 1 } } },
             ];
@@ -48,7 +53,7 @@ function factory(kind: Kind): ProviderScenarioFactory {
         if (kind !== 'codex') globalThis.fetch = transport;
         const provider = kind === 'openai' ? new OpenAICompatibleProvider({ model: 'test', baseUrl: 'https://conformance.invalid' })
             : kind === 'anthropic' ? new AnthropicProvider({ model: 'test', apiKey: 'fake', baseUrl: `https://conformance.invalid/${scenario}`, minRequestSpacingMs: 0 })
-            : new CodexSubscriptionProvider({ model: 'test', transport: { request: transport } });
+            : new SubscriptionProvider({ model: 'test', credentials: async () => subscriptionToken, fetch: transport });
         return { provider, calls, started, dispose() { globalThis.fetch = previousFetch; cancel?.(new Error('fixture disposed')); } };
     };
 }

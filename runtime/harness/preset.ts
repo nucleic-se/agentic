@@ -1,4 +1,3 @@
-import { CodexSubscriptionProvider } from '../../providers/codex-subscription.js';
 import { createHarness } from './host.js';
 import { conversationalLoop, planningLoop, budgetedContext, codingToolRuntime, defaultCodingPolicy } from './defaults.js';
 import { createSqliteSessionStore, MemorySessionStore } from './stores.js';
@@ -28,7 +27,7 @@ export function defaultAgentExtensions(options: DefaultAgentOptions): Extension[
             configuration: JSON.stringify({ outputTokens: options.outputTokens ?? 4096 }),
             roles: { loop: () => options.planning ? planningLoop({ maxTokens: options.outputTokens ?? 4096 }) : conversationalLoop({ maxTokens: options.outputTokens ?? 4096 }) } },
         { id: 'context.budgeted', configuration: JSON.stringify({system, budget: options.tokenBudget ?? 24000}), version: '2.0.0', apiVersion: 1, roles: { context: () => budgetedContext(system, options.tokenBudget ?? 24000) } },
-        { id: `provider.codex.${model}`, version: '2.0.0', apiVersion: 1, roles: { provider: () => new CodexSubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort: 'low' }) } },
+        { id: `provider.subscription.${model}`, version: '3.0.0', apiVersion: 1, roles: { provider: async () => new (await import('../../providers/subscription.js')).SubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort: 'low' }) } },
         { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null }), version: '6.0.0', apiVersion: 1, roles: { tools: () => codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined }) } },
         { id: 'policy.confirm-mutations', version: '1.0.0', apiVersion: 1, roles: { policy: () => defaultCodingPolicy() } },
         ...options.extensions ?? [],

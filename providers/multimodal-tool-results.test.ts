@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '../contracts/llm.js';
-import { CodexSubscriptionProvider } from './codex-subscription.js';
+import { SubscriptionProvider } from './subscription.js';
+const subscriptionToken = `x.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'fixture' } })).toString('base64')}.x`;
 import { AnthropicProvider } from './anthropic.js';
 import { toOpenAIMessages } from './openai-compatible.js';
 
@@ -14,10 +15,9 @@ const history: Message[] = [
 describe('multimodal tool output translation', () => {
     it('sends native image/text function outputs through the Codex Responses transport', async () => {
         const request = vi.fn(async () => new Response(`data: ${JSON.stringify({ type: 'response.completed', response: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'seen' }] }], usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`));
-        const provider = new CodexSubscriptionProvider({ model: 'test', transport: { request } });
+        let body: { input: Array<{ call_id?: string; type: string; output: unknown }> };
+        const provider = new SubscriptionProvider({ model: 'test', credentials: async () => subscriptionToken, fetch: request, onRequest: observed => { body = observed.body as unknown as typeof body; } });
         await provider.turn({ messages: history });
-        const init = (request.mock.calls[0] as unknown as [string, RequestInit])[1];
-        const body = JSON.parse(String(init.body));
         expect(body.input.find((item: { call_id?: string; type: string }) => item.type === 'function_call_output' && item.call_id === 'image-call').output).toEqual([
             { type: 'input_text', text: 'rich text' },
             { type: 'input_image', image_url: 'data:image/png;base64,aW1hZ2U=', detail: 'auto' },

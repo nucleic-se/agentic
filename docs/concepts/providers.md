@@ -2,6 +2,22 @@
 
 All providers implement `ILLMProvider` from `@nucleic-se/agentic/contracts`. You can swap providers without changing your graph logic.
 
+Agentic owns the public contracts. Backend SDK types belong inside their adapters;
+context selection, budgets, persistence and execution policy belong to the runtime.
+
+`AssistantMessage.continuation` carries optional opaque protocol annotations for
+message replay, such as signed content metadata. Its encoding is versioned and
+bound to the visible message and provider/API/model/deployment identity. Adapters
+ignore unknown encodings or mismatched bindings. Rewriting text or tool calls
+invalidates the state; adapters must not restore stale content over those edits.
+Store annotations only, without duplicating visible text, arguments or history.
+
+Context composition retains or drops continuation with its assistant message and
+includes its serialized size in the token estimate. This is a conservative
+heuristic, especially for encrypted annotations, not a backend tokenizer. Session
+stores preserve it as ordinary JSON. A backend without a matching decoder can
+still consume the visible message.
+
 `TurnResponse.responseId` and `TurnRequest.previousResponseId` provide optional,
 opaque provider continuation. The generic OpenAI-compatible adapter forwards
 the `previous_response_id` extension only when constructed with
@@ -105,44 +121,50 @@ not enable it for models that support structured tool calling correctly.
 
 ---
 
-## CodexSubscriptionProvider
+## SubscriptionProvider
 
-Uses an existing local Codex login to call the ChatGPT Codex Responses transport
-directly. It supports streaming text, native function tools, structured JSON
-output, cancellation, token usage, and provider continuation.
+Optional subscription-auth backend implementing Agentic's `ILLMProvider`. Install
+`@earendil-works/pi-ai@0.85.1` and use Node >=22.19 for this backend; core usage does
+not require that dependency. Authentication is loaded through `@openai-oauth/local`.
 
 ```ts
-import { CodexSubscriptionProvider } from '@nucleic-se/agentic/providers';
+import { SubscriptionProvider } from '@nucleic-se/agentic/providers/subscription';
 
-const llm = new CodexSubscriptionProvider({
+const llm = new SubscriptionProvider({
   model: 'gpt-5.6-terra',
   reasoningEffort: 'low',
-  verbosity: 'low',
+  onRequest: request => { /* Inspect exact decoded outgoing JSON. */ },
 });
 ```
 
-Authentication defaults to `CODEX_HOME/auth.json`, or `~/.codex/auth.json` when
-`CODEX_HOME` is unset. `authFilePath` can select a different credential file.
-The credential source and authenticated transport are injectable for hosted
-composition and testing.
+Authentication defaults to `CODEX_HOME/auth.json`, otherwise `~/.codex/auth.json`.
+`authFilePath` selects another file; `credentials` can supply an authorized token
+and receives the caller's cancellation signal. No agent runtime or CLI is invoked.
 
-This provider deliberately depends only on the narrow `@openai-oauth/core` and
-`@openai-oauth/local` packages. It does not depend on Codex CLI, Pi, Gears, or a
-localhost proxy.
+`capabilities` describes effective HTTP streaming, tool batching, zero automatic
+request retries, and advisory output limits. `maxTokens` reserves context space;
+the subscription endpoint does not enforce an output cap. Unknown provider
+capabilities must never be interpreted as guarantees.
 
-Important boundaries:
+The adapter preserves usage, including cached input and reasoning tokens without
+double-counting. It stores protocol annotations with assistant messages for replay
+across restarts. Supply the complete selected message history; response-ID-only
+continuation, stop sequences, and embeddings are unsupported.
 
-- This is a ChatGPT subscription integration, not the public OpenAI API. Its
-  backend transport is not a stable public API, so applications should keep this
-  provider replaceable and pin dependency versions.
-- Continuation state is held by the transport in the current process. A response
-  ID can reduce repeated context during a live tool loop, but must not be treated
-  as durable across process restarts.
-- Stop sequences and embeddings are not available through this provider.
-- Agentic still validates tool calls before execution; provider tool schemas are
-  therefore sent with `strict: false` instead of overstating schema compliance.
+The backend can normalize imperfect tool JSON. Agentic validates the resulting
+arguments and applies authorization before dispatch; normalization grants no
+permissions. Structured output uses one forced schema tool and rejects truncated
+or ambiguous results. Schema validation remains the caller's responsibility.
 
----
+`onRequest` observes decoded JSON after backend normalization, without auth
+headers. It does not modify the transmitted request. Observations can contain
+private task content; applications own storage and retention.
+
+Both maintained harnesses journal these observations as `model.request` events,
+correlated with the operation's intent and receipt. They describe the decoded
+request before HTTP dispatch; only a receipt establishes the response. A failed
+request-journal write prevents HTTP dispatch. The same observation hook is
+available through per-call `ProviderCallOptions`.
 
 ## OllamaProvider
 

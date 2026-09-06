@@ -264,23 +264,24 @@ new OpenAICompatibleProvider({
 })
 ```
 
-### `CodexSubscriptionProvider`
+### `SubscriptionProvider`
 
 ```ts
-import { CodexSubscriptionProvider } from '@nucleic-se/agentic/providers';
+import { SubscriptionProvider } from '@nucleic-se/agentic/providers/subscription';
 
-new CodexSubscriptionProvider({
+new SubscriptionProvider({
   model: string;
   authFilePath?: string;
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh';
-  verbosity?: 'low' | 'medium' | 'high';
+  onRequest?: (request: ProviderRequestObservation) => void | Promise<void>;
 })
 ```
 
 Uses an existing local Codex login and the authenticated subscription
-Responses transport directly. It does not require Codex CLI, Gears, Pi, or a
-localhost proxy. Continuation state is process-local and suitable for a live
-tool loop, not durable conversation memory.
+Responses transport directly. It does not require Codex CLI, Gears, or a
+localhost proxy. Persist assistant messages with their continuation annotations
+and replay the selected history. Output-token limits are advisory. This optional
+backend requires `@earendil-works/pi-ai@0.85.1` and Node >=22.19.
 
 ### `OllamaProvider`
 

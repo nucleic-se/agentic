@@ -126,6 +126,7 @@ class HarnessSessionClient implements SessionClient {
             operationId, signal, stream: true,
             ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : {}),
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
+            onRequest: async request => { await this.change(id, 'model.request', () => {}, { operationId, request }); },
             onIntent: intent => this.change(id, 'model.intent', record => {
                 record.operations.push({ id: intent.operationId, runId, kind: 'model', status: 'intent', input: intent.request, createdAt: intent.startedAt, ...(report ? { contextReport: structuredClone(report) } : {}) });
             }, { operationId }).then(() => undefined),

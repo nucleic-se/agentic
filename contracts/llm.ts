@@ -14,7 +14,7 @@
  * which contract they need at the call site.
  */
 
-import type { JsonSchema } from './shared.js'
+import type { JsonSchema, JsonValue } from './shared.js'
 
 /** Provider/adaptor response violated the semantic LLM protocol. */
 export class LLMProtocolError extends Error {
@@ -55,6 +55,22 @@ export interface AssistantMessage {
     content:    string
     toolCalls?: ToolCall[]
     provenance?: MessageProvenance
+    /** Opaque protocol state for replay, owned by the provider adapter.
+     * Persist with this message; discard when rewriting its content or tool calls.
+     * Context assembly counts it and retains/drops it with the message. */
+    continuation?: ProviderContinuation
+}
+
+/** Serializable continuation, without exposing a backend library's message types. */
+export interface ProviderContinuation {
+    /** Versioned encoding understood by the adapter. Unknown formats are ignored. */
+    format: string
+    /** Provider/API/model/deployment identity. Never replay to a different backend. */
+    identity: string
+    /** Adapter-generated binding to the visible text and tool calls. */
+    contentHash: string
+    /** Protocol annotations only; do not duplicate the visible message or transcript. */
+    data: JsonValue
 }
 
 export interface ToolResultMessage {
@@ -108,7 +124,7 @@ export interface StructuredRequest {
     /** Opaque, stable caller-owned scope for provider cache/routing hints.
      * Providers may ignore it. It is not conversation history or an isolation boundary. */
     cacheScope?: string
-    /** Maximum generated output tokens, including budget reservations. */
+    /** Requested output allowance. Check capabilities.outputLimit for enforcement. */
     maxTokens?: number
     system?:   string
     /**
@@ -144,7 +160,7 @@ export interface TurnRequest {
     messages:        Message[]
     tools?:          ToolDefinition[]
     stopSequences?:  string[]
-    /** Max tokens to generate. Provider default if omitted. */
+    /** Requested output allowance. Check capabilities.outputLimit for enforcement. */
     maxTokens?:      number
     /**
      * Opaque ID of the immediately preceding provider response. Providers
@@ -167,15 +183,34 @@ export interface ProviderCallOptions {
     signal?: AbortSignal
     /** Absolute Unix timestamp in milliseconds. */
     deadline?: number
+    /** Awaited before transport when supported; observes final decoded request data. */
+    onRequest?: (request: ProviderRequestObservation) => void | Promise<void>
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
+/** Effective adapter behavior. Absence means unknown, never an implied guarantee. */
+export interface ProviderCapabilities {
+    transport: string
+    toolBatching: boolean
+    outputLimit: 'enforced' | 'advisory'
+    automaticRetries: number
+    continuation: 'message' | 'response-id' | 'none'
+    requestObservation: 'decoded-wire' | 'none'
+}
+
+/** Decoded request after backend normalization. Credentials and headers are excluded. */
+export interface ProviderRequestObservation {
+    url: string
+    body: JsonValue
+}
+
 export interface ILLMProvider {
+    readonly capabilities?: Readonly<ProviderCapabilities>
     /**
-     * Single-call structured completion. The model must not call tools.
-     * The provider forwards the supplied JSON Schema to the backing API/model
-     * and returns the parsed result. Schema enforcement depends on provider
+     * Single-call structured completion without executing application tools.
+     * The adapter supplies the JSON Schema through native structured output or
+     * a schema tool and returns the parsed result. Schema enforcement depends on provider
      * capabilities; implementations may not perform client-side validation.
      */
     structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>>

@@ -88,6 +88,11 @@ export function estimateContextTokens(
         if (message.role === 'assistant' && message.toolCalls?.length) {
             messageTokens += count(counter.countTokens(JSON.stringify(message.toolCalls)));
         }
+        // Opaque protocol annotations occupy context too. Counting their serialized
+        // representation is a conservative heuristic, not a provider tokenizer.
+        if (message.role === 'assistant' && message.continuation) {
+            messageTokens += count(counter.countTokens(JSON.stringify(message.continuation)));
+        }
         if (message.role === 'tool_result') {
             messageTokens += count(counter.countTokens(JSON.stringify({ toolCallId: message.toolCallId,
                 ...(message.toolName === undefined ? {} : { toolName: message.toolName }) })));

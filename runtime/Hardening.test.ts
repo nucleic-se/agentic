@@ -15,7 +15,8 @@ import { END, GraphRunLimitError } from '../contracts/graph/index.js';
 import { LLMProtocolError, type ILLMProvider, type Message, type TurnResponse } from '../contracts/llm.js';
 import { OpenAICompatibleProvider } from '../providers/openai-compatible.js';
 import { AnthropicProvider } from '../providers/anthropic.js';
-import { CodexSubscriptionProvider } from '../providers/codex-subscription.js';
+import { SubscriptionProvider } from '../providers/subscription.js';
+const subscriptionToken = `x.${Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'fixture' } })).toString('base64')}.x`;
 import type { IValidatedToolRuntime } from '../contracts/tool-runtime.js';
 
 const usage = { inputTokens: 100, outputTokens: 100 };
@@ -78,10 +79,11 @@ describe('provider completion boundaries', () => {
         await expect(new AnthropicProvider({ apiKey: 'mock', model: 'mock', minRequestSpacingMs: 0 }).streamTurn({ messages: [] }, () => {})).rejects.toBeInstanceOf(LLMProtocolError);
     });
     it('preserves Codex max-token status and prevents kernel tool execution', async () => {
-        const codex = new CodexSubscriptionProvider({ model: 'mock', transport: { request: async () => sse([
-            { type: 'response.output_item.done', item: { type: 'function_call', call_id: 'c', name: 'write', arguments: '{}' } },
+        const codex = new SubscriptionProvider({ model: 'mock', credentials: async () => subscriptionToken, fetch: async () => sse([
+            { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', id: 'fc', call_id: 'c', name: 'write', arguments: '{}' } },
+            { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', id: 'fc', call_id: 'c', name: 'write', arguments: '{}' } },
             { type: 'response.incomplete', response: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } } },
-        ]) } });
+        ]) });
         const runtime = tools();
         const records = await runAgentKernel([], { provider: codex, tools: runtime }, () => ({ messages: [] }));
         expect(records[0].failure?.kind).toBe('max_tokens_stop'); expect(runtime.call).not.toHaveBeenCalled();
@@ -92,8 +94,9 @@ describe('provider completion boundaries', () => {
         expect(result.stopReason).toBe('max_tokens'); expect(result.message.toolCalls).toBeUndefined();
     });
     it('rejects duplicate Codex call IDs', async () => {
-        const item = { type: 'response.output_item.done', item: { type: 'function_call', call_id: 'c', name: 'write', arguments: '{}' } };
-        const codex = new CodexSubscriptionProvider({ model: 'mock', transport: { request: async () => sse([item, item, { type: 'response.completed', response: { status: 'completed' } }]) } });
+        const item = { type: 'function_call', id: 'fc', call_id: 'c', name: 'write', arguments: '{}' };
+        const duplicate = [0, 1].flatMap(output_index => [{ type: 'response.output_item.added', output_index, item }, { type: 'response.output_item.done', output_index, item }]);
+        const codex = new SubscriptionProvider({ model: 'mock', credentials: async () => subscriptionToken, fetch: async () => sse([...duplicate, { type: 'response.completed', response: { status: 'completed' } }]) });
         await expect(codex.turn({ messages: [] })).rejects.toBeInstanceOf(LLMProtocolError);
     });
     it('cancels a reader when a consumer throws', async () => {
