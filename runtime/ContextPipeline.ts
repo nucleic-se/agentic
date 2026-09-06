@@ -30,6 +30,9 @@ export interface ContextTokenOptions {
 }
 export interface ContextCompositionOptions extends ContextTokenOptions {
     minRecentGroups?: number;
+    /** Retain the latest human user message through intervening tools and synthetic updates.
+     * Messages without provenance are treated as human for compatibility. */
+    protectCurrentUserMessage?: boolean;
     /** Opt-in model-facing cap for recoverable text tool results, including recent errors.
      * Requires referenceToolResult; originals and call identity remain intact. */
     maxToolResultCharacters?: number;
@@ -191,6 +194,10 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         section.estimatedTokens = count(counter.countTokens(section.text()));
     }
     const messageGroups = groups(input.messages);
+    let currentUserIndex = -1;
+    if (options.protectCurrentUserMessage) input.messages.forEach((message, index) => {
+        if (message.role === 'user' && (message.provenance ?? 'human') === 'human') currentUserIndex = index;
+    });
     const sourceText = messageGroups.flatMap(group => group.messages.map(message => message.content));
     type Item = { kind: 'messages'; group: Group; } | { kind: 'section'; section: PromptSection; };
     type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; references?: ContextDecision['references']; order: number };
@@ -201,6 +208,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         const score = options.scoreGroup?.(structuredClone(group.messages), index) ?? 0;
         if ((!Number.isFinite(score) && score !== Infinity)) throw new RangeError('Message group score must be finite or positive Infinity');
         const sticky = group.messages.some((message, offset) =>
+            group.firstIndex + offset === currentUserIndex ||
             (message.role === 'user' && message.sticky === true) ||
             options.protectMessage?.(structuredClone(message), group.firstIndex + offset));
         candidates.push({ kind: 'messages', group, id: `messages:${group.firstIndex}`, score,
@@ -251,7 +259,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         }
     }
     const minimum = render(true);
-    if (minimum.usage.totalTokens > budget) throw new ContextBudgetExceededError(budget, minimum.usage.totalTokens);
+    if (minimum.usage.totalTokens > budget) throw new ContextBudgetExceededError(budget, minimum.usage.totalTokens, 'protected');
     let result = render();
     const removable = candidates.filter(item => !item.protected).sort((left, right) => left.score - right.score || (left.kind === 'section' && right.kind === 'section' ? right.id.localeCompare(left.id) : left.order - right.order));
     for (const item of removable) {
@@ -320,5 +328,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     }
     return { ...result, messages: structuredClone(result.messages),
         excludedSections: candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action === 'dropped').map(item => item.section),
-        decisions: candidates.map(({ kind, id, score, protected: protectedItem, action, references }) => ({ kind, id, score, protected: protectedItem, action, ...(references ? { references } : {}) })) };
+        decisions: candidates.map(item => ({ kind: item.kind, id: item.id, score: item.score, protected: item.protected, action: item.action,
+            ...(item.kind === 'messages' ? { messageRange: { start: item.group.firstIndex, end: item.group.firstIndex + item.group.messages.length } } : {}),
+            ...(item.references ? { references: item.references } : {}) })) };
 }

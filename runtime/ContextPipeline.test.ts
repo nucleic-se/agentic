@@ -252,3 +252,20 @@ it('bounds output presentation including its reference and avoids splitting surr
     expect(projectToolOutput('small', 'retrieve(1)', 100)).toBeNull();
     expect(projectToolOutput(text, 'long-reference'.repeat(50), 100)).toBeNull();
 });
+
+it.each([undefined, 'human'] as const)('retains the current user instruction across synthetic updates (%s provenance)', async provenance => {
+    const messages: Message[] = [
+        { role: 'user', content: 'old '.repeat(100) },
+        { role: 'user', provenance, content: 'Finish the audit' },
+        { role: 'assistant', content: 'working '.repeat(100) },
+        { role: 'user', provenance: 'model', content: 'peer evidence '.repeat(100) },
+        { role: 'user', provenance: 'deterministic', content: 'scheduled wake '.repeat(100) },
+    ];
+    const original = structuredClone(messages);
+    const policy = { tokenCounter: counter, minRecentGroups: 0, protectCurrentUserMessage: true };
+    const result = await composeAgentContext({ messages, tokenBudget: 30 }, policy);
+    expect(result.messages).toEqual([messages[1]]);
+    expect(result.decisions.find(d => d.id === 'messages:1')).toMatchObject({ protected: true, action: 'kept' });
+    expect(messages).toEqual(original);
+    await expect(composeAgentContext({ messages, tokenBudget: 10 }, policy)).rejects.toBeInstanceOf(ContextBudgetExceededError);
+});

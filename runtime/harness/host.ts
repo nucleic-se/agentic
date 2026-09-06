@@ -1,8 +1,8 @@
+import { toToolResultMessage } from '../ToolOutput.js';
 import { randomUUID } from 'node:crypto';
 import type { Message, TurnRequest, TurnResponse, TokenUsage } from '../../contracts/llm.js';
 import { composeDriver, compositionFingerprint, type DriverComposition, type HarnessClient } from './composition.js';
 import { createHarnessExecution } from './execution.js';
-import type { ContextReport } from '../../contracts/IAgentContextAssembler.js';
 import { commitJournalTransition } from '../ExecutionJournal.js';
 import type { ExecutionLimits } from '../ExecutionOptions.js';
 import type { OperationResolution, SessionPage } from './types.js';
@@ -119,11 +119,11 @@ class HarnessSessionClient implements SessionClient {
         options: { projection?: 'conversation' | 'none'; maintenance?: MaintenanceOptions } = {}): Promise<TurnResponse> {
         signal.throwIfAborted();
         const input = { ...request, cacheScope: request.cacheScope ?? `${this.fingerprint}:${id}`, tools: request.tools ?? this.roles.tools.tools() };
-        let report: ContextReport | undefined;
         const operationId = randomUUID();
-        return this.execution.model(input, {
+        const prepared = await this.execution.prepareModel(input, { signal });
+        const report = prepared.report;
+        return this.execution.dispatchModel(prepared, {
             operationId, signal, stream: true,
-            onPrepared: prepared => { report = prepared; },
             ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : {}),
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
             onIntent: intent => this.change(id, 'model.intent', record => {
@@ -265,7 +265,7 @@ class HarnessSessionClient implements SessionClient {
             if (!callId) throw new Error('Legacy operation lacks a tool call identity; start a new session');
             op.status = input.result.ok ? 'completed' : 'failed';
             op.output = { previous: op.output, resolution: input };
-            const message: Message = { role: 'tool_result', toolCallId: callId, toolName: op.name, content: input.result.content.length > 16000 ? input.result.content.slice(0,16000) + '\n[truncated]' : input.result.content, isError: !input.result.ok, ...(input.result.contentBlocks ? { contentBlocks: input.result.contentBlocks } : {}) };
+            const message = toToolResultMessage({ id: callId, name: op.name }, { ...input.result, content: input.result.content.length > 16000 ? input.result.content.slice(0,16000) + '\n[truncated]' : input.result.content });
             let index = record.messages.length - 1;
             while (index >= 0) { const item = record.messages[index]; if (item.role === 'tool_result' && item.toolCallId === callId) break; index--; }
             if (index >= 0) record.messages[index] = message;
@@ -419,7 +419,7 @@ class HarnessSessionClient implements SessionClient {
                                     }
                                     const execution = event.execution;
                                     const content = execution.result?.content ?? execution.error ?? `Tool call ${execution.status}`;
-                                    record.messages.push({ role: 'tool_result', toolCallId: execution.callId, toolName: execution.plan.name, content: content.length > 16000 ? content.slice(0,16000) + '\n[truncated]' : content, ...(execution.result?.contentBlocks ? { contentBlocks: structuredClone(execution.result.contentBlocks) } : {}), isError: execution.status !== 'success' });
+                                    record.messages.push(toToolResultMessage({ id: execution.callId, name: execution.plan.name }, { ...execution.result, ok: execution.status === 'success', content: content.length > 16000 ? content.slice(0,16000) + '\n[truncated]' : content }));
                                 }, event.execution);
                                 if (operationId && event.execution.dispatched !== false && (['unknown', 'timeout', 'cancelled'].includes(event.execution.status))) {
                                     throw new Error('Tool outcome is unknown after timeout or cancellation; reconcile before continuing');

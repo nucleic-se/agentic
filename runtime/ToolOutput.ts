@@ -1,3 +1,6 @@
+import type { ToolResultMessage } from '../contracts/llm.js';
+import type { ToolCallResult } from '../contracts/tool-runtime.js';
+
 /** Bounded presentation of retained text. Storage and retrieval belong to the host. */
 export function projectToolOutput(text: string, reference: string, maxCharacters: number): string | null {
     if (!Number.isSafeInteger(maxCharacters) || maxCharacters < 1) throw new RangeError('maxCharacters must be a positive safe integer');
@@ -12,4 +15,11 @@ export function projectToolOutput(text: string, reference: string, maxCharacters
     if (splitsPair(headEnd)) headEnd--;
     if (splitsPair(tailStart)) tailStart++;
     return header + text.slice(0, headEnd) + `\n[${tailStart - headEnd} UTF-16 code units omitted]\n` + text.slice(tailStart);
+}
+
+/** Project a validated result without losing rich content. Hosts own storage and presentation limits. */
+export function toToolResultMessage(call: { id: string; name?: string }, result: ToolCallResult): ToolResultMessage {
+    return { role: 'tool_result', toolCallId: call.id, ...(call.name === undefined ? {} : { toolName: call.name }),
+        content: result.content, isError: !result.ok,
+        ...(result.contentBlocks ? { contentBlocks: structuredClone(result.contentBlocks) } : {}) };
 }

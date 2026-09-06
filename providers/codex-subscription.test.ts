@@ -30,6 +30,24 @@ function completed(overrides: Record<string, unknown> = {}): Record<string, unkn
 }
 
 describe('CodexSubscriptionProvider', () => {
+    it('records the bundled OAuth transport output-limit behavior at the fetch boundary', async () => {
+        let sent: Record<string, unknown> | undefined;
+        const provider = new CodexSubscriptionProvider({
+            model: 'test',
+            credentials: { kind: 'openai-oauth', getSession: async () => ({ accessToken: 'fixture', accountId: 'fixture' }) },
+            fetch: async (url, init) => {
+                if (String(url).includes('/models')) return Response.json({ models: [] });
+                sent = JSON.parse(String(init?.body));
+                return sse(completed());
+            },
+        });
+        const response = await provider.turn({ messages: [{ role: 'user', content: 'hello' }], maxTokens: 1 });
+        expect(sent).toBeDefined();
+        // The bundled transport strips this field; reservation is not a server cap.
+        expect(sent).not.toHaveProperty('max_output_tokens');
+        expect(response.usage.outputTokens).toBe(4);
+    });
+
     it('maps caller scopes deterministically without leaking state across shared-provider calls', async () => {
         const request = vi.fn<CodexSubscriptionTransport['request']>(async () => sse(completed()))
         const provider = new CodexSubscriptionProvider({ model: 'test', transport: { request } })

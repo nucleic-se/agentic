@@ -2,8 +2,8 @@ import type { IPromptEngine, PromptSection, PromptComposeResult, PromptComposeOp
 import { HeuristicTokenCounter } from './HeuristicTokenCounter.js';
 
 export class ContextBudgetExceededError extends Error {
-    constructor(readonly budget: number, readonly estimatedTokens: number) {
-        super(`Context requires approximately ${estimatedTokens} tokens but the budget is ${budget}`);
+    constructor(readonly budget: number, readonly estimatedTokens: number, readonly reason: 'protected' | 'total' = 'total') {
+        super(`Context requires approximately ${estimatedTokens} tokens but the budget is ${budget}${reason === 'protected' ? ' (protected content cannot be dropped)' : ''}`);
         this.name = 'ContextBudgetExceededError';
     }
 }

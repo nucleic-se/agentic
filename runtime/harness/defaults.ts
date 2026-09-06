@@ -70,7 +70,7 @@ export function budgetedContext(system: string, tokenBudget: number, policy: Con
     if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1) throw new RangeError('tokenBudget must be a positive safe integer');
     return { async assemble(messages, signal, options) {
         signal.throwIfAborted();
-        const result = await composeAgentContext({ messages, system, tokenBudget, signal, ...options }, policy);
+        const result = await composeAgentContext({ messages, system, tokenBudget, signal, ...options }, { protectCurrentUserMessage: true, ...policy });
         signal.throwIfAborted();
         return { system: result.system, messages: result.messages, report: { usage: result.usage, decisions: result.decisions, systemSections: result.systemSections } };
     } };

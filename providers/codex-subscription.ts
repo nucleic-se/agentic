@@ -243,7 +243,11 @@ async function parseResponseStream(
     }
 }
 
-/** Direct ChatGPT subscription provider using the Codex Responses transport. */
+/**
+ * Direct ChatGPT subscription provider using the Codex Responses transport.
+ * The bundled OAuth transport removes max_output_tokens. maxTokens remains a
+ * context-planning allowance, not an enforced output cap on that transport.
+ */
 export class CodexSubscriptionProvider implements ILLMProvider {
     readonly #model: string
     readonly #transport: CodexSubscriptionTransport

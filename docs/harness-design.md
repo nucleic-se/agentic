@@ -36,6 +36,12 @@ billing guarantee. Drivers that
 reserve a shared token budget must require a report; full-history contexts remain
 available for consumers that do not use token admission.
 
+The bundled subscription OAuth transport removes the requested output cap before
+HTTP dispatch. With that transport, the reserved output is a planning allowance;
+reported usage can exceed it. The provider preserves actual usage for settlement.
+Provider-neutral request snapshots describe the harness boundary, while transport
+captures show provider-specific transformations; they are not identical wire formats.
+
 Driver lifecycle contract:
 
 1. All role names, ownership and extension dependencies validate before factories.
@@ -500,3 +506,79 @@ If the in-flight activation subsequently returns a disposer, the composer runs
 it immediately and rejects composition instead of returning a closed client.
 Remaining extensions are not activated. An activation may await `close()` without
 deadlocking; cleanup acquired after closure is still attempted exactly once.
+
+
+## Working checkpoint primitives (experimental)
+
+### A turn through the shared execution boundary
+
+Both hosts prepare a request, read its context report, and dispatch that same
+preparation. Preparation is local: it selects context and validates accounting,
+without calling the provider or committing an execution intent. The local host
+uses its session messages; Gears first derives a checkpoint view and may substitute
+a maintenance preparation when historical evidence needs summarizing.
+
+Dispatch awaits the host's intent callback before contacting the provider. The
+local host journals the exact request and report. Gears additionally checks lease
+ownership, task generation and shared budgets, then reserves usage in the same
+transaction as its intent. Admission failure therefore prevents provider dispatch.
+The receipt callback commits usage and the resulting conversation or checkpoint
+projection together. Gears schedules tool execution as a separate queue step;
+both hosts use Agentic's execution primitives and tool-result conversion.
+
+Recovery reads durable intents and receipts, never a serialized preparation handle.
+An interrupted operation with an uncertain external outcome requires reconciliation
+before continuation; reopening storage is not permission to replay it. Request
+snapshots explain what was sent, while receipts and host state explain what was
+committed. These are separate facts when a process stops between dispatch and commit.
+
+### Source views and maintenance
+
+`checkpointView(history, checkpoint, transient)` derives the model-visible view
+and its source map together. Original messages remain in the host's append-only
+archive. Transient host state has no archive index. The latest human message stays
+verbatim even when its source is covered by a checkpoint; model and deterministic
+messages do not replace that protected instruction.
+
+`WorkingCheckpoint` stores `through` (exclusive end of complete source groups) and
+`text`. An oversized group adds `partial: { end, offset }`: progress into the
+UTF-16 JSON representation of indexed messages `[through, end)`. Each maintenance
+request records its exact source range and, for chunks, offset/endOffset/total
+characters. A group stays intact in the active view until its last chunk commits;
+no partial tool-call group is presented as completed history. Each new summary is
+a self-contained replacement, including any previous partial summary.
+
+`prepareCheckpoint` first fits whole source groups, then uses bounded chunks if
+the first outstanding group cannot fit. Fitting makes no model calls. The host
+commits the returned cursor and summary only after a complete response, atomically
+with its receipt and usage. Failed or partial model responses leave the old cursor
+and summary unchanged. Persist partial progress just like completed-prefix progress.
+The archive must not be edited or reordered while these cursors refer to it.
+
+`createHarnessExecution().prepareModel()` returns an execution-owned preparation.
+Its request/report getters return inspection copies. `dispatchModel()` accepts only
+preparations from that execution and sends the internal snapshot; editing an
+inspection copy cannot alter its request or accounting. Preparations are not
+serializable dispatch handles. Persist the inspected request/report as evidence,
+then prepare again for a new admitted operation after recovery.
+
+Checkpoint preparation requests `preserveMessages: true`. Custom context strategies
+must retain the supplied source messages exactly or preparation fails before
+admission. They still control accounting and the context ceiling. This separates
+lossless maintenance input from ordinary selective context assembly.
+
+`toToolResultMessage` is shared by local and durable hosts. It preserves native
+content blocks and copies mutable content-block objects; hosts apply their presentation
+policy explicitly before conversion and commit the resulting message with its
+receipt. Source retrieval may remain text-only; rich ordinary tool results are
+not silently flattened.
+
+The Gears composition drives automatic checkpoints. The local session driver
+continues to expose explicit maintenance; shared primitives do not require every
+composition to use the same policy. A protected instruction, prior summary or
+output reservation that alone exceeds the ceiling cannot be fixed by dropping
+history. Context errors identify protected-content overflow. Chunking also costs
+real model calls and can exhaust a task budget. Checkpoints remain lossy model
+summaries, not proof of fidelity; source ranges, original records and receipts are
+necessary for inspection. JSON chunking preserves serialized source text but does not claim
+native vision understanding of image data encoded in checkpoint source JSON.

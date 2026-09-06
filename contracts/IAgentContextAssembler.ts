@@ -109,6 +109,8 @@ export interface ContextTokenUsage {
 }
 export interface ContextDecision {
     kind: 'section' | 'messages';
+    /** Half-open indexes into the input message array for a complete conversation group. */
+    messageRange?: { start: number; end: number };
     id: string;
     action: 'kept' | 'compressed' | 'dropped';
     score: number;

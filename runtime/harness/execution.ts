@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { ILLMProvider, TurnRequest } from '../../contracts/llm.js';
 import type { ContextReport } from '../../contracts/IAgentContextAssembler.js';
 import { executeModelTurn, type ModelTurnOptions } from '../ModelExecutor.js';
@@ -9,6 +10,15 @@ export interface HarnessExecutionRoles { provider: ILLMProvider; context: Contex
 export interface HarnessModelOptions extends ModelTurnOptions {
     /** Awaited before intent/admission; observations cannot alter the selected request. */
     onPrepared?(report: ContextReport | undefined): void | Promise<void>;
+}
+/** An execution-owned preparation. Inspection returns copies; dispatch uses its original snapshot. */
+export interface PreparedHarnessModel {
+    readonly request: TurnRequest;
+    readonly report?: ContextReport;
+}
+export interface HarnessPreparationOptions extends ModelTurnOptions {
+    /** Reject a context strategy that removes or rewrites any supplied source message. */
+    preserveMessages?: boolean;
 }
 
 function validateReport(report: ContextReport | undefined, outputTokens: number) {
@@ -22,29 +32,57 @@ function validateReport(report: ContextReport | undefined, outputTokens: number)
 
 /** The same request boundary for interactive and durable drivers. No scheduling or storage. */
 export function createHarnessExecution(roles: HarnessExecutionRoles) {
+    const preparations = new WeakMap<PreparedHarnessModel, { request: TurnRequest; report?: ContextReport }>();
+    async function prepareModel(request: TurnRequest, options: HarnessPreparationOptions = {}): Promise<PreparedHarnessModel> {
+        const { signal, dispose } = executionSignal(options);
+        try {
+            signal.throwIfAborted();
+            const source = structuredClone(request);
+            if (source.maxTokens !== undefined && (!Number.isSafeInteger(source.maxTokens) || source.maxTokens < 1)) throw new RangeError('maxTokens must be a positive safe integer');
+            const context = await roles.context.assemble(structuredClone(source.messages), signal, {
+                tools: structuredClone(source.tools ?? []),
+                ...(source.system === undefined ? {} : { system: source.system }),
+                ...(source.maxTokens === undefined ? {} : { reservedOutputTokens: source.maxTokens }),
+            });
+            signal.throwIfAborted();
+            if (!context || !Array.isArray(context.messages) ||
+                context.messages.some(message => !message || !['user', 'assistant', 'tool_result'].includes(message.role) || typeof message.content !== 'string') ||
+                (context.system !== undefined && typeof context.system !== 'string')) throw new Error('Context strategy returned invalid context');
+            if (options.preserveMessages && !isDeepStrictEqual(source.messages, context.messages))
+                throw new Error('Context strategy changed protected source messages');
+            validateReport(context.report, source.maxTokens ?? 0);
+            // An opaque provider continuation can retain history the local selector never counted.
+            if (context.report && source.previousResponseId) throw new Error('Budgeted context cannot account for opaque provider continuation history');
+            const snapshot = structuredClone({ request: { ...source, system: context.system, messages: context.messages }, report: context.report });
+            const prepared = Object.freeze({
+                get request() { return structuredClone(snapshot.request); },
+                get report() { return structuredClone(snapshot.report); },
+            });
+            preparations.set(prepared, snapshot);
+            return prepared;
+        } finally { dispose(); }
+    }
+    async function dispatchModel(prepared: PreparedHarnessModel, options: HarnessModelOptions = {}) {
+        const { signal, dispose } = executionSignal(options);
+        try {
+            signal.throwIfAborted();
+            const original = preparations.get(prepared);
+            if (!original) throw new Error('Prepared request belongs to a different execution or was not prepared');
+            const snapshot = structuredClone(original);
+            // Only prepareModel can create this private, already-validated snapshot.
+            await options.onPrepared?.(structuredClone(snapshot.report));
+            signal.throwIfAborted();
+            return await executeModelTurn(roles.provider, snapshot.request, { ...options, signal });
+        } finally { dispose(); }
+    }
     return {
+        prepareModel,
+        dispatchModel,
         async model(request: TurnRequest, options: HarnessModelOptions = {}) {
             const { signal, dispose } = executionSignal(options);
             try {
-                signal.throwIfAborted();
-                const source = structuredClone(request);
-                if (source.maxTokens !== undefined && (!Number.isSafeInteger(source.maxTokens) || source.maxTokens < 1)) throw new RangeError('maxTokens must be a positive safe integer');
-                const context = await roles.context.assemble(structuredClone(source.messages), signal, {
-                    tools: structuredClone(source.tools ?? []),
-                    ...(source.system === undefined ? {} : { system: source.system }),
-                    ...(source.maxTokens === undefined ? {} : { reservedOutputTokens: source.maxTokens }),
-                });
-                signal.throwIfAborted();
-                if (!context || !Array.isArray(context.messages) ||
-                    context.messages.some(message => !message || !['user', 'assistant', 'tool_result'].includes(message.role) || typeof message.content !== 'string') ||
-                    (context.system !== undefined && typeof context.system !== 'string')) throw new Error('Context strategy returned invalid context');
-                validateReport(context.report, source.maxTokens ?? 0);
-                // An opaque provider continuation can retain history the local selector never counted.
-                if (context.report && source.previousResponseId) throw new Error('Budgeted context cannot account for opaque provider continuation history');
-                const prepared = structuredClone({ ...source, system: context.system, messages: context.messages });
-                await options.onPrepared?.(structuredClone(context.report));
-                signal.throwIfAborted();
-                return await executeModelTurn(roles.provider, prepared, { ...options, signal });
+                const prepared = await prepareModel(request, { ...options, signal });
+                return await dispatchModel(prepared, { ...options, signal });
             } finally { dispose(); }
         },
         tools: executeToolBatchDetailed,

@@ -1,0 +1,52 @@
+import { expect, it, vi } from 'vitest';
+import { createHarnessExecution } from './execution.js';
+import type { Message, TurnRequest } from '../../contracts/llm.js';
+
+function fixture() {
+    const assemble = vi.fn(async (messages: Message[]) => ({ messages, system: 'selected' }));
+    const turn = vi.fn(async (_request: TurnRequest) => ({ message: { role: 'assistant' as const, content: 'done' }, stopReason: 'end_turn' as const, usage: { inputTokens: 1, outputTokens: 1 } }));
+    const execution = createHarnessExecution({ context: { assemble }, provider: { turn, structured: async () => { throw new Error('unused'); } } });
+    return { execution, assemble, turn };
+}
+it('inspects a prepared request without dispatch, then executes that snapshot without rebuilding context', async () => {
+    const { execution, assemble, turn } = fixture();
+    const source: TurnRequest = { messages: [{ role: 'user', content: 'original' }] };
+    const prepared = await execution.prepareModel(source);
+    expect(turn).not.toHaveBeenCalled();
+    source.messages[0].content = 'later source change';
+    await execution.dispatchModel(prepared, { onPrepared: () => { prepared.request.messages[0].content = 'observer change'; } });
+    expect(assemble).toHaveBeenCalledTimes(1);
+    expect(turn.mock.calls[0][0].messages[0].content).toBe('original');
+    expect(turn.mock.calls[0][0].system).toBe('selected');
+});
+it('respects cancellation between preparation and dispatch', async () => {
+    const { execution, turn } = fixture();
+    const prepared = await execution.prepareModel({ messages: [{ role: 'user', content: 'original' }] });
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled before admission'));
+    await expect(execution.dispatchModel(prepared, { signal: controller.signal })).rejects.toThrow('cancelled before admission');
+    expect(turn).not.toHaveBeenCalled();
+});
+
+it('rejects an independently constructed request before dispatch', async () => {
+    const { execution, turn } = fixture();
+    await expect(execution.dispatchModel({ request: { messages: [], maxTokens: -1 } })).rejects.toThrow('was not prepared');
+    expect(turn).not.toHaveBeenCalled();
+});
+
+it('binds accounting and dispatch to the same snapshot despite edits to inspection copies', async () => {
+    const { execution, turn } = fixture();
+    const prepared = await execution.prepareModel({ messages: [{ role: 'user', content: 'small' }] });
+    prepared.request.messages[0].content = 'x'.repeat(100000);
+    expect(prepared.request.messages[0].content).toBe('small');
+    await execution.dispatchModel(prepared);
+    expect(turn.mock.calls[0][0].messages[0].content).toBe('small');
+    await expect(fixture().execution.dispatchModel(prepared)).rejects.toThrow('different execution');
+});
+
+it('requires lossless source preparation when requested', async () => {
+    const { execution, assemble, turn } = fixture();
+    assemble.mockImplementation(async () => ({ messages: [], system: 'selected' }));
+    await expect(execution.prepareModel({ messages: [{ role: 'user', content: 'source' }] }, { preserveMessages: true })).rejects.toThrow('protected source');
+    expect(turn).not.toHaveBeenCalled();
+});

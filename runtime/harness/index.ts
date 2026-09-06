@@ -8,7 +8,11 @@ export type { DefaultAgentOptions } from './preset.js';
 export type { HarnessClient, HarnessDriver, HarnessExtension, DriverComposition } from './composition.js';
 export { compositionFingerprint } from './composition.js';
 export { createHarnessExecution } from './execution.js';
-export type { HarnessExecution, HarnessExecutionRoles, HarnessModelOptions } from './execution.js';
+export type { HarnessExecution, HarnessExecutionRoles, HarnessModelOptions, HarnessPreparationOptions, PreparedHarnessModel } from './execution.js';
 
 export { inspectHarness } from './inspection.js';
 export type { HarnessSnapshot } from './inspection.js';
+
+export { checkpointView, checkpointBoundary, checkpointRequest, prepareCheckpoint, type WorkingCheckpoint, type CheckpointSourceRange } from './checkpoint.js';
+
+export { toToolResultMessage } from '../ToolOutput.js';
