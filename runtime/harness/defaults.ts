@@ -168,7 +168,7 @@ export function codingToolRuntime(workingRoot: string): IValidatedToolRuntime {
                 if (options?.authorizedArgs && !isDeepStrictEqual(checked.args, options.authorizedArgs)) return { ok: false, content: 'Arguments differ from authorization', errorKind: 'policy' };
                 if (options?.signal?.aborted) return { ok: false, content: 'Cancelled', errorKind: 'cancelled' };
                 if (name === 'shell_run') return await runShell(root, checked.args, options);
-                return await (name.startsWith('fs_') ? fs : search).call(name, checked.args);
+                return await (name.startsWith('fs_') ? fs : search).call(name, checked.args, options);
             } catch (error) { return { ok: false, content: String(error), errorKind: 'runtime' }; }
         },
         trustTierFor: () => 'standard',

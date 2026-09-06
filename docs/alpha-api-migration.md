@@ -84,3 +84,19 @@ callback invocation is a selection decision, not an indexing or persistence hook
 Existing protection, pairing, grant, source immutability and report contracts
 remain intact. Gears advances its persisted context extension to version 3 so
 active work cannot silently adopt the changed policy on restart.
+
+
+### Audit boundary fixes
+
+The default `tools.coding` extension is now version 2.0.0: searches run in a
+terminable worker with a 30-second deadline, and file reads require regular files
+and bounded output. UTF-8 line ranges return continuation offsets when capped;
+`totalLines` is present only when EOF was reached. Oversized individual lines
+return an error. Existing persisted compositions require their matching version;
+no data migration or automatic replay is performed.
+
+Graph model preparation now snapshots tool manifests before accounting and uses
+that same snapshot for dispatch. Context protection predicates add to explicit
+sticky protection. Gears advances its runtime extension to version 6 to preserve
+the corrected handling of dispatched uncertain tool outcomes and follow-up
+composition validation.

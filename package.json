@@ -102,7 +102,7 @@
     "build": "tsc",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
-    "test": "vitest run",
+    "test": "npm run build && vitest run",
     "agent": "node dist/demo/agent/main.js",
     "agent:web": "node dist/demo/agent/main.js --web",
     "test:reliability": "vitest run runtime/harness/crash-recovery.test.ts runtime/testing runtime/evaluation",

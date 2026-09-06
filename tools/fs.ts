@@ -11,8 +11,10 @@
 
 import * as fs   from 'node:fs'
 import * as path from 'node:path'
+import { open } from 'node:fs/promises'
+import { StringDecoder } from 'node:string_decoder'
 import type { ToolDefinition } from '../contracts/llm.js'
-import type { IToolRuntime, ToolCallResult } from '../contracts/tool-runtime.js'
+import type { IToolRuntime, ToolCallResult, ToolCallOptions } from '../contracts/tool-runtime.js'
 
 // ── Limits ────────────────────────────────────────────────────────────────────
 
@@ -62,7 +64,7 @@ function isProtectedSystemWrite(root: string, abs: string): boolean {
 const DEFINITIONS: ToolDefinition[] = [
     {
         name:        'fs_read',
-        description: 'Read the contents of a file. Supports line-range selection via offset/limit to efficiently read large files without loading the entire content.',
+        description: 'Read a regular file, with a 256 KiB output ceiling. UTF-8 offset/limit selects lines incrementally; truncated ranges include nextOffset. A single oversized line is rejected. totalLines is available only after EOF.',
         parameters: {
             type: 'object',
             required: ['path'],
@@ -149,49 +151,83 @@ const DEFINITIONS: ToolDefinition[] = [
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-function handleRead(root: string, args: Record<string, unknown>): ToolCallResult {
+async function handleRead(root: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
     const filePath = String(args['path'] ?? '')
     if (!filePath) return fail('path is required')
-
     const abs = resolve(root, filePath)
     if (!withinRoot(root, abs)) return fail(`Path escapes working root: ${filePath}`)
-    if (!fs.existsSync(abs)) return fail(`File not found: ${filePath}`)
-
-    const stat = fs.statSync(abs)
-    if (stat.isDirectory()) return fail(`Path is a directory: ${filePath}`)
-
-    const offset = args['offset'] != null ? Number(args['offset']) : undefined
-    const limit  = args['limit']  != null ? Number(args['limit'])  : undefined
-    const hasLineRange = offset != null || limit != null
-
-    // Allow large files when using line ranges; enforce cap for full reads
-    if (!hasLineRange && stat.size > MAX_READ_BYTES) {
-        return fail(`File too large: ${stat.size} bytes (max ${MAX_READ_BYTES}). Use offset/limit to read a line range.`)
-    }
-
+    const hasLineRange = args.offset !== undefined || args.limit !== undefined
+    const offset = args.offset === undefined ? 1 : args.offset
+    const limit = args.limit === undefined ? Number.MAX_SAFE_INTEGER : args.limit
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 1 ||
+        typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1) return fail('offset and limit must be positive safe integers')
+    const encoding = args.encoding ?? 'utf8'
+    if (encoding !== 'utf8' && encoding !== 'base64') return fail('encoding must be utf8 or base64')
+    if (hasLineRange && encoding !== 'utf8') return fail('Line ranges require utf8 encoding')
+    let file: Awaited<ReturnType<typeof open>> | undefined
     try {
-        const encoding = String(args['encoding'] ?? 'utf8') as BufferEncoding
-        const raw = fs.readFileSync(abs, encoding)
-
+        options?.signal?.throwIfAborted()
+        // NONBLOCK prevents a FIFO open from waiting for a writer before we can inspect it.
+        file = await open(abs, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW)
+        const stat = await file.stat()
+        if (!stat.isFile()) return fail('Not a regular file')
+        const buffer = Buffer.alloc(8192)
         if (!hasLineRange) {
-            return ok(raw, { path: abs, bytes: stat.size })
+            if (stat.size > MAX_READ_BYTES) return fail(`File too large: ${stat.size} bytes (max ${MAX_READ_BYTES}). Use offset/limit to read a line range.`)
+            const chunks: Buffer[] = []
+            let bytes = 0
+            while (true) {
+                options?.signal?.throwIfAborted()
+                const { bytesRead } = await file.read(buffer, 0, buffer.length, null)
+                if (!bytesRead) break
+                bytes += bytesRead
+                if (bytes > MAX_READ_BYTES) return fail('File grew beyond read limit')
+                chunks.push(Buffer.from(buffer.subarray(0, bytesRead)))
+            }
+            const content = Buffer.concat(chunks).toString(encoding)
+            if (Buffer.byteLength(content) > MAX_READ_BYTES) return fail('Encoded file exceeds output limit; use a UTF-8 line range')
+            return ok(content, { path: abs, bytes: stat.size })
         }
-
-        // Line-range mode: return numbered lines
-        const allLines   = raw.split('\n')
-        const totalLines = allLines.length
-        const startLine  = Math.max(1, offset ?? 1)
-        const endLine    = limit != null ? Math.min(startLine + limit - 1, totalLines) : totalLines
-
-        const selected = allLines.slice(startLine - 1, endLine)
-        const numbered = selected.map((line, i) => `${startLine + i}: ${line}`)
-        const content  = numbered.join('\n')
-        const meta     = { path: abs, bytes: stat.size, totalLines, startLine, endLine, linesReturned: selected.length }
-
-        return ok(content, meta)
-    } catch (e) {
-        return fail(`Read failed: ${e instanceof Error ? e.message : String(e)}`)
-    }
+        const decoder = new StringDecoder('utf8')
+        const lines: string[] = []
+        let lineNumber = 1, line = '', outputBytes = 0, eof = false, stopped = false
+        const emitLine = () => {
+            if (lineNumber < offset) { lineNumber++; return }
+            const numbered = `${lineNumber}: ${line}`
+            const size = Buffer.byteLength(numbered) + (lines.length ? 1 : 0)
+            if (outputBytes + size > MAX_READ_BYTES - 100) { stopped = true; return false }
+            lines.push(numbered); outputBytes += size; lineNumber++; line = ''
+            if (lines.length >= limit) stopped = true
+        }
+        while (!stopped) {
+            options?.signal?.throwIfAborted()
+            const { bytesRead } = await file.read(buffer, 0, buffer.length, null)
+            const text = bytesRead ? decoder.write(buffer.subarray(0, bytesRead)) : decoder.end()
+            let start = 0
+            for (let i = 0; i <= text.length; i++) {
+                if (i < text.length && text[i] !== '\n') continue
+                if (lineNumber >= offset) {
+                    line += text.slice(start, i)
+                    if (Buffer.byteLength(line) + String(lineNumber).length + 2 > MAX_READ_BYTES - 100)
+                        return fail(`Line ${lineNumber} exceeds the ${MAX_READ_BYTES}-byte output limit`)
+                }
+                if (i < text.length) emitLine()
+                start = i + 1
+                if (stopped) break
+            }
+            if (!bytesRead) { eof = emitLine() !== false; break }
+        }
+        const content = lines.join('\n') + (!eof ? `\n[truncated; continue with offset: ${lineNumber}]` : '')
+        return ok(content, { path: abs, bytes: stat.size, startLine: offset,
+            endLine: offset + lines.length - 1, linesReturned: lines.length,
+            ...(eof ? { totalLines: lineNumber - 1 } : {}), truncated: !eof,
+            ...(!eof ? { nextOffset: lineNumber } : {}) })
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fail(`File not found: ${filePath}`)
+        return options?.signal?.aborted
+            ? { ok: false, content: 'Read cancelled', errorKind: 'cancelled' }
+            : fail(`Read failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally { await file?.close() }
 }
 
 function handleWrite(root: string, args: Record<string, unknown>): ToolCallResult {
@@ -350,9 +386,9 @@ export class FsToolRuntime implements IToolRuntimeWithMeta {
         return DEFINITIONS
     }
 
-    async call(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+    async call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
         switch (name) {
-            case 'fs_read':   return handleRead(this.root, args)
+            case 'fs_read':   return handleRead(this.root, args, options)
             case 'fs_write':  return handleWrite(this.root, args)
             case 'fs_patch':  return handlePatch(this.root, args)
             case 'fs_list':   return handleList(this.root, args)
