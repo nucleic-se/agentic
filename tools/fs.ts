@@ -151,7 +151,7 @@ const DEFINITIONS: ToolDefinition[] = [
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-async function handleRead(root: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
+async function handleRead(root: string, args: Record<string, unknown>, textPageBytes: number, options?: ToolCallOptions): Promise<ToolCallResult> {
     const filePath = String(args['path'] ?? '')
     if (!filePath) return fail('path is required')
     const abs = resolve(root, filePath)
@@ -195,7 +195,7 @@ async function handleRead(root: string, args: Record<string, unknown>, options?:
             if (lineNumber < offset) { lineNumber++; return }
             const numbered = `${lineNumber}: ${line}`
             const size = Buffer.byteLength(numbered) + (lines.length ? 1 : 0)
-            if (outputBytes + size > MAX_READ_BYTES - 100) { stopped = true; return false }
+            if (outputBytes + size > textPageBytes - 100) { stopped = true; return false }
             lines.push(numbered); outputBytes += size; lineNumber++; line = ''
             if (lines.length >= limit) stopped = true
         }
@@ -208,8 +208,8 @@ async function handleRead(root: string, args: Record<string, unknown>, options?:
                 if (i < text.length && text[i] !== '\n') continue
                 if (lineNumber >= offset) {
                     line += text.slice(start, i)
-                    if (Buffer.byteLength(line) + String(lineNumber).length + 2 > MAX_READ_BYTES - 100)
-                        return fail(`Line ${lineNumber} exceeds the ${MAX_READ_BYTES}-byte output limit`)
+                    if (Buffer.byteLength(line) + String(lineNumber).length + 2 > textPageBytes - 100)
+                        return fail(`Line ${lineNumber} exceeds the ${textPageBytes}-byte output limit`)
                 }
                 if (i < text.length) emitLine()
                 start = i + 1
@@ -378,17 +378,24 @@ interface IToolRuntimeWithMeta extends IToolRuntime {
 }
 
 export class FsToolRuntime implements IToolRuntimeWithMeta {
-    constructor(private readonly root: string) {
+    private readonly textPageBytes: number
+
+    constructor(private readonly root: string, options: { textPageBytes?: number } = {}) {
+        this.textPageBytes = options.textPageBytes ?? MAX_READ_BYTES
+        if (!Number.isSafeInteger(this.textPageBytes) || this.textPageBytes < 256 || this.textPageBytes > MAX_READ_BYTES)
+            throw new RangeError(`textPageBytes must be an integer between 256 and ${MAX_READ_BYTES}`)
         fs.mkdirSync(this.root, { recursive: true })
     }
 
     tools(): ToolDefinition[] {
-        return DEFINITIONS
+        const definitions = structuredClone(DEFINITIONS)
+        definitions[0].description = `Read a regular file. UTF-8 pages contain complete numbered lines, up to ${this.textPageBytes} bytes including the continuation marker and at most 200 lines by default. Follow nextOffset for the next page; offset/limit select lines. A single line larger than the page is rejected. totalLines is available only after EOF. Base64 reads retain a 256 KiB file limit.`
+        return definitions
     }
 
     async call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
         switch (name) {
-            case 'fs_read':   return handleRead(this.root, args, options)
+            case 'fs_read':   return handleRead(this.root, args, this.textPageBytes, options)
             case 'fs_write':  return handleWrite(this.root, args)
             case 'fs_patch':  return handlePatch(this.root, args)
             case 'fs_list':   return handleList(this.root, args)

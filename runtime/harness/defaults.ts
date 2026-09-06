@@ -144,7 +144,7 @@ function runShell(root: string, outputStore: FileToolOutputStore, args: Record<s
 export function codingToolRuntime(workingRoot: string, options: { outputDirectory?: string } = {}): IValidatedToolRuntime {
     const root = realpathSync(workingRoot);
     const outputStore = new FileToolOutputStore(options.outputDirectory ?? path.join(tmpdir(), 'agentic-output', createHash('sha256').update(root).digest('hex')));
-    const fs = new FsToolRuntime(root);
+    const fs = new FsToolRuntime(root, { textPageBytes: 4000 });
     const search = new SearchToolRuntime(root);
     const shell = new ShellToolRuntime(root);
     const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), {

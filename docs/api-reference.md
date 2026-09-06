@@ -346,14 +346,16 @@ interface ToolCallOptions {
 |---|---|---|
 | `CompositeToolRuntime` | `@nucleic-se/agentic/tools` | `(runtimes: IToolRuntime[])` |
 | `ToolRuntimeAdapter` | `@nucleic-se/agentic/tools` | `(tools: ITool[])` |
-| `FsToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
+| `FsToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string, { textPageBytes?: number }?)` |
 | `FetchToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
 | `ShellToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
 | `SearchToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
 | `WebToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
 | `SkillToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
 
-`FsToolRuntime.fs_read` reads regular files only, with a 256 KiB output ceiling.
+`FsToolRuntime.fs_read` reads regular files only, with a default 256 KiB output ceiling.
+`new FsToolRuntime(root, { textPageBytes })` configures UTF-8 page size between
+256 bytes and 256 KiB, including numbering and the continuation marker.
 UTF-8 reads default to 200 numbered lines starting at line 1. Use search to locate
 relevant code, then `offset` and `limit` to read it; larger ranges require an
 explicit `limit`. All UTF-8 reads scan incrementally and return complete numbered
@@ -361,8 +363,11 @@ lines within that ceiling; truncated output names the next `offset`
 and includes `data.nextOffset`. A single line that cannot fit is rejected
 explicitly. `data.totalLines` is present only when the scan reaches EOF. Base64
 is supported for full reads, not line ranges. Reads check cancellation between
-asynchronous chunks. The default coding extension is version 3: UTF-8 reads
-without range arguments now return numbered pages instead of whole-file text.
+asynchronous chunks. The default coding extension is version 5: UTF-8 pages
+are bounded to 4,000 bytes so complete lines and their continuation cursor fit
+the harness's 4,000-character presentation cap. Larger `limit` values do not
+override the byte ceiling. An oversized individual line is rejected; use another
+tool or a composition with a larger page ceiling for that file.
 Older persisted sessions require their original composition.
 
 `SearchToolRuntime` accepts an explicit file or directory path in every output

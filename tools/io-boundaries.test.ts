@@ -7,9 +7,49 @@ import { join } from 'node:path'
 import { SearchToolRuntime } from '../dist/tools/search.js'
 import { FsToolRuntime } from '../dist/tools/fs.js'
 import { codingToolRuntime } from '../dist/runtime/harness/defaults.js'
+import { composeAgentContext } from '../dist/runtime/ContextPipeline.js'
 let base: string, root: string
 beforeEach(async () => { base = await mkdtemp(join(tmpdir(), 'agentic-io-test-')); root = join(base, 'root'); await mkdir(root) })
 afterEach(async () => { await rm(base, { recursive: true, force: true }) })
+
+it('returns complete coding read pages that survive context presentation unchanged', async () => {
+    const source = Array.from({ length: 180 }, (_, index) => `const value${index} = "${'🌱quoted '.repeat(7)}";`)
+    await writeFile(join(root, 'source.ts'), source.join('\n'))
+    const runtime = codingToolRuntime(root)
+    const collected: string[] = []
+    let offset = 1
+    for (let page = 0; page < source.length; page++) {
+        const result = await runtime.call('fs_read', { path: 'source.ts', offset, limit: 1000 })
+        expect(result.ok).toBe(true)
+        expect(Buffer.byteLength(result.content)).toBeLessThanOrEqual(4000)
+        const data = result.data as { linesReturned: number; nextOffset?: number }
+        expect(data.linesReturned).toBeGreaterThan(0)
+        collected.push(...result.content.split('\n').slice(0, data.linesReturned).map(line => line.replace(/^\d+: /, '')))
+        const context = await composeAgentContext({ tokenBudget: 16000, messages: [
+            { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'fs_read', args: { path: 'source.ts', offset } }] },
+            { role: 'tool_result', toolCallId: 'read', toolName: 'fs_read', content: result.content },
+        ] }, { maxToolResultCharacters: 4000, referenceToolResult: () => 'read_tool_result for original' })
+        expect(context.messages[1].content).toBe(result.content)
+        if (data.nextOffset === undefined) break
+        expect(data.nextOffset).toBe(offset + data.linesReturned)
+        offset = data.nextOffset
+    }
+    expect(collected).toEqual(source)
+})
+
+it('validates configurable text page limits and keeps raw filesystem defaults independent', async () => {
+    for (const textPageBytes of [0, 255, 262145, 4000.5, NaN, Infinity])
+        expect(() => new FsToolRuntime(root, { textPageBytes })).toThrow(RangeError)
+    await writeFile(join(root, 'long'), 'x'.repeat(4100))
+    const bounded = new FsToolRuntime(root, { textPageBytes: 4000 })
+    expect(await bounded.call('fs_read', { path: 'long' })).toMatchObject({ ok: false })
+    const ordinary = new FsToolRuntime(root)
+    expect(await ordinary.call('fs_read', { path: 'long' })).toMatchObject({ ok: true })
+    const tools = bounded.tools()
+    tools[0].description = 'changed'
+    expect(bounded.tools()[0].description).toContain('4000')
+    expect(ordinary.tools()[0].description).toContain('262144')
+})
 
 it('confines the public search primitive against symlink directories and parent paths', async () => {
     const outside = join(base, 'outside'); await mkdir(outside); await writeFile(join(outside, 'secret'), 'sentinel')
@@ -130,7 +170,10 @@ it('pages default UTF-8 reads and reconstructs every line through continuation o
     }
     expect(offset).toBeUndefined()
     expect(restored).toEqual(lines)
-    expect(await runtime.call('fs_read', { path: 'paged', limit: 500 })).toMatchObject({ ok: true, data: { linesReturned: 451, truncated: false } })
+    const largerRange = await runtime.call('fs_read', { path: 'paged', limit: 500 })
+    expect(largerRange).toMatchObject({ ok: true, data: { truncated: true } })
+    expect(Buffer.byteLength(largerRange.content)).toBeLessThanOrEqual(4000)
+    expect(await new FsToolRuntime(root).call('fs_read', { path: 'paged', limit: 500 })).toMatchObject({ ok: true, data: { linesReturned: 451, truncated: false } })
 })
 
 it('keeps base64 reads exact and independent of the default text page size', async () => {
