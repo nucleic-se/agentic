@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 /**
  * ToolRuntimeAdapter — validated execution for typed Agentic tools.
  *
@@ -115,6 +116,9 @@ export class ToolRuntimeAdapter implements IValidatedToolRuntime {
         }
         const validation = this.validate(name, args);
         if (!validation.ok) return validation.result;
+        if (options?.authorizedArgs && !isDeepStrictEqual(validation.args, options.authorizedArgs)) {
+            return { ok: false, content: 'Validation changed authorized arguments', errorKind: 'validation' };
+        }
 
         if (options?.signal?.aborted) {
             return { ok: false, content: `Tool call cancelled: ${name}`, errorKind: 'cancelled' };

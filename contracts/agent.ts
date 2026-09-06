@@ -28,17 +28,24 @@ export interface ToolPlan {
 
 export type ToolExecutionStatus =
   | 'success'          // tools.call() returned ok: true
-  | 'runtime_failure'  // tools.call() returned ok: false
+  | 'runtime_failure'  // known tool failure, excluding uncertain effects
+  | 'unknown'          // dispatch occurred but its effect cannot be determined
   | 'timeout'          // tool exceeded timeoutMs — did not return
   | 'policy_denied'    // ToolPolicy denied or confirmed-as-deny
-  | 'cancelled'        // AbortSignal fired before this call ran
+  | 'cancelled'        // cancellation; dispatched distinguishes uncertain effects
   | 'skipped'          // steering interrupted before this call ran
 
 export interface ToolExecution {
   callId:     string
   plan:       ToolPlan
   status:     ToolExecutionStatus
+  /** True only once tools.call() was invoked. False proves no dispatch occurred. */
+  dispatched?: boolean
   result?:    ToolCallResult
+  /** Original receipt when an afterToolCall hook changes the presented result. */
+  rawResult?: ToolCallResult
+  /** Hook failure is separate from whether the external effect succeeded. */
+  hookFailure?: Failure
   latencyMs?: number
   /** Error message for runtime_failure / timeout; denial reason for policy_denied. */
   error?:     string
@@ -83,6 +90,7 @@ export type FailureKind =
   | 'llm_transport_error'  // provider.turn() threw — infrastructure failure
   | 'llm_protocol_error'   // response unparsable / contract violation
   | 'tool_timeout'         // tool didn't return within timeoutMs
+  | 'tool_outcome_unknown' // dispatched tool effect requires reconciliation
   | 'max_turns_exceeded'   // safety turn limit reached
   | 'max_tokens_stop'      // model output was truncated
   | 'context_error'        // ContextBroker.assemble() threw before turn_start
@@ -133,7 +141,7 @@ export interface TurnRecord {
   interrupted?: {
     plannedCalls:  string[]          // all call IDs the model intended
     executedCalls: string[]          // those that actually ran
-    reason:        'steering' | 'abort' | 'extension_error'
+    reason:        'steering' | 'abort' | 'extension_error' | 'tool_outcome_unknown'
     // Note: policy denials (status='policy_denied') do NOT set interrupted —
     // they mark individual calls and execution continues for remaining calls.
   }

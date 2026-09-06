@@ -37,7 +37,15 @@ function resolve(root: string, filePath: string): string {
 
 function withinRoot(root: string, abs: string): boolean {
     const rel = path.relative(path.resolve(root), abs)
-    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return false
+    // Reject symlinks in every existing component, including dangling links.
+    let current = path.resolve(root)
+    for (const part of rel.split(path.sep).filter(Boolean)) {
+        current = path.join(current, part)
+        try { if (fs.lstatSync(current).isSymbolicLink()) return false }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false }
+    }
+    return true
 }
 
 function normalizeRel(root: string, abs: string): string {
@@ -46,7 +54,7 @@ function normalizeRel(root: string, abs: string): string {
 
 function isProtectedSystemWrite(root: string, abs: string): boolean {
     const rel = normalizeRel(root, abs)
-    return /^agents\/[^/]+\/state\.md$/.test(rel)
+    return rel === '' || rel === 'agents' || /^agents\/[^/]+(?:\/state\.md)?$/.test(rel)
 }
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
@@ -304,23 +312,18 @@ function handlePatch(root: string, args: Record<string, unknown>): ToolCallResul
         return fail(`Read failed: ${e instanceof Error ? e.message : String(e)}`)
     }
 
-    // Validate all patches before applying any (atomic — all or nothing)
+    // Apply to a working copy; commit only after every sequential operation validates.
     for (let i = 0; i < patches.length; i++) {
         const patch = patches[i] as Record<string, unknown>
+        if (!patch || typeof patch !== 'object') return fail(`Patch ${i}: invalid operation`)
         const search = String(patch['search'] ?? '')
         if (!search) return fail(`Patch ${i}: search string is empty`)
 
         const occurrences = content.split(search).length - 1
         if (occurrences === 0) return fail(`Patch ${i}: search string not found in file.\nSearch: ${search.slice(0, 200)}`)
         if (occurrences > 1)   return fail(`Patch ${i}: search string matches ${occurrences} locations (must be unique).\nSearch: ${search.slice(0, 200)}`)
-    }
-
-    // Apply patches sequentially
-    for (const patch of patches) {
-        const p = patch as Record<string, unknown>
-        const search  = String(p['search'] ?? '')
-        const replace = String(p['replace'] ?? '')
-        content = content.replace(search, replace)
+        content = content.replace(search, () => String(patch['replace'] ?? ''))
+        if (Buffer.byteLength(content, 'utf8') > MAX_WRITE_BYTES) return fail('Patched content too large')
     }
 
     try {

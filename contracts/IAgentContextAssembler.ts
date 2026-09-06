@@ -32,7 +32,8 @@
  * @module contracts
  */
 
-import type { Message } from './llm.js'
+import type { Message, ToolDefinition } from './llm.js'
+import type { PromptSection } from './IPromptEngine.js'
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
@@ -50,15 +51,27 @@ export interface AgentContextInput {
     messages: Message[]
 
     /**
-     * Token budget for the assembled context (system + messages combined).
-     * The assembler must stay within this budget.
+     * Estimated complete context ceiling: system + messages + tool schemas
+     * + reserved output. A tokenizer-specific counter improves accuracy.
      */
     tokenBudget: number
+
+    /** Override the assembler's configured instructions for this request. */
+    system?: string
+    /** Already contributed sections, selected alongside conversation groups. */
+    sections?: readonly PromptSection[]
+    /** The actual tool manifest sent with this model request. Never trimmed. */
+    tools?: readonly ToolDefinition[]
+    /** Output capacity withheld from the total ceiling. Defaults to zero. */
+    reservedOutputTokens?: number
+    signal?: AbortSignal
 }
 
 // ── Output ────────────────────────────────────────────────────────────────────
 
 export interface AgentContextOutput {
+    /** Accounting and selection decisions for exactly this prepared context. */
+    report?: ContextReport;
     /**
      * The assembled system string. Pass directly to TurnRequest.system.
      * Contains structured context: base prompt, summaries, facts, metadata.
@@ -85,3 +98,21 @@ export interface IAgentContextAssembler {
      */
     assemble(input: AgentContextInput): Promise<AgentContextOutput>
 }
+
+export interface ContextTokenUsage {
+    systemTokens: number;
+    messageTokens: number;
+    toolTokens: number;
+    schemaTokens: number;
+    reservedOutputTokens: number;
+    totalTokens: number;
+}
+export interface ContextDecision {
+    kind: 'section' | 'messages';
+    id: string;
+    action: 'kept' | 'compressed' | 'dropped';
+    score: number;
+    protected: boolean;
+}
+
+export interface ContextReport { usage: ContextTokenUsage; decisions: ContextDecision[]; }

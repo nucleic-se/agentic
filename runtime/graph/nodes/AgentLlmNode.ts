@@ -30,7 +30,11 @@ import type {
     IGraphNode,
 } from '../../../contracts/graph/IGraphEngine.js';
 import type { ICapability } from '../../../contracts/ICapability.js';
+import type { PromptSection } from '../../../contracts/IPromptEngine.js';
+import type { ContextReport } from '../../../contracts/IAgentContextAssembler.js';
+import { composeAgentContext, type ContextCompositionOptions } from '../../ContextPipeline.js';
 import type { TurnRecord } from '../../../contracts/agent.js';
+import { executeModelTurn, ModelStreamError } from '../../ModelExecutor.js';
 
 // ── Event types emitted by AgentLlmNode ──────────────────────
 
@@ -121,6 +125,10 @@ export interface AgentLlmNodeConfig<TState extends GraphState> {
 
     /** Max tokens to generate. Passed to TurnRequest.maxTokens. */
     maxTokens?: number;
+    /** Complete context ceiling, including tools and maxTokens output reserve. */
+    contextTokenBudget?: number;
+    contextOptions?: ContextCompositionOptions;
+    onContextPrepared?: (report: ContextReport) => void;
 
     /**
      * Called with each text delta during streaming. When provided (and the
@@ -174,48 +182,52 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
             ? providerOrFn(state)
             : providerOrFn;
 
-        // Read state
-        const baseSystemPrompt = state[systemPromptKey] as string | undefined;
-        const messages = state[messagesKey] as Message[];
-
-        // Collect prompt sections and tool definitions from active capability contributors.
-        // Capabilities can contribute to both the system prompt (via cap.prompt) and the
-        // tool list (via cap.runtime.tools()) when active.
         const { capabilities } = this.config;
-        let composedSystem = baseSystemPrompt ?? '';
-        const extraTools: ToolDefinition[] = [];
-        if (capabilities && capabilities.length > 0) {
-            const sections: string[] = [];
-            for (const cap of capabilities) {
-                if (cap.active && !cap.active(state)) continue;
-                if (cap.runtime) {
-                    extraTools.push(...cap.runtime.tools());
-                }
-                if (!cap.prompt) continue;
-                const contributed = await cap.prompt.contribute({ state });
-                for (const section of contributed) {
-                    const text = section.text();
-                    if (text) sections.push(text);
+        const prepareRequest = async (): Promise<TurnRequest> => {
+            // Read state
+            const baseSystemPrompt = state[systemPromptKey] as string | undefined;
+            const messages = state[messagesKey] as Message[];
+
+            // Collect prompt sections and tool definitions from active capability contributors.
+            // Capabilities can contribute to both the system prompt (via cap.prompt) and the
+            // tool list (via cap.runtime.tools()) when active.
+            const contributedSections: PromptSection[] = [];
+            const extraTools: ToolDefinition[] = [];
+            if (capabilities && capabilities.length > 0) {
+                for (const cap of capabilities) {
+                    if (cap.active && !cap.active(state)) continue;
+                    if (cap.runtime) {
+                        extraTools.push(...cap.runtime.tools());
+                    }
+                    if (!cap.prompt) continue;
+                    const contributed = await cap.prompt.contribute({ state });
+                    contributedSections.push(...contributed);
                 }
             }
-            if (sections.length > 0) {
-                composedSystem = (composedSystem ? composedSystem + '\n\n' : '') + sections.join('\n\n');
-            }
-        }
 
-        // Merge static/dynamic tools with any contributed by active capabilities.
-        const resolvedTools = typeof toolsOrFn === 'function' ? toolsOrFn(state) : (toolsOrFn ?? []);
-        const mergedTools = extraTools.length > 0
-            ? [...resolvedTools, ...extraTools]
-            : resolvedTools;
+            // Merge static/dynamic tools with any contributed by active capabilities.
+            const resolvedTools = typeof toolsOrFn === 'function' ? toolsOrFn(state) : (toolsOrFn ?? []);
+            const mergedTools = extraTools.length > 0
+                ? [...resolvedTools, ...extraTools]
+                : resolvedTools;
 
-        // Build request
-        const request: TurnRequest = {
-            messages,
-            ...(composedSystem && { system: composedSystem }),
-            ...(mergedTools && mergedTools.length > 0 && { tools: mergedTools }),
-            ...(maxTokens != null && { maxTokens }),
+            const prepared = await composeAgentContext({
+                system: baseSystemPrompt, messages, sections: contributedSections, tools: mergedTools,
+                tokenBudget: this.config.contextTokenBudget ?? Number.MAX_SAFE_INTEGER,
+                reservedOutputTokens: maxTokens, signal: context.signal,
+            }, this.config.contextOptions);
+            this.config.onContextPrepared?.({ usage: prepared.usage, decisions: prepared.decisions });
+            // Only model-facing fields cross the provider boundary.
+            const request: TurnRequest = {
+                messages: prepared.messages,
+                ...(prepared.system && { system: prepared.system }),
+                ...(mergedTools && mergedTools.length > 0 && { tools: mergedTools }),
+                ...(maxTokens != null && { maxTokens }),
+            };
+
+            return request;
         };
+        let request = await prepareRequest();
 
         // Emit turn_start
         this.emitEvent(state, eventsKey, {
@@ -232,10 +244,13 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
         let currentProvider = provider;
 
         while (true) {
+            let accountingFailed = false;
             try {
-                // Use streaming when available and a consumer exists
-                if ((eventsKey || onDelta) && currentProvider.streamTurn) {
-                    response = await currentProvider.streamTurn(request, (text) => {
+                response = await executeModelTurn(currentProvider, request, {
+                    signal: context.signal,
+                    stream: Boolean(eventsKey || onDelta),
+                    requireComplete: true,
+                    onDelta: text => {
                         if (eventsKey) {
                             this.emitEvent(state, eventsKey, {
                                 type: 'message_delta',
@@ -245,13 +260,17 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
                             });
                         }
                         onDelta?.(text);
-                    }, { signal: context.signal });
-                } else {
-                    response = await currentProvider.turn(request, { signal: context.signal });
-                }
+                    },
+                    onOutcome: outcome => {
+                        if (outcome.usage) {
+                            try { context.reportTokens(outcome.usage.inputTokens + outcome.usage.outputTokens); }
+                            catch (error) { accountingFailed = true; throw error; }
+                        }
+                    },
+                });
                 break; // success
             } catch (error) {
-                if (context.signal.aborted) throw error;
+                if (context.signal.aborted || accountingFailed || error instanceof ModelStreamError) throw error;
                 if (!onError || attempts >= maxRetries) {
                     throw error;
                 }
@@ -266,10 +285,7 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
                         : providerOrFn;
 
                     // Rebuild request in case state changed.
-                    const retrySystem = state[systemPromptKey] as string | undefined;
-                    const retryMessages = state[messagesKey] as Message[];
-                    request.messages = retryMessages;
-                    if (retrySystem) request.system = retrySystem;
+                    request = await prepareRequest();
                     continue;
                 } else if (action === 'continue') {
                     return; // Skip — node completes without writing output
@@ -281,10 +297,6 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
 
         // Write response to state
         (state as Record<string, unknown>)[outputKey] = response.message;
-
-        // Report token usage
-        const totalTokens = response.usage.inputTokens + response.usage.outputTokens;
-        context.reportTokens(totalTokens);
 
         // Fire capability afterTurn hooks — restricted to active capabilities.
         // Each capability sees every LLM turn (not checkpoint boundaries, which

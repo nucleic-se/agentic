@@ -99,7 +99,6 @@ Generate an IMPROVED version addressing the feedback.`,
             };
         },
         outputKey: 'draft',
-        temperature: 0.7,
     });
 
     // Save draft to history if enabled
@@ -140,7 +139,6 @@ Respond with JSON:
             },
         }),
         outputKey: 'critique',
-        temperature: 0.3, // Lower temperature for more consistent evaluation
     });
 
     // Judge node: parse quality and increment iteration

@@ -102,7 +102,6 @@ Generate an improved version.`,
             };
         },
         outputKey: 'proposal',
-        temperature: 0.7,
     });
 
     // Human review: request feedback from human

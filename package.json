@@ -58,6 +58,30 @@
     "./providers": {
       "types": "./dist/providers/index.d.ts",
       "import": "./dist/providers/index.js"
+    },
+    "./harness": {
+      "types": "./dist/runtime/harness/index.d.ts",
+      "import": "./dist/runtime/harness/index.js"
+    },
+    "./harness/sqlite": {
+      "types": "./dist/runtime/harness/stores.d.ts",
+      "import": "./dist/runtime/harness/stores.js"
+    },
+    "./harness/web": {
+      "types": "./dist/runtime/harness/ui/web.d.ts",
+      "import": "./dist/runtime/harness/ui/web.js"
+    },
+    "./harness/terminal": {
+      "types": "./dist/runtime/harness/ui/terminal.d.ts",
+      "import": "./dist/runtime/harness/ui/terminal.js"
+    },
+    "./execution": {
+      "types": "./dist/runtime/execution.d.ts",
+      "import": "./dist/runtime/execution.js"
+    },
+    "./context": {
+      "types": "./dist/runtime/context.d.ts",
+      "import": "./dist/runtime/context.js"
     }
   },
   "files": [
@@ -70,7 +94,9 @@
     "build": "tsc",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "agent": "node dist/demo/agent/main.js",
+    "agent:web": "node dist/demo/agent/main.js --web"
   },
   "engines": {
     "node": ">=20.18.1"

@@ -315,7 +315,7 @@ describe('runAgentKernel', () => {
         ]);
     });
 
-    it('normalizes a tool runtime that violates the no-throw contract', async () => {
+    it('stops with an uncertain effect when a runtime violates the no-throw contract', async () => {
         const runtime: IValidatedToolRuntime = {
             tools: () => [{ name: 'broken', description: 'breaks', parameters: { type: 'object' } }],
             validate: (_name, args) => ({ ok: true, args }),
@@ -332,9 +332,11 @@ describe('runAgentKernel', () => {
         );
 
         expect(records[0]!.executions[0]).toMatchObject({
-            status: 'runtime_failure',
+            status: 'unknown',
             error: expect.stringContaining('violated call() contract'),
         });
+        expect(records).toHaveLength(1);
+        expect(records[0]?.failure?.kind).toBe('tool_outcome_unknown');
     });
 
     it('reconciles completed tools and stops when steering retrieval throws', async () => {

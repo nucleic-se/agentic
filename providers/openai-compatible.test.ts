@@ -29,10 +29,12 @@ describe('OpenAICompatibleProvider', () => {
             baseUrl:      'http://localhost:11434/v1',
             model:        'qwen3-coder:480b',
             providerName: 'TestProvider',
+            extraBody: { max_tokens: 99999 },
         })
 
         const result = await provider.structured<{ answer: string }>({
             system: 'return json',
+            maxTokens: 123,
             messages: [{ role: 'user', content: 'hi' }],
             schema: {
                 type: 'object',
@@ -63,8 +65,19 @@ describe('OpenAICompatibleProvider', () => {
                 strict: true,
             },
         })
+        expect(body.max_tokens).toBe(123)
         expect(body.messages[0]).toEqual({ role: 'system', content: 'return json' })
         expect(body.messages[1]).toEqual({ role: 'user', content: 'hi' })
+    })
+
+    it('rejects parseable structured JSON when the finish reason is length', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            choices: [{ finish_reason: 'length', message: { role: 'assistant', content: '{"answer":"partial"}' } }],
+            usage: { prompt_tokens: 12, completion_tokens: 4 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+        const provider = new OpenAICompatibleProvider({ baseUrl: 'http://localhost:11434/v1', model: 'test' })
+        await expect(provider.structured({ messages: [{ role: 'user', content: 'answer' }], schema: { type: 'object' }, maxTokens: 64 }))
+            .rejects.toMatchObject({ name: 'LLMProtocolError', usage: { inputTokens: 12, outputTokens: 4 } })
     })
 
     it('turn() sends tools and maps tool_calls back into the contract', async () => {

@@ -5,10 +5,7 @@
  * At configured thresholds (default: 75%, 90%, final turn), appends a sticky
  * user message to state[messagesKey] so the model knows to wrap up.
  *
- * Concurrent-run safety: which thresholds have fired is tracked per run
- * via a WeakMap keyed on the initial state object. Each call to engine.run()
- * passes a distinct state object, so concurrent runs never interfere.
- * The WeakMap entry is garbage-collected when the state object is GC'd.
+ * Fired thresholds live in serializable state and survive graph cloning/checkpoints.
  *
  * Each threshold fires at most once per run. Hints are sticky so the
  * conversation assembler never drops them.
@@ -77,10 +74,6 @@ export class BudgetHintCapability<TState extends GraphState = GraphState>
     readonly id: string
     readonly lifecycle: ICapabilityLifecycle<TState>
 
-    // Per-run fired tracking: keyed on the state object passed to each run.
-    // Distinct state objects per concurrent run → no cross-run interference.
-    readonly #firedByRun = new WeakMap<object, Set<number>>()
-
     constructor(config: BudgetHintCapabilityConfig<TState>, id = 'budget-hint') {
         this.id = id
 
@@ -95,12 +88,8 @@ export class BudgetHintCapability<TState extends GraphState = GraphState>
                 const used = Number(s[config.turnCountKey] ?? 0) + 1
                 s[config.turnCountKey] = used
 
-                // Get or create the per-run fired set for this state object
-                let fired = this.#firedByRun.get(state as object)
-                if (!fired) {
-                    fired = new Set()
-                    this.#firedByRun.set(state as object, fired)
-                }
+                const firedKey = `__agentic_budget_hints_${this.id}`
+                const fired = new Set<number>(Array.isArray(s[firedKey]) ? s[firedKey] as number[] : [])
 
                 const max       = config.maxTurns
                 if (max <= 0) return
@@ -124,6 +113,7 @@ export class BudgetHintCapability<TState extends GraphState = GraphState>
                     }
 
                     fired.add(i)
+                    s[firedKey] = [...fired]
                     break // one hint per turn
                 }
             },

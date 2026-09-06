@@ -1,3 +1,5 @@
+import { LLMProtocolError } from '../contracts/llm.js'
+import { sseData } from './sse.js'
 /**
  * Anthropic Claude provider — implements ILLMProvider via raw HTTP.
  *
@@ -69,7 +71,7 @@ const ANTHROPIC_RESET_HEADERS = [
 type AnthropicBlock =
     | { type: 'text';        text: string }
     | { type: 'tool_use';    id: string; name: string; input: Record<string, unknown> }
-    | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+    | { type: 'tool_result'; tool_use_id: string; content: string | Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>; is_error?: boolean }
 
 interface AnthropicMessage {
     role:    'user' | 'assistant'
@@ -151,7 +153,9 @@ function toAnthropicMessages(messages: Message[]): AnthropicMessage[] {
             const block: AnthropicBlock = {
                 type:        'tool_result',
                 tool_use_id: msg.toolCallId,
-                content:     msg.content,
+                content:     msg.contentBlocks?.length ? msg.contentBlocks.map(block => block.type === 'text'
+                    ? { type: 'text' as const, text: block.text }
+                    : { type: 'image' as const, source: { type: 'base64' as const, media_type: block.mimeType, data: block.data } }) : msg.content,
                 ...(msg.isError ? { is_error: true } : {}),
             }
             const last = out[out.length - 1]
@@ -249,7 +253,7 @@ export class AnthropicProvider implements ILLMProvider {
     async structured<T>(request: StructuredRequest, options?: ProviderCallOptions): Promise<StructuredResponse<T>> {
         const body: AnthropicRequest = {
             model:      this.model,
-            max_tokens: this.maxTokens,
+            max_tokens: request.maxTokens ?? this.maxTokens,
             system:     request.system,
             messages:   toAnthropicMessages(request.messages),
             tools: [{
@@ -261,6 +265,7 @@ export class AnthropicProvider implements ILLMProvider {
         }
 
         const res = await this.post<AnthropicResponse>('/v1/messages', body, options)
+        if (res.stop_reason === 'max_tokens') throw new LLMProtocolError('Structured output was truncated', { usage: extractUsage(res.usage) })
 
         const toolBlock = res.content.find(
             (b): b is AnthropicBlock & { type: 'tool_use' } =>
@@ -362,55 +367,45 @@ export class AnthropicProvider implements ILLMProvider {
         // Tool use blocks accumulated by content block index.
         const toolBlocks = new Map<number, { id: string; name: string; args: string }>()
 
-        const reader  = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
+        let terminal = false
+        for await (const payload of sseData(res)) {
+            if (payload === '[DONE]') continue
+            let event: AnthropicStreamEvent
+            try { event = JSON.parse(payload) } catch { throw new LLMProtocolError('Invalid JSON in response stream') }
+            if (!event || typeof event !== 'object') throw new LLMProtocolError('Invalid stream event')
+            if ('error' in event || ('type' in event && (event as { type: string }).type === 'error')) throw new LLMProtocolError('Provider stream failed')
 
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() ?? ''
-
-            for (const line of lines) {
-                const trimmed = line.trim()
-                if (!trimmed || !trimmed.startsWith('data: ')) continue
-                const payload = trimmed.slice(6)
-
-                let event: AnthropicStreamEvent
-                try { event = JSON.parse(payload) } catch { continue }
-
-                if (event.type === 'message_start') {
-                    inputTokens      = event.message.usage.input_tokens
-                    cacheReadTokens  = event.message.usage.cache_read_input_tokens
-                    cacheWriteTokens = event.message.usage.cache_creation_input_tokens
-                } else if (event.type === 'content_block_start') {
-                    if (event.content_block.type === 'tool_use') {
-                        toolBlocks.set(event.index, { id: event.content_block.id, name: event.content_block.name, args: '' })
-                    }
-                } else if (event.type === 'content_block_delta') {
-                    if (event.delta.type === 'text_delta') {
-                        textContent += event.delta.text
-                        onDelta(event.delta.text)
-                    } else if (event.delta.type === 'input_json_delta') {
-                        const block = toolBlocks.get(event.index)
-                        if (block) block.args += event.delta.partial_json
-                    }
-                } else if (event.type === 'message_delta') {
-                    stopReason   = event.delta.stop_reason
-                    outputTokens = event.usage.output_tokens
+            if ((event as { type: string }).type === 'message_stop') terminal = true
+            if (event.type === 'message_start') {
+                inputTokens      = event.message.usage.input_tokens
+                cacheReadTokens  = event.message.usage.cache_read_input_tokens
+                cacheWriteTokens = event.message.usage.cache_creation_input_tokens
+            } else if (event.type === 'content_block_start') {
+                if (event.content_block.type === 'tool_use') {
+                    toolBlocks.set(event.index, { id: event.content_block.id, name: event.content_block.name, args: '' })
                 }
+            } else if (event.type === 'content_block_delta') {
+                if (event.delta.type === 'text_delta') {
+                    textContent += event.delta.text
+                    onDelta(event.delta.text)
+                } else if (event.delta.type === 'input_json_delta') {
+                    const block = toolBlocks.get(event.index)
+                    if (block) block.args += event.delta.partial_json
+                }
+            } else if (event.type === 'message_delta') {
+                stopReason   = event.delta.stop_reason
+                outputTokens = event.usage.output_tokens
             }
         }
+        if (!terminal) throw new LLMProtocolError('Response stream ended before completion')
 
-        const toolCalls: ToolCall[] = [...toolBlocks.values()].map(b => {
+        const toolCalls: ToolCall[] = (stopReason === 'max_tokens' ? [] : [...toolBlocks.values()]).map(b => {
             let args: Record<string, unknown>
             try {
                 args = JSON.parse(b.args)
+                if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('arguments must be an object')
             } catch {
-                throw new Error(`AnthropicProvider: protocol error: malformed arguments for tool '${b.name}'`)
+                throw new LLMProtocolError(`AnthropicProvider: protocol error: malformed arguments for tool '${b.name}'`)
             }
             return { id: b.id, name: b.name, args }
         })
@@ -426,9 +421,7 @@ export class AnthropicProvider implements ILLMProvider {
         }
     }
 
-    embed(_texts: string[], _options?: ProviderCallOptions): Promise<number[][]> {
-        throw new Error('AnthropicProvider: Anthropic does not provide an embeddings API')
-    }
+
 
     private async post<T>(path: string, body: unknown, options?: ProviderCallOptions): Promise<T> {
         const limiterKey = this.limiterKey()

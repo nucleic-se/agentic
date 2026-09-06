@@ -32,8 +32,10 @@ const records = await runAgentKernel(
 assemble context
 → call provider
 → validate the complete raw call batch
-→ evaluate policy and confirmation for the complete batch
-→ apply hooks and revalidate rewrites
+→ apply beforeToolCall hooks and validate transformed inputs
+→ evaluate policy and validate any policy rewrites
+→ confirm the final arguments
+→ reject validation that changes authorized arguments
 → execute authorized calls sequentially
 → append assistant message and every tool result atomically
 ```
@@ -48,7 +50,8 @@ Policy is fail closed:
 
 - a thrown policy evaluation becomes a denial;
 - `confirm` without `confirmToolCall` becomes a denial;
-- policy and hook rewrites are revalidated;
+- policy and hook rewrites are validated before confirmation;
+- subsequent validation cannot change authorized arguments;
 - duplicate call identifiers are protocol failures.
 
 The kernel requires `IValidatedToolRuntime`. `ToolRuntimeAdapter` implements
@@ -58,3 +61,11 @@ do not provide executable validation.
 Provider calls and tool calls receive the run's `AbortSignal`. Provider retry
 delays and rate-limit waits are abortable. Tool cancellation remains
 cooperative: Agentic cannot undo external side effects after they occur.
+
+Request records snapshot messages and tool definitions before the model call;
+subsequent conversation reconciliation does not mutate earlier requests.
+`beforeToolCall` runs before policy, so policies inspect the transformed intent.
+Validators should produce stable canonical arguments: revalidating an authorized
+input must not change its meaning or representation. The kernel passes
+`ToolCallOptions.authorizedArgs`; custom runtimes must preserve those arguments
+when validating again at dispatch. `ToolRuntimeAdapter` enforces this check.

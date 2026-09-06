@@ -1,3 +1,4 @@
+import { sseData } from './sse.js'
 import { createOpenAIOAuthTransport, type OpenAIOAuth, type OpenAIOAuthTransport } from '@openai-oauth/core'
 import { openaiCredentials } from '@openai-oauth/local'
 
@@ -49,7 +50,7 @@ interface ResponseInputText {
 type ResponseInputItem =
     | { role: 'user' | 'assistant'; content: ResponseInputText[] }
     | { type: 'function_call'; call_id: string; name: string; arguments: string }
-    | { type: 'function_call_output'; call_id: string; output: string }
+    | { type: 'function_call_output'; call_id: string; output: string | Array<{ type: 'input_text'; text: string } | { type: 'input_image'; image_url: string; detail: 'auto' }> }
 
 interface ResponseFunctionTool {
     type: 'function'
@@ -87,7 +88,9 @@ function toInput(messages: Message[]): ResponseInputItem[] {
             continue
         }
         if (message.role === 'tool_result') {
-            input.push({ type: 'function_call_output', call_id: message.toolCallId, output: message.content })
+            input.push({ type: 'function_call_output', call_id: message.toolCallId, output: message.contentBlocks?.length ? message.contentBlocks.map(block => block.type === 'text'
+                ? { type: 'input_text' as const, text: block.text }
+                : { type: 'input_image' as const, image_url: `data:${block.mimeType};base64,${block.data}`, detail: 'auto' as const }) : message.content })
             continue
         }
         if (message.content) {
@@ -147,28 +150,15 @@ function parseArguments(raw: string, name: string, usage: TokenUsage): Record<st
 }
 
 function stopReasonFor(response: JsonRecord, toolCalls: ToolCall[]): StopReason {
-    if (toolCalls.length) return 'tool_use'
     const status = asString(response.status)
     const incomplete = optionalRecord(response.incomplete_details)
     if (status === 'incomplete' && incomplete?.reason === 'max_output_tokens') return 'max_tokens'
-    return 'end_turn'
-}
-
-function eventBlocks(buffer: string): { blocks: string[]; remainder: string } {
-    const parts = buffer.split(/\r?\n\r?\n/)
-    return { blocks: parts.slice(0, -1), remainder: parts.at(-1) ?? '' }
-}
-
-function eventData(block: string): string | undefined {
-    const values = block.split(/\r?\n/)
-        .filter(line => line.startsWith('data:'))
-        .map(line => line.slice(5).trimStart())
-    return values.length ? values.join('\n') : undefined
+    return toolCalls.length ? 'tool_use' : 'end_turn'
 }
 
 function terminalFailure(response: JsonRecord, usage: TokenUsage): LLMProtocolError | undefined {
     const status = asString(response.status)
-    if (status === 'completed' || status === 'incomplete') return undefined
+    if (status === 'completed' || (status === 'incomplete' && optionalRecord(response.incomplete_details)?.reason === 'max_output_tokens')) return undefined
     const error = optionalRecord(response.error)
     const detail = asString(error?.message) ?? status ?? 'unknown failure'
     return new LLMProtocolError(`CodexSubscriptionProvider: response failed: ${detail}`, { usage })
@@ -185,15 +175,11 @@ async function parseResponseStream(
     }
     if (!response.body) throw new LLMProtocolError(`${providerName}: response had no body`)
 
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
     const calls = new Map<string, { name: string; arguments: string }>()
-    let buffer = ''
     let content = ''
     let completed: JsonRecord | undefined
 
-    const consume = (block: string): void => {
-        const data = eventData(block)
+    const consume = (data: string): void => {
         if (!data || data === '[DONE]') return
         let event: JsonRecord
         try {
@@ -221,6 +207,7 @@ async function parseResponseStream(
             if (!callId || !name || args === undefined) {
                 throw new LLMProtocolError(`${providerName}: incomplete function call item`)
             }
+            if (calls.has(callId)) throw new LLMProtocolError(`${providerName}: duplicate function call id '${callId}'`)
             calls.set(callId, { name, arguments: args })
             return
         }
@@ -235,26 +222,13 @@ async function parseResponseStream(
         }
     }
 
-    try {
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
-            const parsed = eventBlocks(buffer)
-            buffer = parsed.remainder
-            for (const block of parsed.blocks) consume(block)
-        }
-        buffer += decoder.decode()
-        if (buffer.trim()) consume(buffer)
-    } finally {
-        reader.releaseLock()
-    }
+    for await (const data of sseData(response)) consume(data)
 
     if (!completed) throw new LLMProtocolError(`${providerName}: response stream ended before completion`)
     const usage = usageFrom(completed.usage)
     const failure = terminalFailure(completed, usage)
     if (failure) throw failure
-    const toolCalls = [...calls.entries()].map(([id, call]) => ({
+    const toolCalls = (completed.status === 'incomplete' ? [] : [...calls.entries()]).map(([id, call]) => ({
         id,
         name: call.name,
         args: parseArguments(call.arguments, call.name, usage),
@@ -344,6 +318,7 @@ export class CodexSubscriptionProvider implements ILLMProvider {
             options,
             { type: 'json_schema', name: 'structured_output', schema: request.schema, strict: true },
         )
+        if (parsed.stopReason === 'max_tokens') throw new LLMProtocolError('Structured output was truncated', { usage: parsed.usage })
         try {
             return { value: JSON.parse(parsed.content) as T, usage: parsed.usage }
         } catch (cause) {
@@ -377,7 +352,5 @@ export class CodexSubscriptionProvider implements ILLMProvider {
         }
     }
 
-    embed(_texts: string[], _options?: ProviderCallOptions): Promise<number[][]> {
-        throw new Error(`${this.#providerName}: Codex subscription does not provide embeddings`)
-    }
+
 }

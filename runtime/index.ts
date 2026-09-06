@@ -2,7 +2,7 @@
  * @nucleic/agentic runtime barrel.
  */
 
-export { PromptEngine } from './PromptEngine.js';
+export { PromptEngine, composePromptSections } from './PromptEngine.js';
 export { PromptContributorRegistry } from './PromptContributorRegistry.js';
 export { TickPipeline } from './TickPipeline.js';
 export { InMemoryTracer } from './InMemoryTracer.js';
@@ -13,7 +13,7 @@ export type { MigrationState } from './PackMigrationRunner.js';
 export { ToolRegistry } from './ToolRegistry.js';
 export { InMemoryStore } from './InMemoryStore.js';
 export { ToolPromptRenderer } from './ToolPromptRenderer.js';
-export { ContextAssembler } from './ContextAssembler.js';
+export { ContextAssembler, collectContextSections } from './ContextAssembler.js';
 export { PassThroughContextAssembler } from './PassThroughContextAssembler.js';
 export { AgentContextAssembler } from './AgentContextAssembler.js';
 export { ContextBudgetExceededError } from './AgentContextAssembler.js';
@@ -31,3 +31,9 @@ export type { PlanningCapabilityConfig, BudgetHintCapabilityConfig, BudgetHintTh
 export { HeuristicTokenCounter } from './HeuristicTokenCounter.js';
 export { DEFAULT_MAX_TOOL_CALLS_PER_TURN, runAgentKernel } from './AgentKernel.js';
 export type { AgentKernelConfig, AgentKernelContext, BeforeKernelToolCallResult } from './AgentKernel.js';
+export * from './ModelExecutor.js';
+export * from './ExecutionJournal.js';
+export * from './ContextPipeline.js';
+export { executeToolBatch, executeToolBatchDetailed } from './ToolBatchExecutor.js';
+export type { BeforeToolCallResult, ToolBatchConfig, ToolBatchOptions, ToolBatchExecutionOptions, ToolBatchExecutionResult } from './ToolBatchExecutor.js';
+export * from './ExecutionOptions.js';

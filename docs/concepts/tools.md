@@ -150,3 +150,21 @@ behind an external sandbox and explicit policy.
 | `untrusted` | External service or untrusted content boundary |
 
 Trust tiers are policy input. They do not grant authority by themselves.
+
+## Built-in filesystem and HTTP limits
+
+Filesystem operations reject traversal through symlinks below the configured
+root, including dangling links. Recursive deletion and moves cannot target the
+root, `agents`, or an agent directory protected by the `agents/*/state.md`
+convention. Patches apply sequentially to a working copy, treat replacement text
+literally, and write only when every operation succeeds.
+
+These path checks are not an operating-system sandbox. Use OS isolation when
+untrusted processes can replace directory entries concurrently; portable Node
+path checks do not provide race-free directory-relative filesystem access.
+
+Fetch and web tools keep their 15-second timeout active through body consumption,
+forward caller cancellation, and consume at most 128 KiB before truncating and
+cancelling the body stream. The returned size describes the buffered content,
+not the full remote object. HTTP truncation can cut structured documents; inspect
+the truncation marker before parsing saved output.

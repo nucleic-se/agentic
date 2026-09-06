@@ -63,10 +63,16 @@ export interface ToolResultMessage {
     /** Name of the tool that produced this result. Used by the conversation assembler for tool-aware compression. */
     toolName?:   string
     content:     string
+    /** Native multimodal tool output. Text content remains the fallback representation. */
+    contentBlocks?: ToolContentBlock[]
     provenance?: MessageProvenance
     /** True when the tool itself returned an error — the LLM should see this as a failure. */
     isError?:   boolean
 }
+
+export type ToolContentBlock =
+    | { type: 'text'; text: string }
+    | { type: 'image'; data: string; mimeType: string }
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage
 
@@ -91,11 +97,16 @@ export interface TokenUsage {
     outputTokens:      number
     cacheReadTokens?:  number
     cacheWriteTokens?: number
+    reasoningTokens?: number
+    totalTokens?: number
+    costUsd?: number
 }
 
 // ── Structured output ─────────────────────────────────────────────────────────
 
 export interface StructuredRequest {
+    /** Maximum generated output tokens, including budget reservations. */
+    maxTokens?: number
     system?:   string
     /**
      * Conversation messages. Minimum: a single user message.
@@ -180,6 +191,12 @@ export interface ILLMProvider {
     /**
      * Embed one or more texts. Returns one vector per input.
      */
+    /** Optional compatibility capability; require IEmbeddingProvider when embedding is necessary. */
+    embed?(texts: string[], options?: ProviderCallOptions): Promise<number[][]>
+}
+
+/** Explicit capability for consumers that require embeddings. */
+export interface IEmbeddingProvider {
     embed(texts: string[], options?: ProviderCallOptions): Promise<number[][]>
 }
 

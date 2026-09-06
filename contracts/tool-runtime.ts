@@ -23,7 +23,7 @@
  *     Runtimes that do not support cancellation or streaming silently ignore them.
  */
 
-import type { ToolDefinition } from './llm.js'
+import type { ToolDefinition, ToolContentBlock } from './llm.js'
 import type { ToolTrustTier } from './ITool.js'
 
 // ── Result ────────────────────────────────────────────────────────────────────
@@ -32,6 +32,8 @@ export interface ToolCallResult {
     ok:       boolean
     /** Text representation for LLM consumption. Always present. */
     content:  string
+    /** Preserve image/text output for providers with multimodal tool support. */
+    contentBlocks?: ToolContentBlock[]
     /** Structured data for programmatic access. Optional. */
     data?:    unknown
     /** Structured failure classification when ok is false. */
@@ -43,6 +45,8 @@ export interface ToolCallResult {
 export interface ToolCallOptions {
     /** Stable call identifier used in execution records and tool context. */
     callId?: string
+    /** If supplied, validation must not change these already-authorized arguments. */
+    authorizedArgs?: Record<string, unknown>
     /**
      * Cancellation signal. If fired before the tool returns, the runtime
      * should abort in-progress work and return ok: false with an appropriate

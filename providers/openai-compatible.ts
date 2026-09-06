@@ -1,3 +1,5 @@
+import { LLMProtocolError } from '../contracts/llm.js'
+import { sseData } from './sse.js'
 /**
  * OpenAI-compatible provider — implements ILLMProvider against hosts that
  * expose the OpenAI chat completions and embeddings endpoints.
@@ -75,7 +77,7 @@ interface OpenAIToolCallWire {
 
 interface OpenAIMessage {
     role: OpenAIRole
-    content: string | null
+    content: string | null | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }>
     tool_call_id?: string
     name?: string
     tool_calls?: OpenAIToolCallWire[]
@@ -155,15 +157,19 @@ function toOpenAITools(tools: ToolDefinition[]): OpenAIFunctionTool[] {
 
 export function toOpenAIMessages(system: string | undefined, messages: Message[]): OpenAIMessage[] {
     const out: OpenAIMessage[] = []
+    let images: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = []
+    const flushImages = () => { if (images.length) { out.push({ role: 'user', content: images }); images = [] } }
 
     if (system) out.push({ role: 'system', content: system })
 
     for (const msg of messages) {
+        // Chat Completions accepts images as user content, after the complete tool-result batch.
+        if (msg.role !== 'tool_result') flushImages()
         if (msg.role === 'user') {
             // Merge consecutive user messages — some providers (Ollama, Anthropic)
             // require strict user/assistant alternation.
             const prev = out[out.length - 1]
-            if (prev?.role === 'user') {
+            if (prev?.role === 'user' && typeof prev.content === 'string') {
                 prev.content += '\n' + msg.content
             } else {
                 out.push({ role: 'user', content: msg.content })
@@ -174,7 +180,7 @@ export function toOpenAIMessages(system: string | undefined, messages: Message[]
         if (msg.role === 'assistant') {
             // Merge consecutive assistant messages (same rationale).
             const prev = out[out.length - 1]
-            if (prev?.role === 'assistant' && !msg.toolCalls?.length && !prev.tool_calls?.length) {
+            if (prev?.role === 'assistant' && typeof prev.content === 'string' && !msg.toolCalls?.length && !prev.tool_calls?.length) {
                 prev.content += '\n' + (msg.content || '')
             } else {
                 out.push({
@@ -201,9 +207,14 @@ export function toOpenAIMessages(system: string | undefined, messages: Message[]
         out.push({
             role:         'tool',
             tool_call_id: msg.toolCallId,
-            content:      msg.content,
+            content:      msg.contentBlocks?.length ? msg.contentBlocks.filter(block => block.type === 'text').map(block => block.text).join('\n') : msg.content,
         })
+        for (const block of msg.contentBlocks ?? []) if (block.type === 'image') {
+            images.push({ type: 'text', text: `Image returned by tool ${msg.toolName ?? msg.toolCallId}:` },
+                { type: 'image_url', image_url: { url: `data:${block.mimeType};base64,${block.data}` } })
+        }
     }
+    flushImages()
 
     return out
 }
@@ -213,9 +224,10 @@ function normalizeToolArgs(value: string | undefined, fallbackName: string): Rec
 
     try {
         const parsed = JSON.parse(value)
-        return typeof parsed === 'object' && parsed != null ? parsed as Record<string, unknown> : {}
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('arguments must be an object')
+        return parsed as Record<string, unknown>
     } catch {
-        throw new Error(`OpenAICompatibleProvider: invalid JSON arguments for tool ${fallbackName}`)
+        throw new LLMProtocolError(`OpenAICompatibleProvider: invalid JSON arguments for tool ${fallbackName}`)
     }
 }
 
@@ -378,6 +390,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
             model:    this.model,
             messages: toOpenAIMessages(request.system, request.messages),
             stream:   false,
+            ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
             response_format: {
                 type: 'json_schema',
                 json_schema: {
@@ -388,7 +401,8 @@ export class OpenAICompatibleProvider implements ILLMProvider {
             },
         }
 
-        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody }, options)
+        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody, ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}) }, options)
+        if (res.choices?.[0]?.finish_reason === 'length') throw new LLMProtocolError('Structured output was truncated', { usage: extractUsage(res.usage) })
         const content = res.choices?.[0]?.message?.content
         if (!content) {
             throw new Error(`${this.providerName}: structured response was empty`)
@@ -425,7 +439,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
                 : {}),
         }
 
-        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody }, options)
+        const res = await this.post<OpenAIChatResponse>('/chat/completions', { ...body, ...this.extraBody, ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}) }, options)
         const result = fromOpenAIResponse(res)
 
         // Recover tool calls emitted as text by models that intermittently
@@ -478,7 +492,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         const res = await fetch(`${this.baseUrl}/chat/completions`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ ...body, ...this.extraBody }),
+            body: JSON.stringify({ ...body, ...this.extraBody, ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}) }),
             signal: providerSignal(options),
         })
         if (!res.ok) {
@@ -494,59 +508,46 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         let responseId: string | undefined
         const toolCallAccum = new Map<number, { id: string; name: string; args: string }>()
 
-        const reader = res.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
+        let terminal = false
+        for await (const payload of sseData(res)) {
+            if (payload === '[DONE]') continue
+            let chunk: OpenAIStreamDelta
+            try { chunk = JSON.parse(payload) } catch { throw new LLMProtocolError('Invalid JSON in response stream') }
+            if (!chunk || typeof chunk !== 'object') throw new LLMProtocolError('Invalid stream event')
+            if ('error' in chunk || ('type' in chunk && chunk.type === 'error')) throw new LLMProtocolError('Provider stream failed')
+            if (chunk.id) responseId = chunk.id
 
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
+            const choice = chunk.choices?.[0]
+            if (choice?.delta?.content) {
+                content += choice.delta.content
+                onDelta(choice.delta.content)
+            }
 
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() ?? ''
-
-            for (const line of lines) {
-                const trimmed = line.trim()
-                if (!trimmed || !trimmed.startsWith('data: ')) continue
-                const payload = trimmed.slice(6)
-                if (payload === '[DONE]') continue
-
-                let chunk: OpenAIStreamDelta
-                try { chunk = JSON.parse(payload) } catch { continue }
-                if (chunk.id) responseId = chunk.id
-
-                const choice = chunk.choices?.[0]
-                if (choice?.delta?.content) {
-                    content += choice.delta.content
-                    onDelta(choice.delta.content)
-                }
-
-                // Accumulate tool call deltas by index.
-                if (choice?.delta?.tool_calls) {
-                    for (const tc of choice.delta.tool_calls) {
-                        const idx = tc.index ?? 0
-                        const existing = toolCallAccum.get(idx)
-                        if (!existing) {
-                            toolCallAccum.set(idx, {
-                                id:   tc.id ?? `tool-call-${idx}`,
-                                name: tc.function?.name ?? '',
-                                args: tc.function?.arguments ?? '',
-                            })
-                        } else {
-                            if (tc.id) existing.id = tc.id
-                            if (tc.function?.name) existing.name += tc.function.name
-                            existing.args += tc.function?.arguments ?? ''
-                        }
+            // Accumulate tool call deltas by index.
+            if (choice?.delta?.tool_calls) {
+                for (const tc of choice.delta.tool_calls) {
+                    const idx = tc.index ?? 0
+                    const existing = toolCallAccum.get(idx)
+                    if (!existing) {
+                        toolCallAccum.set(idx, {
+                            id:   tc.id ?? `tool-call-${idx}`,
+                            name: tc.function?.name ?? '',
+                            args: tc.function?.arguments ?? '',
+                        })
+                    } else {
+                        if (tc.id) existing.id = tc.id
+                        if (tc.function?.name) existing.name += tc.function.name
+                        existing.args += tc.function?.arguments ?? ''
                     }
                 }
-
-                if (choice?.finish_reason) finishReason = choice.finish_reason
-                if (chunk.usage) usage = chunk.usage
             }
-        }
 
-        const toolCalls: ToolCall[] = [...toolCallAccum.values()].map(tc => ({
+            if (choice?.finish_reason) { finishReason = choice.finish_reason; terminal = true }
+            if (chunk.usage) usage = chunk.usage
+        }
+        if (!terminal) throw new LLMProtocolError('Response stream ended before completion')
+
+        const toolCalls: ToolCall[] = (finishReason === 'length' ? [] : [...toolCallAccum.values()]).map(tc => ({
             id:   tc.id,
             name: tc.name,
             args: normalizeToolArgs(tc.args || undefined, tc.name),

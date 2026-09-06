@@ -115,7 +115,7 @@ describe('PromptEngine', () => {
     });
 
     it('trims lowest-score sections when over budget', () => {
-        const sections = [section('low', 1, 1, 50), section('high', 10, 1, 50)];
+        const sections = [section('low', 1, 1, 50, { text: () => 'L'.repeat(200) }), section('high', 10, 1, 50, { text: () => 'H'.repeat(200) })];
         const r = engine.compose(sections, 60);
         expect(r.included).toHaveLength(1);
         expect(r.included[0].id).toBe('high');
@@ -461,14 +461,14 @@ describe('PromptEngine — phase ordering', () => {
         expect(ids.indexOf('mem-high')).toBeLessThan(ids.indexOf('mem-low'));
     });
 
-    it('sticky sections appear before non-sticky regardless of phase', () => {
+    it('protection does not change phase placement', () => {
         const sections: PromptSection[] = [
             section('late-sticky', 1, 1, 10, { phase: 'user', sticky: true }),
             section('early-task', 100, 1, 10, { phase: 'constraint' }),
         ];
         const result = engine.compose(sections, 1000);
         const ids = result.included.map((s: PromptSection) => s.id);
-        expect(ids.indexOf('late-sticky')).toBeLessThan(ids.indexOf('early-task'));
+        expect(ids.indexOf('early-task')).toBeLessThan(ids.indexOf('late-sticky'));
     });
 
     it('unknown phase falls back to task', () => {
@@ -918,7 +918,7 @@ describe('ContextAssembler', () => {
         const assembler = makeAssembler();
         const result = assembler.assemble({
             contributorSections: [
-                section('big', 1, 1, 900),
+                section('big', 1, 1, 900, { text: () => 'B'.repeat(3600) }),
                 section('small', 100, 1, 10),
             ],
             tokenBudget: 50,
@@ -1151,7 +1151,7 @@ describe('AgentContextAssembler', () => {
 
     it('sticky user messages are never dropped', async () => {
         const assembler = new AgentContextAssembler({
-            systemPrompt: 'SYS', tokenBudget: 15, minRecentGroups: 1,
+            systemPrompt: 'SYS', tokenBudget: 20, minRecentGroups: 1,
         });
         const msgs = [
             { role: 'user' as const, content: 'keep me', sticky: true },

@@ -110,8 +110,6 @@ Use FINISH as the action when you have the final answer.`,
             };
         },
         outputKey: 'thought',
-        model: undefined,
-        temperature: 0.7,
     });
 
     // Parse the LLM response and update state

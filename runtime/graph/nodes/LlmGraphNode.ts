@@ -23,6 +23,7 @@
 import type { IGraphNode, GraphContext, GraphState } from '../../../contracts/graph/index.js';
 import type { ILLMProvider } from '../../../contracts/llm.js';
 import type { JsonSchema } from '../../../contracts/shared.js';
+import { executeModelTurn, executeStructuredModel } from '../../ModelExecutor.js';
 
 /** Configuration for an LLM graph node. */
 export interface LlmGraphNodeConfig<TState extends GraphState> {
@@ -46,10 +47,6 @@ export interface LlmGraphNodeConfig<TState extends GraphState> {
      * allowing per-call schema variation.
      */
     schema?: JsonSchema;
-    /** Optional model hint (provider-specific). */
-    model?: string;
-    /** Optional temperature hint (provider-specific). */
-    temperature?: number;
 }
 
 export class LlmGraphNode<TState extends GraphState = GraphState>
@@ -82,20 +79,23 @@ export class LlmGraphNode<TState extends GraphState = GraphState>
     async process(state: TState, context: GraphContext<TState>): Promise<void> {
         const { instructions, text, schema: promptSchema } = this.config.prompt(state);
         const schema = promptSchema ?? this.config.schema;
+        const onOutcome = (outcome: { usage?: { inputTokens: number; outputTokens: number } }) => {
+            if (outcome.usage) context.reportTokens(outcome.usage.inputTokens + outcome.usage.outputTokens);
+        };
 
         let value: unknown;
         if (schema) {
-            const response = await this.config.provider.structured({
+            const response = await executeStructuredModel(this.config.provider, {
                 system: instructions,
                 messages: [{ role: 'user', content: text }],
                 schema,
-            }, { signal: context.signal });
+            }, { signal: context.signal, requireComplete: true, onOutcome });
             value = response.value;
         } else {
-            const response = await this.config.provider.turn({
+            const response = await executeModelTurn(this.config.provider, {
                 system: instructions,
                 messages: [{ role: 'user', content: text }],
-            }, { signal: context.signal });
+            }, { signal: context.signal, requireComplete: true, allowToolCalls: false, onOutcome });
             value = response.message.content;
         }
 

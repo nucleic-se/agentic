@@ -91,7 +91,6 @@ Respond with JSON:
             },
         }),
         outputKey: 'steps',
-        temperature: 0.7,
     });
 
     // Parse decomposition
@@ -134,7 +133,6 @@ Respond with JSON:
             };
         },
         outputKey: 'answer', // Temporary storage
-        temperature: 0.5,
     });
 
     // Save step reasoning
@@ -162,7 +160,6 @@ Provide a concise final answer.`,
             text: '',
         }),
         outputKey: 'answer',
-        temperature: 0.3,
     });
 
     return new StateGraphBuilder<ChainOfThoughtState>()

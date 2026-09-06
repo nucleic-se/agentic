@@ -1,110 +1,63 @@
-/**
- * Prompt engine runtime.
- *
- * Generic prompt composition with priority*weight scoring,
- * sticky sections, deterministic tie-breaking, and token budgeting.
- */
+import type { IPromptEngine, PromptSection, PromptComposeResult, PromptComposeOptions, PromptSectionPhase } from '../contracts/IPromptEngine.js';
+import { HeuristicTokenCounter } from './HeuristicTokenCounter.js';
 
-import type { IPromptEngine, PromptSection, PromptComposeResult, PromptComposeOptions, PromptSectionPhase } from '../contracts/index.js';
-
-/** Canonical phase ordering — determines position in assembled prompt. */
-const PHASE_ORDER: PromptSectionPhase[] = [
-    'constraint',
-    'task',
-    'memory',
-    'tools',
-    'history',
-    'user',
-];
-
+export class ContextBudgetExceededError extends Error {
+    constructor(readonly budget: number, readonly estimatedTokens: number) {
+        super(`Context requires approximately ${estimatedTokens} tokens but the budget is ${budget}`);
+        this.name = 'ContextBudgetExceededError';
+    }
+}
+const phases: PromptSectionPhase[] = ['constraint', 'task', 'memory', 'tools', 'history', 'user'];
+/** Legacy multipliers are normalized at the boundary; new callers supply priority only. */
+export function sectionPriority(section: PromptSection): number {
+    const priority = section.priority * (section.weight ?? 1) * (section.contextMultiplier ?? 1);
+    if (!Number.isFinite(priority)) throw new RangeError(`Prompt section ${section.id} has a non-finite priority`);
+    return priority;
+}
+export function sectionProtected(section: PromptSection): boolean {
+    return !!section.sticky || section.phase === 'constraint';
+}
+export function snapshotPromptSection(section: PromptSection): PromptSection {
+    sectionPriority(section);
+    const text = section.text();
+    if (typeof text !== 'string') throw new TypeError(`Prompt section ${section.id} did not render text`);
+    return { ...section, tags: [...(section.tags ?? [])], text: () => text };
+}
+/** Placement is independent of protection and selection priority. */
+export function renderPromptSections(sections: readonly PromptSection[]): { text: string; included: PromptSection[] } {
+    const phase = (s: PromptSection) => (phases.includes(s.phase as PromptSectionPhase) ? phases.indexOf(s.phase!) : phases.indexOf('task'));
+    const included = [...sections].sort((a, b) => phase(a) - phase(b) || sectionPriority(b) - sectionPriority(a) || a.id.localeCompare(b.id));
+    return { text: included.map(s => s.text()).filter(Boolean).join('\n\n'), included };
+}
+/** Select globally by priority, then render by phase, charging the rendered system message. */
+export function composePromptSections(sections: PromptSection[], tokenBudget: number, options: PromptComposeOptions = {}): PromptComposeResult {
+    if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 0) throw new RangeError('tokenBudget must be a non-negative safe integer');
+    const counter = options.tokenCounter ?? new HeuristicTokenCounter();
+    const snapshot = sections.map(snapshotPromptSection);
+    if (new Set(snapshot.map(s => s.id)).size !== snapshot.length) throw new Error('Duplicate prompt section');
+    const cost = (items: PromptSection[]) => {
+        const result = renderPromptSections(items);
+        const estimate = result.text ? counter.countTokensForMessages([{ role: 'system', content: result.text }]) : 0;
+        if (!Number.isFinite(estimate) || estimate < 0) throw new RangeError('Token counter must return a non-negative finite estimate');
+        return { ...result, totalTokens: Math.ceil(estimate) };
+    };
+    const minimum = cost(snapshot.filter(sectionProtected));
+    if (minimum.totalTokens > tokenBudget) throw new ContextBudgetExceededError(tokenBudget, minimum.totalTokens);
+    let kept = [...snapshot];
+    const excluded: PromptSection[] = [];
+    let result = cost(kept);
+    // Equal-priority sections retain stable identifier ordering regardless of contribution order.
+    for (const item of snapshot.filter(s => !sectionProtected(s)).sort((a, b) => sectionPriority(a) - sectionPriority(b) || b.id.localeCompare(a.id))) {
+        if (result.totalTokens <= tokenBudget) break;
+        kept = kept.filter(s => s !== item);
+        excluded.push(item);
+        result = cost(kept);
+    }
+    for (const item of excluded) options.onDrop?.(item);
+    return { ...result, excluded };
+}
 export class PromptEngine implements IPromptEngine {
     compose(sections: PromptSection[], tokenBudget: number, options?: PromptComposeOptions): PromptComposeResult {
-        if (sections.length === 0) {
-            return { text: '', included: [], excluded: [], totalTokens: 0 };
-        }
-
-        // Pre-compute scores once — used in phase-group sorting and the final sort.
-        const scoreMap = new Map<string, number>(
-            sections.map(s => [s.id, s.priority * s.weight * (s.contextMultiplier ?? 1)]),
-        );
-
-        const sticky = sections.filter(s => s.sticky);
-        const nonSticky = sections.filter(s => !s.sticky);
-
-        // Group non-sticky sections by phase, then sort by score within each phase
-        const phaseGroups = new Map<PromptSectionPhase, { section: PromptSection; score: number }[]>();
-        for (const phase of PHASE_ORDER) {
-            phaseGroups.set(phase, []);
-        }
-
-        for (const s of nonSticky) {
-            const phase: PromptSectionPhase = s.phase ?? 'task';
-            const score = scoreMap.get(s.id)!;
-            const group = phaseGroups.get(phase);
-            if (group) {
-                group.push({ section: s, score });
-            } else {
-                // Unknown phase falls back to 'task'
-                phaseGroups.get('task')!.push({ section: s, score });
-            }
-        }
-
-        // Sort each phase group by score desc, then stable id tie-break
-        for (const group of phaseGroups.values()) {
-            group.sort((a, b) => {
-                if (b.score !== a.score) return b.score - a.score;
-                return a.section.id.localeCompare(b.section.id);
-            });
-        }
-
-        // Flatten into ordered list: phases in canonical order, scored within each
-        const ordered = PHASE_ORDER.flatMap(phase => phaseGroups.get(phase)!);
-
-        const included: PromptSection[] = [];
-        const excluded: PromptSection[] = [];
-        let totalTokens = 0;
-
-        // Sticky sections always included first
-        for (const s of sticky) {
-            included.push(s);
-            totalTokens += s.estimatedTokens;
-        }
-
-        // Add non-sticky by phase order + score until budget exhausted
-        for (const { section } of ordered) {
-            const nextTokens = totalTokens + section.estimatedTokens;
-            if (nextTokens > tokenBudget && included.length > 0) {
-                excluded.push(section);
-                options?.onDrop?.(section);
-                continue;
-            }
-            included.push(section);
-            totalTokens = nextTokens;
-        }
-
-        // Re-sort included sections for final text assembly:
-        // sticky sections first, then by phase order, then by score within phase
-        const stickySet = new Set(sticky.map(s => s.id));
-        included.sort((a, b) => {
-            const aSticky = stickySet.has(a.id) ? 1 : 0;
-            const bSticky = stickySet.has(b.id) ? 1 : 0;
-            // Sticky sections first
-            if (aSticky !== bSticky) return bSticky - aSticky;
-            // Normalize unknown phases to 'task' for stable ordering
-            const normPhase = (p: string | undefined): PromptSectionPhase =>
-                (p && PHASE_ORDER.includes(p as PromptSectionPhase)) ? p as PromptSectionPhase : 'task';
-            const aPhase = PHASE_ORDER.indexOf(normPhase(a.phase));
-            const bPhase = PHASE_ORDER.indexOf(normPhase(b.phase));
-            if (aPhase !== bPhase) return aPhase - bPhase;
-            // Then by score desc within phase
-            const aScore = scoreMap.get(a.id) ?? 0;
-            const bScore = scoreMap.get(b.id) ?? 0;
-            if (bScore !== aScore) return bScore - aScore;
-            return a.id.localeCompare(b.id);
-        });
-
-        const text = included.map(s => s.text()).join('\n\n');
-
-        return { text, included, excluded, totalTokens };
+        return composePromptSections(sections, tokenBudget, options);
     }
 }

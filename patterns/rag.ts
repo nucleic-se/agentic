@@ -116,7 +116,6 @@ Respond with JSON:
             },
         }),
         outputKey: 'rankedDocuments',
-        temperature: 0.0,
     });
 
     // Parse reranking results
@@ -187,7 +186,6 @@ Query: ${state.query}`;
             };
         },
         outputKey: 'answer',
-        temperature: 0.3,
     });
 
     // Parse answer if citations enabled

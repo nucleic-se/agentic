@@ -116,7 +116,7 @@ describe('CodexSubscriptionProvider', () => {
             additionalProperties: false,
         }
         await expect(provider.structured<{ answer: string }>({
-            system: 'Return JSON.', messages: [{ role: 'user', content: 'answer' }], schema,
+            system: 'Return JSON.', messages: [{ role: 'user', content: 'answer' }], schema, maxTokens: 123,
         })).resolves.toEqual({
             value: { answer: 'ok' },
             usage: { inputTokens: 12, outputTokens: 4, cacheReadTokens: 8, cacheWriteTokens: 2 },
@@ -126,6 +126,17 @@ describe('CodexSubscriptionProvider', () => {
             type: 'json_schema', name: 'structured_output', schema, strict: true,
         })
         expect(body.tools).toBeUndefined()
+        expect(body.max_output_tokens).toBe(123)
+    })
+
+    it('rejects parseable structured JSON when the transport reports truncation', async () => {
+        const request = vi.fn().mockResolvedValue(sse(
+            { type: 'response.output_text.delta', delta: '{"answer":"partial"}' },
+            completed({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }),
+        ))
+        const provider = new CodexSubscriptionProvider({ model: 'gpt-test', transport: { request } })
+        await expect(provider.structured({ messages: [{ role: 'user', content: 'answer' }], schema: { type: 'object' }, maxTokens: 64 }))
+            .rejects.toMatchObject({ name: 'LLMProtocolError', usage: { inputTokens: 12, outputTokens: 4 } })
     })
 
     it('maps incomplete output and rejects failed or malformed protocol responses', async () => {
@@ -170,6 +181,6 @@ describe('CodexSubscriptionProvider', () => {
             messages: [{ role: 'user', content: 'stop' }], stopSequences: ['DONE'],
         })).rejects.toThrow('stop sequences are not supported')
         expect(request).not.toHaveBeenCalled()
-        expect(() => provider.embed(['text'])).toThrow('does not provide embeddings')
+        expect('embed' in provider).toBe(false)
     })
 })

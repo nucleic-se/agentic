@@ -323,3 +323,14 @@ class MyNode<TState extends GraphState> implements IGraphNode<TState> {
   }
 }
 ```
+
+Run wall-clock deadlines also interrupt active asynchronous nodes, routing, and
+parallel work. Resuming a checkpoint uses the remaining recorded time budget.
+Concurrent `run()` calls have independent token, tool, time, and tracing counters.
+`LlmGraphNode` reports usage for text and structured calls. Token budgets are
+checked between nodes: an individual model call can exceed the remaining budget;
+use provider output limits to bound that call. Cancellation remains cooperative
+for external side effects and cannot preempt synchronous JavaScript.
+
+Budget hint thresholds are tracked in serializable state under a capability-ID
+key, so deduplication survives node-state cloning and checkpoint restoration.

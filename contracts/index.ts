@@ -93,14 +93,16 @@ export type { AssemblyInput, IContextAssembler } from './IContextAssembler.js';
 // Agent context assembly (turn-level: produces system + messages for TurnRequest)
 export type {
     AgentContextInput,
+    ContextReport,
     AgentContextOutput,
     IAgentContextAssembler,
 } from './IAgentContextAssembler.js';
 
 // LLM provider v2 — message threading, tool calls, token usage
-export { LLMProtocolError } from './llm.js';
+export { LLMProtocolError, LLMRequestBudgetError } from './llm.js';
 export type {
     ILLMProvider,
+    IEmbeddingProvider,
     IModelRouter,
     ModelTier,
     Message,
@@ -116,6 +118,8 @@ export type {
     TurnResponse,
     StopReason,
     ProviderCallOptions,
+    ToolContentBlock,
+    MessageProvenance,
 } from './llm.js';
 
 // Tool runtime
@@ -157,8 +161,12 @@ export type { ITokenCounter } from './ITokenCounter.js';
 // Fluent AI builders
 export type {
     IAIPromptBuilder,
+    PromptBudget,
+    PromptContextOptions,
+    PreparedPrompt,
     IAIPromptService,
     IAIPipeline,
+    IPipelineRun,
     PipelineOptions,
 } from './IAIBuilder.js';
 

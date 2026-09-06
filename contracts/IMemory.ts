@@ -58,7 +58,7 @@ export interface MemoryItem {
 // ── Query ──────────────────────────────────────────────────────
 
 export interface MemoryQuery {
-    /** Natural language or embedding query for relevance ranking. */
+    /** Search query; adapters document their matching semantics (lexical, full-text or embedding). */
     text?: string;
     /** Filter by memory type. */
     types?: MemoryType[];
@@ -66,7 +66,7 @@ export interface MemoryQuery {
     tags?: string[];
     /** Maximum items to return. */
     limit: number;
-    /** Maximum tokens the result set may consume (for prompt budget awareness). */
+    /** Maximum estimated serialized-value tokens; final rendered prompt accounting belongs to context composition. */
     tokenBudget?: number;
 }
 

@@ -235,3 +235,13 @@ Access it from the `turn()` / `structured()` response directly, or use the trace
 | `'tool_use'` | Model wants to call a tool — execute and re-call `turn()` |
 | `'max_tokens'` | Hit token limit — consider increasing `maxTokens` |
 | `'stop_sequence'` | Hit a custom stop sequence |
+
+## Stream integrity
+
+Streaming adapters reject premature EOF, malformed JSON events, and provider
+error events instead of returning partial output as a successful turn. Token-limit
+stops take precedence over tool calls; incomplete tool arguments are not executed.
+SSE readers are released and cancelled on parser or consumer failure. The decoder
+limits each event to 1 MiB of text and each response stream to 16 MiB of wire bytes.
+Codex duplicate function-call IDs and unsupported incomplete terminal states are
+protocol errors.

@@ -135,7 +135,6 @@ Respond with JSON:
             };
         },
         outputKey: 'nextWorker',
-        temperature: 0.5,
     });
 
     // Parse supervisor decision
@@ -178,7 +177,6 @@ Provide a clear, complete final answer.`,
             text: '',
         }),
         outputKey: 'result',
-        temperature: 0.3,
     });
 
     const builder = new StateGraphBuilder<SupervisorState>()

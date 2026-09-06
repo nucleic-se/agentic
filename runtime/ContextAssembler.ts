@@ -9,8 +9,16 @@
  */
 
 import type { IContextAssembler, AssemblyInput } from '../contracts/IContextAssembler.js';
-import type { IPromptEngine, PromptComposeResult } from '../contracts/IPromptEngine.js';
+import type { IPromptEngine, PromptComposeResult, PromptSection } from '../contracts/IPromptEngine.js';
 import type { IToolPromptRenderer } from '../contracts/IToolPromptRenderer.js';
+
+/** Collect ordinary sections without selecting them; suitable input to composeAgentContext. */
+export function collectContextSections(
+    input: Pick<AssemblyInput, 'contributorSections' | 'toolResults'>,
+    toolRenderer: IToolPromptRenderer,
+): PromptSection[] {
+    return [...input.contributorSections, ...(input.toolResults?.length ? toolRenderer.render(input.toolResults) : [])];
+}
 
 export class ContextAssembler implements IContextAssembler {
     constructor(
@@ -19,14 +27,6 @@ export class ContextAssembler implements IContextAssembler {
     ) {}
 
     assemble(input: AssemblyInput): PromptComposeResult {
-        const sections = [...input.contributorSections];
-
-        // Render tool results into sections with trust-tier labeling
-        if (input.toolResults && input.toolResults.length > 0) {
-            const toolSections = this.toolRenderer.render(input.toolResults);
-            sections.push(...toolSections);
-        }
-
-        return this.engine.compose(sections, input.tokenBudget);
+        return this.engine.compose(collectContextSections(input, this.toolRenderer), input.tokenBudget);
     }
 }

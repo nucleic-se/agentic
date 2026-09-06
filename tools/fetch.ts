@@ -1,3 +1,4 @@
+import { boundedFetch } from './bounded-fetch.js'
 /**
  * Fetch tools — HTTP GET and POST.
  *
@@ -13,7 +14,7 @@
  */
 
 import type { ToolDefinition } from '../contracts/llm.js'
-import type { IToolRuntime, ToolCallResult } from '../contracts/tool-runtime.js'
+import type { IToolRuntime, ToolCallResult, ToolCallOptions } from '../contracts/tool-runtime.js'
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -21,7 +22,6 @@ import { join } from 'node:path'
 // ── Limits ────────────────────────────────────────────────────────────────────
 
 const MAX_RESPONSE_BYTES = 128 * 1024   // 128 KB
-const TIMEOUT_MS         = 15_000
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -81,24 +81,14 @@ const DEFINITIONS: ToolDefinition[] = [
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-async function handleGet(args: Record<string, unknown>, outputDir?: string): Promise<ToolCallResult> {
+async function handleGet(args: Record<string, unknown>, outputDir?: string, options?: ToolCallOptions): Promise<ToolCallResult> {
     const url = String(args['url'] ?? '')
     if (!url) return fail('url is required')
 
     const headers = (args['headers'] ?? {}) as Record<string, string>
 
     try {
-        const controller = new AbortController()
-        const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS)
-
-        let res: Response
-        try {
-            res = await fetch(url, { headers, signal: controller.signal })
-        } finally {
-            clearTimeout(timer)
-        }
-
-        const raw = await res.text()
+        const { response: res, text: raw } = await boundedFetch(url, { headers, signal: options?.signal })
         const { text: body, truncated } = truncate(raw, MAX_RESPONSE_BYTES)
 
         if (outputDir) {
@@ -124,7 +114,7 @@ async function handleGet(args: Record<string, unknown>, outputDir?: string): Pro
     }
 }
 
-async function handlePost(args: Record<string, unknown>, outputDir?: string): Promise<ToolCallResult> {
+async function handlePost(args: Record<string, unknown>, outputDir?: string, options?: ToolCallOptions): Promise<ToolCallResult> {
     const url  = String(args['url'] ?? '')
     const body = args['body']
     if (!url)              return fail('url is required')
@@ -137,17 +127,7 @@ async function handlePost(args: Record<string, unknown>, outputDir?: string): Pr
     const headers    = { 'Content-Type': contentType, ...((args['headers'] ?? {}) as Record<string, string>) }
 
     try {
-        const controller = new AbortController()
-        const timer      = setTimeout(() => controller.abort(), TIMEOUT_MS)
-
-        let res: Response
-        try {
-            res = await fetch(url, { method: 'POST', headers, body: bodyText, signal: controller.signal })
-        } finally {
-            clearTimeout(timer)
-        }
-
-        const raw = await res.text()
+        const { response: res, text: raw } = await boundedFetch(url, { method: 'POST', headers, body: bodyText, signal: options?.signal })
         const { text: resBody, truncated } = truncate(raw, MAX_RESPONSE_BYTES)
 
         if (outputDir) {
@@ -192,10 +172,10 @@ export class FetchToolRuntime implements IToolRuntime {
         return DEFINITIONS
     }
 
-    async call(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+    async call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
         switch (name) {
-            case 'fetch_get':  return handleGet(args, this.outputDir)
-            case 'fetch_post': return handlePost(args, this.outputDir)
+            case 'fetch_get':  return handleGet(args, this.outputDir, options)
+            case 'fetch_post': return handlePost(args, this.outputDir, options)
             default:           return { ok: false, content: `Unknown tool: ${name}` }
         }
     }

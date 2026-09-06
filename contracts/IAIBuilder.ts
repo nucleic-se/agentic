@@ -1,46 +1,54 @@
-/**
- * Fluent AI builder and pipeline contracts.
- *
- * Domain-agnostic interfaces for composing LLM prompts and
- * chaining processing steps with retry, validation, and transforms.
- */
+/** Fluent frontends for the shared context and execution primitives. */
+import type { z } from 'zod';
+import type { ModelTier, ProviderCallOptions, StructuredRequest, TurnRequest } from './llm.js';
+import type { ITokenCounter } from './ITokenCounter.js';
+import type { ContextReport } from './IAgentContextAssembler.js';
 
-import { z } from 'zod';
-
-export interface IAIPromptBuilder {
-    system(message: string): IAIPromptBuilder;
-    user(message: string): IAIPromptBuilder;
-    schema(schema: Record<string, unknown>): IAIPromptBuilder;
-    run<T = string>(): Promise<T>;
+export interface PromptContextOptions {
+    id?: string;
+    priority?: number;
+    protected?: boolean;
 }
-
+export interface PromptBudget {
+    total: number;
+    output: number;
+}
+export interface PreparedPrompt {
+    request: TurnRequest | StructuredRequest;
+    report: ContextReport;
+}
+export interface IAIPromptBuilder<T = string> {
+    system(message: string): IAIPromptBuilder<T>;
+    user(message: string): IAIPromptBuilder<T>;
+    context(text: string, options?: PromptContextOptions): IAIPromptBuilder<T>;
+    /** All members survive or are dropped together. Nested selection is deliberately not supported. */
+    contextGroup(id: string, members: readonly string[], options?: Omit<PromptContextOptions, 'id'>): IAIPromptBuilder<T>;
+    budget(budget: PromptBudget, tokenCounter?: ITokenCounter): IAIPromptBuilder<T>;
+    schema(schema: Record<string, unknown>): IAIPromptBuilder<unknown>;
+    schema<Out>(schema: Record<string, unknown>, parse: (value: unknown) => Out): IAIPromptBuilder<Out>;
+    /** Prepare and inspect the exact request without calling a provider. */
+    prepare(options?: ProviderCallOptions): Promise<PreparedPrompt>;
+    run(options?: ProviderCallOptions): Promise<T>;
+}
 export interface IAIPromptService {
-    use(model?: string): IAIPromptBuilder;
+    use(tier?: ModelTier): IAIPromptBuilder;
     pipeline<T>(start: T): IAIPipeline<T>;
 }
-
 export interface PipelineOptions {
+    /** Additional attempts for this explicit step only. The caller owns replay safety. */
     retry?: number;
 }
-
-export interface IAIPipeline<T> {
-    pipe<Next>(fn: (input: T) => Promise<Next> | Next): IAIPipeline<Next>;
-
-    /** Configure the previous step to retry on failure */
+export interface IPipelineRun<T> {
+    run(options?: ProviderCallOptions): Promise<T>;
+}
+export interface IAIPipeline<T> extends IPipelineRun<T> {
+    pipe<Next>(fn: (input: T, options?: ProviderCallOptions) => Promise<Next> | Next): IAIPipeline<Next>;
     retry(count: number): IAIPipeline<T>;
-
-    /** Validate the previous step's output using Zod */
     validate<S>(schema: z.ZodType<S>): IAIPipeline<S>;
-
-    /** Transform the data synchronously or asynchronously */
-    transform<Next>(fn: (input: T) => Promise<Next> | Next): IAIPipeline<Next>;
-
-    /** Log the current value for debugging */
-    clog(logger: { info: (msg: string, ...args: any[]) => void }, message?: string): IAIPipeline<T>;
-
-    llm<Out = string>(configure: (builder: IAIPromptBuilder) => void, model?: string, options?: PipelineOptions): IAIPipeline<Out>;
-
-    catch(handler: (error: Error) => Promise<T> | T): IAIPipeline<T>;
-
-    run(initialValue?: any): Promise<T>;
+    transform<Next>(fn: (input: T, options?: ProviderCallOptions) => Promise<Next> | Next): IAIPipeline<Next>;
+    clog(logger: { info: (msg: string, ...args: unknown[]) => void }, message?: string): IAIPipeline<T>;
+    llm<Out>(configure: (builder: IAIPromptBuilder) => IAIPromptBuilder<Out>, tier?: ModelTier, options?: PipelineOptions): IAIPipeline<Out>;
+    llm(configure: (builder: IAIPromptBuilder) => void, tier?: ModelTier, options?: PipelineOptions): IAIPipeline<string>;
+    catch(handler: (error: Error) => Promise<T> | T): IPipelineRun<T>;
+    run(options?: ProviderCallOptions): Promise<T>;
 }

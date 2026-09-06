@@ -668,7 +668,7 @@ describe('LlmGraphNode', () => {
         });
 
         expect(calls).toHaveLength(1);
-        expect(calls[0].schema).toBe(promptSchema);
+        expect(calls[0].schema).toEqual(promptSchema);
     });
 });
 

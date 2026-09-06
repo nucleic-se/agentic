@@ -1,3 +1,4 @@
+import { boundedFetch } from './bounded-fetch.js'
 /**
  * Web tools — search and clean-fetch.
  *
@@ -8,14 +9,13 @@
  */
 
 import type { ToolDefinition } from '../contracts/llm.js'
-import type { IToolRuntime, ToolCallResult } from '../contracts/tool-runtime.js'
+import type { IToolRuntime, ToolCallResult, ToolCallOptions } from '../contracts/tool-runtime.js'
 import { createHash } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const MAX_RESULTS    = 8
 const MAX_BODY_CHARS = 12_000
-const TIMEOUT_MS     = 15_000
 
 function ok(content: string, data?: unknown): ToolCallResult {
     return { ok: true, content, data }
@@ -45,24 +45,6 @@ function stripTags(text: string): string {
 function truncate(text: string, maxChars: number): string {
     if (text.length <= maxChars) return text
     return `${text.slice(0, maxChars - 14)}\n[truncated]`
-}
-
-async function fetchText(url: string, headers: Record<string, string> = {}): Promise<Response> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-    try {
-        return await fetch(url, {
-            headers: {
-                'User-Agent': 'nucleic-agent/0.1 (+https://nucleic.sh)',
-                'Accept-Language': 'en-US,en;q=0.8',
-                ...headers,
-            },
-            signal: controller.signal,
-            redirect: 'follow',
-        })
-    } finally {
-        clearTimeout(timer)
-    }
 }
 
 function cleanHtmlToText(html: string): { title: string; text: string } {
@@ -125,31 +107,19 @@ function parseDuckDuckGoLiteResults(html: string, maxResults: number): Array<{ t
     return results
 }
 
-async function handleSearch(args: Record<string, unknown>): Promise<ToolCallResult> {
+async function handleSearch(args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
     const query = String(args['query'] ?? '').trim()
     const maxResults = Math.max(1, Math.min(MAX_RESULTS, Number(args['max_results'] ?? 5)))
     if (!query) return fail('query is required')
 
     try {
         // Use lite endpoint (POST) — more stable than html endpoint, no bot challenges
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
-        let res: Response
-        try {
-            res = await fetch('https://lite.duckduckgo.com/lite/', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                },
-                body: `q=${encodeURIComponent(query)}`,
-                signal: controller.signal,
-            })
-        } finally {
-            clearTimeout(timer)
-        }
-
-        const html = await res.text()
+        const { response: res, text: html } = await boundedFetch('https://lite.duckduckgo.com/lite/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+            body: `q=${encodeURIComponent(query)}`,
+            signal: options?.signal,
+        })
         if (!res.ok) return fail(`Search failed: HTTP ${res.status} ${res.statusText}`)
 
         const results = parseDuckDuckGoLiteResults(html, maxResults)
@@ -165,13 +135,12 @@ async function handleSearch(args: Record<string, unknown>): Promise<ToolCallResu
     }
 }
 
-async function handleFetchClean(args: Record<string, unknown>, outputDir?: string): Promise<ToolCallResult> {
+async function handleFetchClean(args: Record<string, unknown>, outputDir?: string, options?: ToolCallOptions): Promise<ToolCallResult> {
     const url = String(args['url'] ?? '').trim()
     if (!url) return fail('url is required')
 
     try {
-        const res = await fetchText(url)
-        const raw = await res.text()
+        const { response: res, text: raw } = await boundedFetch(url, { signal: options?.signal, headers: { 'User-Agent': 'nucleic-agent/0.1 (+https://nucleic.sh)', 'Accept-Language': 'en-US,en;q=0.8' } })
         if (!res.ok) return fail(`Fetch failed: HTTP ${res.status} ${res.statusText}`)
 
         const contentType = res.headers.get('content-type') ?? 'unknown'
@@ -253,12 +222,12 @@ export class WebToolRuntime implements IToolRuntime {
         return DEFINITIONS
     }
 
-    async call(name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+    async call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
         switch (name) {
             case 'web_search':
-                return handleSearch(args)
+                return handleSearch(args, options)
             case 'web_fetch_clean':
-                return handleFetchClean(args, this.outputDir)
+                return handleFetchClean(args, this.outputDir, options)
             default:
                 return fail(`Unknown tool: ${name}`)
         }

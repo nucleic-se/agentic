@@ -33,6 +33,24 @@ function sseResponse(events: unknown[]): Response {
 describe('AnthropicProvider', () => {
     afterEach(() => { vi.restoreAllMocks(); });
 
+    it('forwards the structured output reserve to the transport', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(anthropicResponse([
+            { type: 'tool_use', id: 'structured-1', name: 'structured_output', input: { answer: 'ok' } },
+        ], 'tool_use'));
+        vi.stubGlobal('fetch', fetchMock);
+        await expect(provider().structured({ messages: [{ role: 'user', content: 'answer' }], schema: { type: 'object' }, maxTokens: 123 }))
+            .resolves.toMatchObject({ value: { answer: 'ok' } });
+        expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)).max_tokens).toBe(123);
+    });
+
+    it('rejects parseable structured output when the response reports truncation', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(anthropicResponse([
+            { type: 'tool_use', id: 'structured-1', name: 'structured_output', input: { answer: 'partial' } },
+        ], 'max_tokens')));
+        await expect(provider().structured({ messages: [{ role: 'user', content: 'answer' }], schema: { type: 'object' }, maxTokens: 64 }))
+            .rejects.toMatchObject({ name: 'LLMProtocolError', usage: { inputTokens: 3, outputTokens: 2 } });
+    });
+
     it('maps native tool calls and sends the caller signal', async () => {
         const fetchMock = vi.fn().mockResolvedValue(anthropicResponse([
             { type: 'text', text: 'checking' },

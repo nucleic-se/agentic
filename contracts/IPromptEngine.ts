@@ -1,9 +1,12 @@
 /**
  * Prompt composition contracts.
  *
- * Domain-agnostic prompt assembly with priority×weight scoring,
+ * Domain-agnostic prompt assembly with priority scoring,
  * sticky sections, deterministic tie-breaking, and token budgeting.
  */
+
+import type { ITokenCounter } from './ITokenCounter.js';
+import type { MessageProvenance } from './llm.js';
 
 export type PromptSectionTag = string;
 
@@ -24,20 +27,23 @@ export interface PromptSection {
     /** Unique section identifier */
     id: string;
 
+    /** Attribution survives context selection and compression. */
+    provenance?: MessageProvenance;
+
     /** Base importance (higher = more likely to survive trimming) */
     priority: number;
 
-    /** Scenario/profile multiplier applied to priority */
-    weight: number;
+    /** @deprecated Calculate one priority externally. Defaults to 1. */
+    weight?: number;
 
-    /** Estimated token cost of the rendered text */
-    estimatedTokens: number;
+    /** @deprecated Composition counts the rendered text; this hint is ignored. */
+    estimatedTokens?: number;
 
     /** Produces the text for this section */
     text(): string;
 
     /** Classification tags for filtering/grouping */
-    tags: PromptSectionTag[];
+    tags?: PromptSectionTag[];
 
     /** If true, section is never trimmed */
     sticky?: boolean;
@@ -75,6 +81,8 @@ export interface PromptComposeResult {
  * Options for a single compose() call.
  */
 export interface PromptComposeOptions {
+    /** Counts rendered system content, including separators and message overhead. */
+    tokenCounter?: ITokenCounter;
     /**
      * Called for each section dropped due to budget exhaustion.
      * Useful for triggering compaction, logging, or reactive memory management.
@@ -86,10 +94,10 @@ export interface IPromptEngine {
     /**
      * Compose a prompt from sections within a token budget.
      *
-     * Scoring: score = priority * weight * contextMultiplier
-     * Sticky sections are always included.
+     * Scoring: one priority; deprecated weight fields are normalized for compatibility
+     * Sticky and constraint sections are required; an oversized required set throws.
      * Non-sticky sections are ranked by score desc, then stable id.
-     * Sections are included until budget is reached.
+     * Selection is global by priority; phase controls rendering only.
      * Dropped sections are passed to options.onDrop if provided.
      */
     compose(sections: PromptSection[], tokenBudget: number, options?: PromptComposeOptions): PromptComposeResult;

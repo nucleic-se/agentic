@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 /**
  * State graph engine — executes a graph against shared state.
  *
@@ -102,13 +103,19 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
     private readonly onBeforeNode?: GraphEngineConfig['onBeforeNode'];
     private readonly onAfterNode?: GraphEngineConfig['onAfterNode'];
 
-    // Per-run accumulators — reset at the start of each run() / resume().
-    private _toolCallCount = 0;
-    private _tokenCount = 0;
-    /** Wall-clock start time of the current run, used to populate elapsedMs in checkpoints. */
-    private _runStartTime: number | undefined = undefined;
-    /** Span ID of the root span opened by the current run(). Undefined outside a run. */
-    private _activeRootSpanId: string | undefined = undefined;
+    private readonly runs = new AsyncLocalStorage<{
+        tools: number; tokens: number; started?: number; span?: string;
+    }>();
+    private readonly standalone = { tools: 0, tokens: 0, started: undefined as number | undefined, span: undefined as string | undefined };
+    private get counters() { return this.runs.getStore() ?? this.standalone; }
+    private get _toolCallCount() { return this.counters.tools; }
+    private set _toolCallCount(value: number) { this.counters.tools = value; }
+    private get _tokenCount() { return this.counters.tokens; }
+    private set _tokenCount(value: number) { this.counters.tokens = value; }
+    private get _runStartTime() { return this.counters.started; }
+    private set _runStartTime(value: number | undefined) { this.counters.started = value; }
+    private get _activeRootSpanId() { return this.counters.span; }
+    private set _activeRootSpanId(value: string | undefined) { this.counters.span = value; }
 
     constructor(graph: IGraph<TState>, config?: GraphEngineConfig) {
         if (!graph) {
@@ -121,6 +128,10 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         this.limits = config?.limits;
         this.onBeforeNode = config?.onBeforeNode;
         this.onAfterNode = config?.onAfterNode;
+
+        for (const [name, value] of Object.entries(this.limits ?? {})) {
+            if (value != null && (!Number.isFinite(value) || value < 0)) throw new RangeError(`${name} must be finite and non-negative`);
+        }
 
         for (const node of graph.getNodes()) {
             const retry = node.retryPolicy;
@@ -139,7 +150,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
             }
         }
 
-        if (this.maxSteps < 1) {
+        if (!Number.isSafeInteger(this.maxSteps) || this.maxSteps < 1) {
             throw new Error(`StateGraphEngine: maxSteps must be ≥ 1, got ${this.maxSteps}.`);
         }
     }
@@ -255,7 +266,40 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
         });
     }
 
+
     async run(initialState: TState, options?: GraphRunOptions): Promise<GraphRunResult<TState>> {
+        return this.runs.run({ tools: 0, tokens: 0 }, () => this.withDeadline(options, 0, effective => this.executeRun(initialState, effective)));
+    }
+
+    async resume(cp: GraphCheckpoint<TState>, options?: GraphRunOptions): Promise<GraphRunResult<TState>> {
+        return this.runs.run({ tools: 0, tokens: 0 }, () => this.withDeadline(options, cp.elapsedMs ?? 0, effective => this.executeResume(cp, effective)));
+    }
+
+    private async withDeadline(
+        options: GraphRunOptions | undefined,
+        elapsed: number,
+        operation: (options: GraphRunOptions) => Promise<GraphRunResult<TState>>,
+    ): Promise<GraphRunResult<TState>> {
+
+        const controller = new AbortController();
+        const signal = this.limits?.maxTotalMs == null
+            ? options?.signal ?? neverAbortedSignal
+            : options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+        const remaining = this.limits?.maxTotalMs == null ? undefined : this.limits.maxTotalMs - elapsed;
+        const expire = () => controller.abort(new GraphRunLimitError('Graph maxTotalMs wall-clock limit exceeded', 'time'));
+        const timer = remaining != null && remaining > 0 ? setTimeout(expire, remaining) : undefined;
+        if (remaining != null && remaining <= 0) expire();
+        try {
+            throwIfAborted(signal);
+            return await raceWithSignal(operation({ signal }), signal);
+        } finally {
+            if (timer) clearTimeout(timer);
+            controller.abort(new DOMException('Graph run finished', 'AbortError'));
+            this._runStartTime = undefined;
+        }
+    }
+
+    private async executeRun(initialState: TState, options?: GraphRunOptions): Promise<GraphRunResult<TState>> {
         const entryId = this.graph.getEntryNodeId();
         if (!entryId) {
             throw new Error('No entry node set. Call setEntry() before running.');
@@ -359,7 +403,7 @@ export class StateGraphEngine<TState extends GraphState = GraphState>
      * Resume execution from a previously captured checkpoint.
      * Continues the graph run from the checkpoint's current node.
      */
-    async resume(cp: GraphCheckpoint<TState>, options?: GraphRunOptions): Promise<GraphRunResult<TState>> {
+    private async executeResume(cp: GraphCheckpoint<TState>, options?: GraphRunOptions): Promise<GraphRunResult<TState>> {
         const node = this.graph.getNode(cp.currentNodeId);
         if (!node) {
             throw new Error(`Resume failed: node '${cp.currentNodeId}' not found in graph.`);
