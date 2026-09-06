@@ -129,7 +129,8 @@ describe('default coding runtime', () => {
             const output = await runtime.call('shell_run', { command: `${JSON.stringify(process.execPath)} output.cjs` });
             expect(output.ok).toBe(true);
             expect(output.content.length).toBeLessThan(65700);
-            expect(output.content).toContain('[output truncated]');
+            expect(output.content).toContain('read_output');
+            expect(output.data).toMatchObject({ totalBytes: 100000, incomplete: false });
         } finally { rmSync(root, { recursive: true, force: true }); }
     });
     it('allows reads and requires confirmation for side effects', async () => {

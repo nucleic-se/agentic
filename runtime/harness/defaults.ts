@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { FileToolOutputStore, ToolOutputCapture } from './output.js';
 import { lstatSync, realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -75,6 +78,7 @@ export function budgetedContext(system: string, tokenBudget: number, policy: Con
 
 const filePath = z.string().min(1);
 const schemas: Record<string, z.ZodType<Record<string, unknown>>> = {
+    read_output: z.object({ id: z.string().uuid(), offset: z.number().int().nonnegative().optional() }).strict(),
     fs_read: z.object({ path: filePath, encoding: z.enum(['utf8', 'base64']).optional(), offset: z.number().int().positive().optional(), limit: z.number().int().positive().optional() }).strict(),
     fs_write: z.object({ path: filePath, content: z.string().max(262144), append: z.boolean().optional() }).strict(),
     fs_list: z.object({ path: filePath, recursive: z.boolean().optional() }).strict(),
@@ -99,39 +103,33 @@ function confined(root: string, target: string): string {
     return absolute;
 }
 
-function runShell(root: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
+function runShell(root: string, outputStore: FileToolOutputStore, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
     if (options?.signal?.aborted) return Promise.resolve({ ok: false, content: 'Cancelled before execution', errorKind: 'cancelled' });
     const cwd = confined(root, args.cwd as string ?? '.');
     return new Promise(resolve => {
         const child = spawn(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
             process.platform === 'win32' ? ['/d', '/s', '/c', args.command as string] : ['-c', args.command as string],
             { cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...args.env as Record<string, string> } });
-        const chunks: Buffer[] = [];
-        let size = 0;
-        let truncated = false;
+        const outputCapture = new ToolOutputCapture();
         let stopped: 'cancelled' | 'timeout' | undefined;
         let finished = false;
-        const capture = (data: Buffer) => {
-            const remaining = 65536 - size;
-            if (data.length > remaining) truncated = true;
-            if (remaining > 0) { const chunk = data.subarray(0, remaining); chunks.push(chunk); size += chunk.length; }
-        };
+        const capture = (data: Buffer) => outputCapture.append(data);
         const stop = (reason: 'cancelled' | 'timeout') => {
             stopped ??= reason;
             try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch { child.kill('SIGKILL'); }
         };
         const abort = () => stop('cancelled');
         const timer = setTimeout(() => stop('timeout'), args.timeout_ms as number ?? 30000);
-        const finish = (code: number | null, error?: Error) => {
+        const finish = async (code: number | null, error?: Error) => {
             if (finished) return;
             finished = true;
             clearTimeout(timer);
             options?.signal?.removeEventListener('abort', abort);
-            const output = Buffer.concat(chunks).toString('utf8') + (truncated ? '\n[output truncated]' : '');
+            const { content: output, ...captureMetadata } = await outputCapture.finish(outputStore);
             resolve({ ok: !stopped && !error && code === 0,
                 content: `${output}${output ? '\n' : ''}${stopped ?? error?.message ?? `Exit code: ${code}`}`,
                 ...((stopped || error || code !== 0) ? { errorKind: stopped ?? 'runtime' as const } : {}),
-                data: { exitCode: code, truncated } });
+                data: { exitCode: code, ...captureMetadata } });
         };
         child.stdout.on('data', capture);
         child.stderr.on('data', capture);
@@ -143,12 +141,17 @@ function runShell(root: string, args: Record<string, unknown>, options?: ToolCal
 }
 
 /** Local trusted-code tools. Root checks do not sandbox arbitrary shell commands. */
-export function codingToolRuntime(workingRoot: string): IValidatedToolRuntime {
+export function codingToolRuntime(workingRoot: string, options: { outputDirectory?: string } = {}): IValidatedToolRuntime {
     const root = realpathSync(workingRoot);
+    const outputStore = new FileToolOutputStore(options.outputDirectory ?? path.join(tmpdir(), 'agentic-output', createHash('sha256').update(root).digest('hex')));
     const fs = new FsToolRuntime(root);
     const search = new SearchToolRuntime(root);
     const shell = new ShellToolRuntime(root);
-    const definitions = [...fs.tools(), ...search.tools(), ...shell.tools()];
+    const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), {
+        name: 'read_output', description: 'Read exact saved shell text by output ID. Offset and nextOffset use UTF-16 code units; returns up to 4000 units. Continue until eof. Saved output may be incomplete if capture reached its limit.',
+        parameters: { type: 'object' as const, properties: { id: { type: 'string' as const }, offset: { type: 'integer' as const, minimum: 0 } }, required: ['id'], additionalProperties: false },
+    }]);
+    definitions.find(tool => tool.name === 'shell_run')!.description += ' Large output is saved with a read_output reference; capture is limited to 8 MiB and reports incompleteness.';
     const runtime: IValidatedToolRuntime = {
         tools: () => structuredClone(definitions),
         validate(name, args) {
@@ -167,7 +170,8 @@ export function codingToolRuntime(workingRoot: string): IValidatedToolRuntime {
                 if (!checked.ok) return checked.result;
                 if (options?.authorizedArgs && !isDeepStrictEqual(checked.args, options.authorizedArgs)) return { ok: false, content: 'Arguments differ from authorization', errorKind: 'policy' };
                 if (options?.signal?.aborted) return { ok: false, content: 'Cancelled', errorKind: 'cancelled' };
-                if (name === 'shell_run') return await runShell(root, checked.args, options);
+                if (name === 'read_output') return { ok: true, content: JSON.stringify(await outputStore.read(checked.args.id as string, checked.args.offset as number ?? 0, options?.signal)) };
+                if (name === 'shell_run') return await runShell(root, outputStore, checked.args, options);
                 return await (name.startsWith('fs_') ? fs : search).call(name, checked.args, options);
             } catch (error) { return { ok: false, content: String(error), errorKind: 'runtime' }; }
         },
@@ -177,7 +181,7 @@ export function codingToolRuntime(workingRoot: string): IValidatedToolRuntime {
 }
 
 export function defaultCodingPolicy(): IToolPolicy {
-    const readTools = new Set(['fs_read', 'fs_list', 'search_grep', 'search_find']);
+    const readTools = new Set(['fs_read', 'fs_list', 'search_grep', 'search_find', 'read_output']);
     return { async evaluate(context) {
         return readTools.has(context.name) ? { kind: 'allow' }
             : { kind: 'confirm', reason: `Approve ${context.name} with these exact arguments` };

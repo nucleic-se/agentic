@@ -745,3 +745,26 @@ excluded. Context reports record original/retained sizes and retrieval reference
 Older successful previews may shrink further under existing priority-driven
 pressure. The final complete-request budget still applies; this is a per-result
 presentation cap, not an assurance that arbitrary batches fit.
+
+The default `codingToolRuntime(workspace, { outputDirectory? })` now includes
+`read_output({ id, offset? })` alongside `shell_run`. Large shell results retain
+up to 8 MiB of combined stdout/stderr input, save normalized UTF-8 text, and use
+`projectToolOutput` for a 4,000-character preview. Exit status remains separate.
+Capture beyond 8 MiB is drained but discarded, with `incomplete`, captured/total
+byte counts and a visible warning. Storage errors never advertise a saved ID.
+Capture is bounded in memory and saved after process completion; it is not a
+crash-safe streaming log. Invalid UTF-8 is replaced when decoded.
+
+`read_output` returns saved text in 4,000 UTF-16-unit pages with `nextOffset` and
+`eof`; this EOF means the end of saved text, not proof that process capture was
+complete. It rejects invalid IDs, missing files and offsets beyond saved content.
+The host owns output-directory retention. The default is a workspace-keyed
+location under the OS temporary directory; pass a durable `outputDirectory` for
+persistent compositions. The default agent with a database stores output beside
+that database in `<database>.outputs`. Files are not automatically expired; hosts
+must clean their output directory when its retained sessions are no longer needed.
+
+Coding extension version 4 changes the manifest and persistence configuration.
+When narrowing tool grants, grant `read_output` with `shell_run` if output recovery
+is required. No retrieval permission is added implicitly. The default read policy
+allows retrieval; shell commands still require the default mutation confirmation.

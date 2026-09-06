@@ -29,7 +29,7 @@ export function defaultAgentExtensions(options: DefaultAgentOptions): Extension[
             roles: { loop: () => options.planning ? planningLoop({ maxTokens: options.outputTokens ?? 4096 }) : conversationalLoop({ maxTokens: options.outputTokens ?? 4096 }) } },
         { id: 'context.budgeted', configuration: JSON.stringify({system, budget: options.tokenBudget ?? 24000}), version: '1.0.0', apiVersion: 1, roles: { context: () => budgetedContext(system, options.tokenBudget ?? 24000) } },
         { id: `provider.codex.${model}`, version: '1.0.0', apiVersion: 1, roles: { provider: () => new CodexSubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort: 'low' }) } },
-        { id: 'tools.coding', configuration: options.workspace, version: '3.0.0', apiVersion: 1, roles: { tools: () => codingToolRuntime(options.workspace) } },
+        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null }), version: '4.0.0', apiVersion: 1, roles: { tools: () => codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined }) } },
         { id: 'policy.confirm-mutations', version: '1.0.0', apiVersion: 1, roles: { policy: () => defaultCodingPolicy() } },
         ...options.extensions ?? [],
     ];
