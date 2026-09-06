@@ -28,7 +28,8 @@ export interface ContextTokenOptions {
 }
 export interface ContextCompositionOptions extends ContextTokenOptions {
     minRecentGroups?: number;
-    /** Opt-in retention: return an exact-source retrieval instruction for an older text result.
+    /** Under budget pressure, return an exact-source retrieval instruction for an older text result.
+     * Lower-priority groups are considered first; fitting contexts stay intact.
      * Return null when the source cannot be recovered with the current tool grants.
      * The host must preserve the original message at this index. */
     referenceToolResult?(message: ToolResultMessage, messageIndex: number, tools: readonly ToolDefinition[]): string | null;
@@ -197,24 +198,6 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             protected: group.unbound || sticky || score === Infinity || index >= messageGroups.length - recent,
             action: 'kept', order: sections.length + index });
     });
-    // Retain source identity and tool pairs; replace only old, recoverable text payloads.
-    if (options.referenceToolResult) for (const item of candidates) {
-        if (item.kind !== 'messages' || item.protected) continue;
-        item.group.messages = item.group.messages.map((message, offset) => {
-            if (message.role !== 'tool_result' || message.isError || message.contentBlocks?.length || message.content.length <= 1200) return message;
-            const messageIndex = item.group.firstIndex + offset;
-            const reference = options.referenceToolResult!(structuredClone(message), messageIndex, structuredClone(tools));
-            if (reference === null) return message;
-            if (typeof reference !== 'string' || !reference.trim()) throw new ContextCompressionError('Tool result reference must be nonempty text or null');
-            const content = `[Earlier tool result; exact saved text: ${reference}]\nPreview (not the full result):\n${message.content.slice(0, 400)}`;
-            if (content.length >= message.content.length ||
-                estimateContextTokens({ messages: [{ ...message, content }] }, tokenOptions).totalTokens >=
-                estimateContextTokens({ messages: [message] }, tokenOptions).totalTokens) return message;
-            item.action = 'compressed';
-            (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
-            return { ...message, content };
-        });
-    }
     const render = (protectedOnly = false) => {
         const keptSections = candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action !== 'dropped' && (!protectedOnly || item.protected))
             .map(item => item.section);
@@ -233,6 +216,24 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         if (result.usage.totalTokens <= budget) break;
         input.signal?.throwIfAborted();
         if (item.kind === 'messages') {
+            // Keep full evidence until pressure reaches this priority. Stop as soon as it fits.
+            if (options.referenceToolResult) for (const [offset, message] of item.group.messages.entries()) {
+                if (result.usage.totalTokens <= budget) break;
+                if (message.role !== 'tool_result' || message.isError || message.contentBlocks?.length || message.content.length <= 1200) continue;
+                const messageIndex = item.group.firstIndex + offset;
+                const reference = options.referenceToolResult(structuredClone(message), messageIndex, structuredClone(tools));
+                if (reference === null) continue;
+                if (typeof reference !== 'string' || !reference.trim()) throw new ContextCompressionError('Tool result reference must be nonempty text or null');
+                const content = `[Earlier tool result; exact saved text: ${reference}]\nPreview (not the full result):\n${message.content.slice(0, 400)}`;
+                if (content.length >= message.content.length) continue;
+                item.group.messages[offset] = { ...message, content };
+                const trial = render();
+                if (trial.usage.totalTokens >= result.usage.totalTokens) { item.group.messages[offset] = message; continue; }
+                result = trial;
+                item.action = 'compressed';
+                (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
+            }
+            if (result.usage.totalTokens <= budget) break;
             const compressed: Message[] = [];
             const compressMessage = options.compressMessage ?? (options.referenceToolResult ? () => null : compressToolResult);
             for (const [offset, message] of item.group.messages.entries()) {

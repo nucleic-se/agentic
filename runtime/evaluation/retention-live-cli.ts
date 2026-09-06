@@ -7,13 +7,14 @@ import type { IValidatedToolRuntime } from '../../contracts/tool-runtime.js';
 
 const model = process.env.AGENTIC_EVAL_MODEL ?? 'gpt-5.6-terra';
 const results = [];
-for (const mode of ['full', 'recoverable'] as const) {
+for (const mode of ['full', 'recoverable', 'pressured'] as const) {
+    const tokenBudget = mode === 'pressured' ? 2400 : 20000;
     const fixture = retentionFixture(), messages = structuredClone(fixture.messages);
     const trace: unknown[] = [];
     let answer = '', calls = 0, retrievals = 0, error: string | undefined;
     const start = Date.now(), usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 };
     const execution = createHarnessExecution({ provider: new CodexSubscriptionProvider({ model, reasoningEffort: 'low' }),
-        context: budgetedContext('Return only the exact archive code. Use read_saved when the source text has been replaced by a reference. Do not guess.', 20000, {
+        context: budgetedContext('Return only the exact archive code. Use read_saved when the source text has been replaced by a reference. Do not guess.', tokenBudget, {
             compressMessage: () => null,
             ...(mode === 'full' ? {} : { referenceToolResult: (_message, index) => `read_saved(${index})` }),
         }) });
@@ -46,10 +47,10 @@ for (const mode of ['full', 'recoverable'] as const) {
                 toolName: item.plan.name, content: item.result?.content ?? item.error ?? 'Tool failed', isError: !item.result?.ok });
         }
     } catch (failure) { error = failure instanceof Error ? failure.message : String(failure); }
-    results.push({ mode, passed: !error && answer === fixture.answer && (mode !== 'recoverable' || retrievals > 0),
+    results.push({ mode, tokenBudget, passed: !error && answer === fixture.answer && (mode !== 'pressured' || retrievals > 0),
         answer, error, calls, retrievals, usage, durationMs: Date.now() - start, trace });
 }
 const passed = results.every(result => result.passed);
 console.log(JSON.stringify({ version: 1, kind: 'paired-live-recovery', model, passed,
-    limitation: 'Two fixed-evidence tasks in a fixed order. Not a general agent benchmark or a statistically controlled latency comparison.', results }, null, 2));
+    limitation: 'Three fixed-evidence tasks in a fixed order; pressured mode has a smaller budget. Not a general agent benchmark or a statistically controlled latency comparison.', results }, null, 2));
 process.exitCode = passed ? 0 : 1;

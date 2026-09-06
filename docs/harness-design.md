@@ -473,9 +473,12 @@ text is durably available and the current task can retrieve it; otherwise return
 `null`. The callback receives isolated snapshots. Hosts own reference validity
 and must preserve the source behind it across later projections and restarts.
 
-Before budget pressure, the pipeline replaces eligible older tool-result text
-longer than 1,200 characters with a 400-character preview and that reference,
-only when doing so reduces estimated tokens. Protected/recent groups, error
+Only under budget pressure, the pipeline considers eligible older tool-result text
+longer than 1,200 characters for a 400-character preview and that reference,
+only when doing so reduces estimated tokens. It uses the existing ascending
+priority order (oldest first for tied message groups) and stops as soon as the
+request fits, including between results in the same tool-call group. Fitting
+contexts stay intact and do not invoke the reference callback. Protected/recent groups, error
 results and native content blocks are excluded. Tool-call identities and grouping
 remain unchanged; original history is never mutated. Selection reports include
 source indices, retrieval instructions and original/retained character counts.

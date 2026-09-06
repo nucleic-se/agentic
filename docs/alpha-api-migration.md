@@ -73,3 +73,14 @@ Embedding consumers should require `IEmbeddingProvider`. Generation-only provide
 Use `client.list({limit, offset})` and `client.events(id, afterSequence, limit)` for bounded reads. Memory and SQLite implement matching pagination contracts; the web API accepts corresponding query parameters. Omitting pagination preserves the existing all-results behavior. Offset pagination is for browsing, not a consistent snapshot during concurrent changes. Event sequence cursors are suitable for incremental reads.
 
 Snapshot records still grow with history. This pass does not introduce an artifact store, automatic retention or distributed ownership. Gears should continue to own queues, scheduling and leases; the new contracts can be used by its future harness.
+
+
+### Recoverable context now retains full evidence while it fits
+
+`referenceToolResult` is now invoked only under context-budget pressure, in the
+existing priority order. It no longer eagerly shortens every eligible older
+result. No new option is required. Callers must keep retrieval callbacks pure;
+callback invocation is a selection decision, not an indexing or persistence hook.
+Existing protection, pairing, grant, source immutability and report contracts
+remain intact. Gears advances its persisted context extension to version 3 so
+active work cannot silently adopt the changed policy on restart.

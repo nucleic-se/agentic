@@ -82,19 +82,22 @@ The recovery oracle follows the actual retained reference; it is not a model.
 `runRetentionEvaluation` is also exported from `@nucleic-se/agentic/evaluation`.
 
 The live comparison sends the same synthetic archive-code task through shared
-harness execution in full and recoverable modes. It permits at most four model
+harness execution in full and recoverable modes at a 20,000-token ceiling,
+plus a pressured recoverable case at 2,400 tokens. It permits at most four model
 calls per mode, validates retrieval indices, and has no workspace or write tools.
 Reports include exact intents/receipts, answer, retrieval count, usage and duration.
-The reference mode must actually retrieve the source before passing. Save stdout
+The pressured mode must actually retrieve the source before passing. Save stdout
 outside the repository when retaining run evidence. Model choice is controlled by
 `AGENTIC_EVAL_MODEL`, defaulting to `gpt-5.6-terra`.
 
 These tests distinguish request-size reduction from actual model behavior and
 end-to-end cost. A single fixed-order model comparison is not a performance study.
-The current fixture demonstrated a 5,382-to-1,967 estimated-token reduction;
-one live run answered correctly in both modes, using 2,748 input tokens in one
-full-context call versus 2,363 across two recovery calls. This is evidence for
-that fixture only, not a general efficiency claim.
+The fixture retains all 5,382 estimated tokens when it fits; at a 2,400-token
+ceiling, references reduce it to 1,967 without losing access to the answer.
+A live run answered in one call with zero retrievals in both roomy modes
+(2,748 input tokens each), and in two calls with one retrieval under pressure
+(2,363 input tokens total). This is evidence for this fixture only. The pressured
+case uses a different ceiling and is not a controlled efficiency comparison.
 
 ## Gears composition proof
 
