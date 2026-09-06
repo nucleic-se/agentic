@@ -245,3 +245,13 @@ SSE readers are released and cancelled on parser or consumer failure. The decode
 limits each event to 1 MiB of text and each response stream to 16 MiB of wire bytes.
 Codex duplicate function-call IDs and unsupported incomplete terminal states are
 protocol errors.
+
+## Cache routing scope
+
+`TurnRequest` and `StructuredRequest` accept an optional `cacheScope`: an opaque, stable caller-owned string. A provider may ignore it. It is a routing hint, not conversation history, a cache-hit guarantee or a security boundary. Keep it stable for a session or task; do not put changing budgets or timestamps in it.
+
+The local session driver supplies a composition/session scope unless the request explicitly supplies one. It remains stable across reopen and differs for forks. The scope is part of the journaled model request. Shared provider instances do not own mutable session routing state.
+
+The subscription adapter hashes the scope into a bounded key and maps it to `prompt_cache_key`, `session-id` and `x-client-request-id`. Requests without a scope retain their previous wire behavior. Other adapters can map the same neutral hint according to their provider's capabilities. No vendor-specific cache controls are required in builders or context selection.
+
+Stable routing does not make changing input cacheable. Section stability describes layout; it does not promise provider cache reuse. Prepared request snapshots describe the host boundary; transport normalization can change the outgoing body.

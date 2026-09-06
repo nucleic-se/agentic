@@ -118,7 +118,7 @@ class HarnessSessionClient implements SessionClient {
     private async executeModelEffect(id: string, runId: string, request: TurnRequest, signal: AbortSignal,
         options: { projection?: 'conversation' | 'none'; maintenance?: MaintenanceOptions } = {}): Promise<TurnResponse> {
         signal.throwIfAborted();
-        const input = { ...request, tools: request.tools ?? this.roles.tools.tools() };
+        const input = { ...request, cacheScope: request.cacheScope ?? `${this.fingerprint}:${id}`, tools: request.tools ?? this.roles.tools.tools() };
         let report: ContextReport | undefined;
         const operationId = randomUUID();
         return this.execution.model(input, {

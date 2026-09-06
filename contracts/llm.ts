@@ -105,6 +105,9 @@ export interface TokenUsage {
 // ── Structured output ─────────────────────────────────────────────────────────
 
 export interface StructuredRequest {
+    /** Opaque, stable caller-owned scope for provider cache/routing hints.
+     * Providers may ignore it. It is not conversation history or an isolation boundary. */
+    cacheScope?: string
     /** Maximum generated output tokens, including budget reservations. */
     maxTokens?: number
     system?:   string
@@ -134,6 +137,9 @@ export type StopReason =
     | 'stop_sequence'   // a stop sequence was matched
 
 export interface TurnRequest {
+    /** Opaque, stable caller-owned scope for provider cache/routing hints.
+     * Providers may ignore it. It is not conversation history or an isolation boundary. */
+    cacheScope?: string
     system?:         string
     messages:        Message[]
     tools?:          ToolDefinition[]

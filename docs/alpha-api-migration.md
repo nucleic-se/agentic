@@ -100,3 +100,7 @@ that same snapshot for dispatch. Context protection predicates add to explicit
 sticky protection. Gears advances its runtime extension to version 6 to preserve
 the corrected handling of dispatched uncertain tool outcomes and follow-up
 composition validation.
+
+### Session cache routing
+
+The default subscription provider extension is version `2.0.0`. The local host now journals a stable composition/session `cacheScope` on model requests, with request-level overrides supported. Reopen persisted sessions with their original composition; the changed default provider identity does not silently resume an older default composition. Custom providers may ignore the optional hint.

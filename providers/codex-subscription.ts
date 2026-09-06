@@ -1,4 +1,5 @@
 import { sseData } from './sse.js'
+import { createHash } from 'node:crypto'
 import { createOpenAIOAuthTransport, type OpenAIOAuth, type OpenAIOAuthTransport } from '@openai-oauth/core'
 import { openaiCredentials } from '@openai-oauth/local'
 
@@ -284,12 +285,20 @@ export class CodexSubscriptionProvider implements ILLMProvider {
             throw new Error(`${this.#providerName}: stop sequences are not supported by the Responses transport`)
         }
         const tools = toTools(request.tools)
+        if (request.cacheScope !== undefined && (typeof request.cacheScope !== 'string' || !request.cacheScope.trim())) {
+            throw new TypeError('cacheScope must be a nonempty string')
+        }
+        // Keep arbitrary caller identifiers out of HTTP headers and normalize to
+        // a bounded key. The host, not a shared provider instance, owns the scope.
+        const cacheKey = request.cacheScope === undefined ? undefined
+            : createHash('sha256').update(request.cacheScope).digest('hex')
         const body = {
             model: this.#model,
             instructions: request.system ?? '',
             input: toInput(request.messages),
             stream: true,
             store: false,
+            ...(cacheKey ? { prompt_cache_key: cacheKey } : {}),
             reasoning: { effort: this.#reasoningEffort },
             text: {
                 format: textFormat ?? { type: 'text' },
@@ -301,7 +310,9 @@ export class CodexSubscriptionProvider implements ILLMProvider {
         }
         const response = await this.#transport.request('/responses', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...(cacheKey ? {
+                'session-id': cacheKey, 'x-client-request-id': cacheKey,
+            } : {}) },
             body: JSON.stringify(body),
             signal: providerSignal(options),
         })

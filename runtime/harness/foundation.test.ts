@@ -1,10 +1,42 @@
 import { expect, it, vi } from 'vitest';
 import { createHarness } from './host.js';
 import { createHarnessExecution } from './execution.js';
-import { MemorySessionStore } from './stores.js';
+import { MemorySessionStore, createSqliteSessionStore } from './stores.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { conversationalLoop, fullHistoryContext, budgetedContext } from './defaults.js';
 import { assertHarnessBoundaryConformance } from '../testing/harness.js';
 import type { DriverComposition } from './composition.js';
+import type { TurnRequest } from '../../contracts/llm.js';
+
+it('journals a stable session cache scope across reopen and separates forks', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'agentic-cache-scope-')), requests: TurnRequest[] = [];
+    const open = () => createHarness().compose({ extensions: [{ id: 'scope-test', version: '1', apiVersion: 1, roles: {
+        store: () => createSqliteSessionStore(join(directory, 'sessions.sqlite')), context: () => fullHistoryContext(), loop: () => conversationalLoop(),
+        provider: () => ({ turn: async (request: TurnRequest) => { requests.push(request); return {
+            message: { role: 'assistant' as const, content: 'done' }, stopReason: 'end_turn' as const, usage: { inputTokens: 1, outputTokens: 1 },
+        }; }, structured: async () => { throw new Error('unused'); } }),
+        policy: () => ({ evaluate: async () => ({ kind: 'allow' as const }) }),
+        tools: () => ({ tools: () => [], validate: (_name: string, args: Record<string, unknown>) => ({ ok: true as const, args }), call: async () => { throw new Error('unused'); } }),
+    } }] });
+    const first = await open(), session = await first.create();
+    await first.submit(session.id, 'one', { commandId: 'one' }); await first.wait(session.id); await first.close();
+    const second = await open();
+    try {
+        await second.submit(session.id, 'two', { commandId: 'two' }); await second.wait(session.id);
+        const fork = await second.fork(session.id);
+        await second.submit(fork.id, 'three', { commandId: 'three' }); await second.wait(fork.id);
+        expect(requests[0].cacheScope).toBeTruthy();
+        expect(requests[1].cacheScope).toBe(requests[0].cacheScope);
+        expect(requests[2].cacheScope).not.toBe(requests[0].cacheScope);
+        const intents = (await second.events(session.id)).filter(event => event.type === 'model.intent');
+        expect(intents).toHaveLength(2);
+        const operations = (await second.get(session.id)).operations.filter(operation => operation.kind === 'model');
+        expect(operations).toHaveLength(2);
+        for (const operation of operations) expect((operation.input as TurnRequest).cacheScope).toBe(requests[0].cacheScope);
+    } finally { await second.close(); rmSync(directory, { recursive: true, force: true }); }
+});
 
 it('the local session driver satisfies the shared request boundary', async () => {
     const report = await assertHarnessBoundaryConformance(async ({ provider, context }) => {

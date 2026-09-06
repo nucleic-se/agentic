@@ -30,6 +30,28 @@ function completed(overrides: Record<string, unknown> = {}): Record<string, unkn
 }
 
 describe('CodexSubscriptionProvider', () => {
+    it('maps caller scopes deterministically without leaking state across shared-provider calls', async () => {
+        const request = vi.fn<CodexSubscriptionTransport['request']>(async () => sse(completed()))
+        const provider = new CodexSubscriptionProvider({ model: 'test', transport: { request } })
+        for (const cacheScope of ['task-a', 'task-b', 'task-a', undefined]) {
+            await provider.turn({ messages: [], cacheScope })
+        }
+        const sent = request.mock.calls.map(([, init]) => {
+            return { body: JSON.parse(init!.body as string), headers: new Headers(init!.headers) }
+        })
+        expect(sent[0].body.prompt_cache_key).toMatch(/^[a-f0-9]{64}$/)
+        expect(sent[0].body.prompt_cache_key).toBe(sent[2].body.prompt_cache_key)
+        expect(sent[0].body.prompt_cache_key).not.toBe(sent[1].body.prompt_cache_key)
+        for (const item of sent.slice(0, 3)) {
+            expect(item.headers.get('session-id')).toBe(item.body.prompt_cache_key)
+            expect(item.headers.get('x-client-request-id')).toBe(item.body.prompt_cache_key)
+            expect(item.body).not.toHaveProperty('cacheScope')
+        }
+        expect(sent[3].body).not.toHaveProperty('prompt_cache_key')
+        expect(sent[3].headers.has('session-id')).toBe(false)
+        await expect(provider.turn({ messages: [], cacheScope: '  ' })).rejects.toThrow('nonempty')
+        expect(request).toHaveBeenCalledTimes(4)
+    });
     it('streams text, maps native tool calls, and forwards Responses continuation', async () => {
         const request = vi.fn().mockResolvedValue(sse(
             { type: 'response.output_text.delta', delta: 'Checking ' },
