@@ -449,3 +449,18 @@ provider history and private model reasoning are outside this boundary. Raw hist
 is distinct from the selected request. Snapshots contain task/tool content and
 use the same authentication as the session; credentials used by transport are not
 added to them. No automatic trace retention or redaction policy is introduced.
+
+### Stable instructions and transient task state
+
+Compositions should keep enduring instructions separate from changing counters,
+progress and retrieval hints. Gears now appends one deterministic, sticky user
+message with current state to each model request. It uses existing `Message`
+provenance and protection and the same context accounting; no separate context
+extension protocol is needed. Model-written progress is labelled as untrusted
+content rather than inserted into the system instruction.
+
+Transient state belongs to the request intent, not accumulated conversation
+history. The next request projects fresh state. This keeps stable instructions
+and available history reusable as a prefix, without promising provider cache hits.
+The default Agentic agent already keeps its configured system instruction stable;
+it does not need Gears task-tree fields or a parallel implementation of them.
