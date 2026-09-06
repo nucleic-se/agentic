@@ -99,7 +99,14 @@ export async function composeDriver<Roles extends object, Client extends Harness
             return closing;
         };
         for (const extension of ordered) {
+            if (closing) throw new Error('Harness closed during activation');
             const release = await extension.activate?.(client);
+            // An activation can await close itself: do not wait for activation in close.
+            // Its newly acquired resource still needs disposal after shutdown drained.
+            if (closing) {
+                await release?.();
+                throw new Error('Harness closed during activation');
+            }
             if (release) cleanup.push(release);
         }
         return client;

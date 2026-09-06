@@ -37,7 +37,7 @@ const item = await memory.write({
   confidence: 1.0,
   source: 'user',
   tags: ['task', 'sales'],
-  ttlMs: 60 * 60 * 1000,  // Expire in 1 hour (optional)
+  ttlDays: 1 / 24,  // Expire in 1 hour from creation (optional)
 });
 
 console.log(item.id);  // Auto-generated UUID
@@ -49,14 +49,14 @@ console.log(item.id);  // Auto-generated UUID
 
 ```ts
 // By ID
-const item = await memory.get(item.id);
+const saved = await memory.get(item.id);
 
 // By query
 const results = await memory.query({
   types: ['working', 'semantic'],
   tags: ['sales'],
   limit: 10,
-  tokenBudget: 4000,  // Stop when accumulated value length exceeds budget
+  tokenBudget: 4000,  // Estimated serialized-value tokens; oversized items are skipped
 });
 ```
 
@@ -65,11 +65,15 @@ const results = await memory.query({
 | Field | Type | Description |
 |---|---|---|
 | `types` | `MemoryType[]` | Filter by memory type |
-| `tags` | `string[]` | All specified tags must be present |
-| `keys` | `string[]` | Exact key matches |
+| `tags` | `string[]` | Match any specified tag in `InMemoryStore` |
+| `text` | `string` | `InMemoryStore` matches all whitespace-separated terms, case-insensitively, across key, serialized value and tags |
 | `limit` | `number` | Max items to return |
-| `tokenBudget` | `number` | Stop accumulating once this rough token count is reached |
-| `minConfidence` | `number` | Exclude items below this confidence score |
+| `tokenBudget` | `number` | Maximum estimated serialized-value tokens; skip items that do not fit |
+
+`limit` is required. `InMemoryStore` ranks matching items by confidence, then most
+recent update. The store's token estimate is for selecting values; use context
+composition to account for the final rendered prompt and the rest of the request.
+Other adapters document their own text matching and ranking semantics.
 
 ---
 
@@ -111,8 +115,7 @@ interface MemoryItem {
   version: number;         // Increments on each update
   createdAt: number;       // Unix ms
   updatedAt: number;
-  expiresAt?: number;      // Unix ms, absent = no expiry
-  provenance?: string;     // Where the knowledge came from
+  ttlDays?: number;        // Days from createdAt; absent = no expiry
 }
 ```
 
@@ -127,10 +130,10 @@ import type { IMemoryWriteValidator, MemoryItem, IMemoryStore } from '@nucleic-s
 
 class StrictValidator implements IMemoryWriteValidator {
   async validate(
-    proposed: Partial<MemoryItem>,
+    proposed: Omit<MemoryItem, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
     store: IMemoryStore
   ): Promise<'accept' | 'reject' | 'needs_confirmation'> {
-    if (proposed.confidence! < 0.5) return 'reject';
+    if (proposed.confidence < 0.5) return 'reject';
     if (proposed.type === 'semantic') return 'needs_confirmation';
     return 'accept';
   }
@@ -139,12 +142,16 @@ class StrictValidator implements IMemoryWriteValidator {
 
 ---
 
-## Pattern: agent with persistent working memory
+## Pattern: agent with working memory
+
+`InMemoryStore` lasts for the life of this process. Supply a durable `IMemoryStore`
+adapter when memory must survive restarts.
 
 ```ts
 import { InMemoryStore } from '@nucleic-se/agentic/runtime';
 import { CallbackGraphNode } from '@nucleic-se/agentic/runtime';
 
+type MyState = { step: number; lastObservation: string; context: string };
 const memory = new InMemoryStore();
 
 // Save an observation after each LLM step

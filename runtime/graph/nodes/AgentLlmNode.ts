@@ -207,16 +207,15 @@ export class AgentLlmNode<TState extends GraphState = GraphState>
 
             // Merge static/dynamic tools with any contributed by active capabilities.
             const resolvedTools = typeof toolsOrFn === 'function' ? toolsOrFn(state) : (toolsOrFn ?? []);
-            const mergedTools = extraTools.length > 0
-                ? [...resolvedTools, ...extraTools]
-                : resolvedTools;
+            // The manifest accounted below is also the one dispatched after async preparation.
+            const mergedTools = structuredClone([...resolvedTools, ...extraTools]);
 
             const prepared = await composeAgentContext({
                 system: baseSystemPrompt, messages, sections: contributedSections, tools: mergedTools,
                 tokenBudget: this.config.contextTokenBudget ?? Number.MAX_SAFE_INTEGER,
                 reservedOutputTokens: maxTokens, signal: context.signal,
             }, this.config.contextOptions);
-            this.config.onContextPrepared?.({ usage: prepared.usage, decisions: prepared.decisions });
+            this.config.onContextPrepared?.(structuredClone({ usage: prepared.usage, decisions: prepared.decisions }));
             // Only model-facing fields cross the provider boundary.
             const request: TurnRequest = {
                 messages: prepared.messages,

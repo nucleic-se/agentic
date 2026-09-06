@@ -34,6 +34,7 @@ export interface ContextCompositionOptions extends ContextTokenOptions {
      * The host must preserve the original message at this index. */
     referenceToolResult?(message: ToolResultMessage, messageIndex: number, tools: readonly ToolDefinition[]): string | null;
     scoreGroup?(messages: readonly Message[], groupIndex: number): number;
+    /** Add protection to the built-in sticky-message rule. */
     protectMessage?(message: Message, messageIndex: number): boolean;
     compressMessage?(message: Message): Promise<Message | null> | Message | null;
     compressSection?(section: PromptSection): Promise<string | null> | string | null;
@@ -191,9 +192,9 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     messageGroups.forEach((group, index) => {
         const score = options.scoreGroup?.(structuredClone(group.messages), index) ?? 0;
         if ((!Number.isFinite(score) && score !== Infinity)) throw new RangeError('Message group score must be finite or positive Infinity');
-        const sticky = group.messages.some((message, offset) => options.protectMessage
-            ? options.protectMessage(structuredClone(message), group.firstIndex + offset)
-            : message.role === 'user' && message.sticky === true);
+        const sticky = group.messages.some((message, offset) =>
+            (message.role === 'user' && message.sticky === true) ||
+            options.protectMessage?.(structuredClone(message), group.firstIndex + offset));
         candidates.push({ kind: 'messages', group, id: `messages:${group.firstIndex}`, score,
             protected: group.unbound || sticky || score === Infinity || index >= messageGroups.length - recent,
             action: 'kept', order: sections.length + index });

@@ -163,3 +163,23 @@ it('excludes trace events newer than the captured state', async () => {
     expect(store.events).toHaveBeenCalledWith('test', 1, 200);
     await expect(inspectHarness(store, 'test', -1)).rejects.toThrow('cursor');
 });
+
+
+it('disposes late activation resources and rejects composition when activation closes the client', async () => {
+    const events: string[] = [];
+    const lateCleanup = vi.fn(() => { events.push('late cleanup'); });
+    const laterActivation = vi.fn();
+    const composition: DriverComposition<{ resource: number }, { close(): Promise<void> }> = {
+        driver: { roles: ['resource'], start: async () => ({ close: async () => { events.push('stop'); } }),
+            dispose: { resource: () => { events.push('dispose'); } } },
+        extensions: [
+            { id: 'resource', version: '1', apiVersion: 1, roles: { resource: () => 1 } },
+            { id: 'closing', version: '1', apiVersion: 1, activate: async client => { await client.close(); return lateCleanup; } },
+            { id: 'later', version: '1', apiVersion: 1, activate: laterActivation },
+        ],
+    };
+    await expect(createHarness().compose(composition)).rejects.toThrow('closed during activation');
+    expect(events).toEqual(['stop', 'dispose', 'late cleanup']);
+    expect(lateCleanup).toHaveBeenCalledOnce();
+    expect(laterActivation).not.toHaveBeenCalled();
+});

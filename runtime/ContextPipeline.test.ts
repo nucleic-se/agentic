@@ -18,6 +18,17 @@ const counter: ITokenCounter = {
 const tools: ToolDefinition[] = [{ name: 'inspect', description: 'Inspect a workspace', parameters: { type: 'object', properties: { path: { type: 'string' } } } }];
 
 describe('composable context primitives', () => {
+    it('adds predicate protection without revoking explicit sticky messages', async () => {
+        const messages: Message[] = [
+            { role: 'user', content: 'objective', sticky: true },
+            { role: 'assistant', content: 'protected fact' },
+            { role: 'user', content: 'optional '.repeat(100) },
+        ];
+        const options = { minRecentGroups: 0, protectMessage: (message: Message) => message.role === 'assistant', tokenCounter: counter };
+        const selected = await composeAgentContext({ messages, tokenBudget: 30 }, options);
+        expect(selected.messages).toEqual(messages.slice(0, 2));
+        await expect(composeAgentContext({ messages, tokenBudget: 15 }, options)).rejects.toBeInstanceOf(ContextBudgetExceededError);
+    });
     it('keeps section collection separate from selection and never forces an oversized first section', () => {
         const supplied = section('supplied', 'supplied');
         const toolSection = section('tool', 'rendered tool data');

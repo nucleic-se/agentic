@@ -491,3 +491,12 @@ This is deterministic retention, not a semantic summary or automatic relevance
 search. The default Agentic composition does not enable it without a retrieval
 implementation. Gears supplies its own-task `read_tool_result` capability backed
 by existing durable conversation storage; no second memory database is added.
+
+
+### Closure during extension activation
+
+Closing a client during activation stops the driver and drains registered cleanup.
+If the in-flight activation subsequently returns a disposer, the composer runs
+it immediately and rejects composition instead of returning a closed client.
+Remaining extensions are not activated. An activation may await `close()` without
+deadlocking; cleanup acquired after closure is still attempted exactly once.
