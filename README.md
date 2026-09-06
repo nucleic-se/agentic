@@ -2,6 +2,9 @@
 
 Lean, domain-agnostic TypeScript primitives for building LLM agents: state graphs, LLM providers, tool runtimes, tool policy, prompt composition, context assembly, memory, and capability primitives.
 
+Our [north star](docs/north-star.md) defines the shared Agentic/Gears direction:
+composable foundations, useful context and simple, maintainable code before feature breadth.
+
 ```bash
 npm install @nucleic-se/agentic
 ```

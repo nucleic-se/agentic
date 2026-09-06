@@ -1,7 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Message, TurnRequest, TurnResponse, TokenUsage } from '../../contracts/llm.js';
-import { executeToolBatch } from '../ToolBatchExecutor.js';
-import { executeModelTurn } from '../ModelExecutor.js';
+import { composeDriver, compositionFingerprint, type DriverComposition, type HarnessClient } from './composition.js';
+import { createHarnessExecution } from './execution.js';
+import type { ContextReport } from '../../contracts/IAgentContextAssembler.js';
 import { commitJournalTransition } from '../ExecutionJournal.js';
 import type { ExecutionLimits } from '../ExecutionOptions.js';
 import type { OperationResolution, SessionPage } from './types.js';
@@ -30,64 +31,28 @@ function reconcileInterruptedMessages(record: SessionRecord) {
     record.messages = result;
 }
 
-/** Constructing an empty host performs no initialization or IO. */
-export function createHarness() {
-    return { compose: async (options: { extensions: Extension[]; limits?: ExecutionLimits }): Promise<SessionClient> => {
-        const limits = { maxModelCalls: 40, maxToolCalls: 100, maxToolCallsPerBatch: 16, timeoutMs: 600000, ...options.limits };
-        for (const [key, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || (key === 'timeoutMs' && value > 2147483647)) throw new RangeError(`Invalid execution limit: ${key}`);
-        const ordered: Extension[] = [];
-        const owners = new Map<RoleName, string>();
-        const byId = new Map<string, Extension>();
-        for (const extension of options.extensions) {
-            assertId(extension.id);
-            if (extension.apiVersion !== 1) throw new Error(`Unsupported extension API: ${extension.id}`);
-            if (byId.has(extension.id)) throw new Error(`Duplicate extension: ${extension.id}`);
-            byId.set(extension.id, extension);
-            for (const role of Object.keys(extension.roles ?? {}) as RoleName[]) {
-                if (!REQUIRED.includes(role)) throw new Error(`Unknown role: ${role}`);
-                if (owners.has(role)) throw new Error(`Conflicting owners for ${role}: ${owners.get(role)}, ${extension.id}`);
-                owners.set(role, extension.id);
-            }
-        }
-        const missing = REQUIRED.filter(role => !owners.has(role));
-        if (missing.length) throw new Error(`Missing harness roles: ${missing.join(', ')}`);
-        const visiting = new Set<string>();
-        const visited = new Set<string>();
-        function visit(id: string) {
-            if (visited.has(id)) return;
-            if (visiting.has(id)) throw new Error(`Extension dependency cycle: ${id}`);
-            const extension = byId.get(id);
-            if (!extension) throw new Error(`Missing extension dependency: ${id}`);
-            visiting.add(id);
-            for (const dependency of extension.requires ?? []) visit(dependency);
-            visiting.delete(id); visited.add(id); ordered.push(extension);
-        }
-        for (const id of byId.keys()) visit(id);
-        const cleanup: Array<() => void | Promise<void>> = [];
-        const roles: Partial<HarnessRoles> = {};
-        let client: HarnessSessionClient | undefined;
-        try {
-            for (const extension of ordered) {
-                for (const role of Object.keys(extension.roles ?? {}) as RoleName[]) {
-                    const value = await extension.roles![role]!();
-                    (roles as Record<string, unknown>)[role] = value;
-                    if (role === 'store') cleanup.push(() => (value as HarnessRoles['store']).close());
-                }
-            }
-            client = new HarnessSessionClient(roles as HarnessRoles, ordered, cleanup, limits);
-            await client.recover();
-            for (const extension of ordered) {
-                const dispose = await extension.activate?.(client);
-                if (dispose) cleanup.push(dispose);
-            }
-            return client;
-        } catch (error) {
-            if (client) await client.close().catch(() => undefined);
-            else for (const dispose of cleanup.reverse()) { try { await dispose(); } catch {} }
-            throw error;
-        }
-    } };
+interface SessionComposition { extensions: Extension[]; limits?: ExecutionLimits }
+function compose(options: SessionComposition): Promise<SessionClient>;
+function compose<Roles extends object, Client extends HarnessClient>(options: DriverComposition<Roles, Client>): Promise<Client>;
+function compose<Roles extends object, Client extends HarnessClient>(
+    options: SessionComposition | DriverComposition<Roles, Client>,
+): Promise<SessionClient | Client> {
+    if ('driver' in options) return composeDriver(options);
+    const limits = { maxModelCalls: 40, maxToolCalls: 100, maxToolCallsPerBatch: 16, timeoutMs: 600000, ...options.limits };
+    for (const [key, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || (key === 'timeoutMs' && value > 2147483647)) return Promise.reject(new RangeError(`Invalid execution limit: ${key}`));
+    return composeDriver<HarnessRoles, SessionClient>({ extensions: options.extensions, driver: {
+        roles: REQUIRED,
+        dispose: { store: store => store.close() },
+        async start(roles, extensions) {
+            const client = new HarnessSessionClient(roles, extensions, limits);
+            try { await client.recover(); return client; }
+            catch (error) { await client.close(); throw error; }
+        },
+    } });
 }
+
+/** The local session driver is the default composition, not a requirement of the harness. */
+export function createHarness() { return { compose }; }
 
 class HarnessSessionClient implements SessionClient {
     private readonly locks = new Map<string, Promise<unknown>>();
@@ -100,8 +65,10 @@ class HarnessSessionClient implements SessionClient {
     private closing = false;
     private closePromise?: Promise<void>;
     private readonly fingerprint: string;
-    constructor(private readonly roles: HarnessRoles, private readonly extensions: Extension[], private readonly cleanup: Array<() => void | Promise<void>>, private readonly limits: Required<ExecutionLimits>) {
-        this.fingerprint = createHash('sha256').update(JSON.stringify(extensions.filter(e => Object.keys(e.roles ?? {}).length).map(e => ({id:e.id,version:e.version,roles:Object.keys(e.roles ?? {}),configuration:e.configuration})))).digest('hex');
+    private readonly execution;
+    constructor(private readonly roles: HarnessRoles, private readonly extensions: Extension[], private readonly limits: Required<ExecutionLimits>) {
+        this.execution = createHarnessExecution(roles);
+        this.fingerprint = compositionFingerprint(extensions);
     }
     composition() { return this.extensions.map(e => ({ id: e.id, version: e.version, roles: Object.keys(e.roles ?? {}) })); }
     private assertAdmission() { this.assertOpen(); if (this.closing) throw new Error('Harness is shutting down'); }
@@ -151,18 +118,12 @@ class HarnessSessionClient implements SessionClient {
     private async executeModelEffect(id: string, runId: string, request: TurnRequest, signal: AbortSignal,
         options: { projection?: 'conversation' | 'none'; maintenance?: MaintenanceOptions } = {}): Promise<TurnResponse> {
         signal.throwIfAborted();
-        const source = structuredClone(request);
-        const tools = source.tools ?? this.roles.tools.tools();
-        // Budget the final request, including custom-loop system changes and the actual tool manifest.
-        const context = await this.roles.context.assemble(source.messages, signal, {
-            tools, ...(source.system === undefined ? {} : { system: source.system }),
-            ...(source.maxTokens === undefined ? {} : { reservedOutputTokens: source.maxTokens }),
-        });
-        const { report, ...prepared } = context;
-        const input = { ...source, ...prepared, tools };
+        const input = { ...request, tools: request.tools ?? this.roles.tools.tools() };
+        let report: ContextReport | undefined;
         const operationId = randomUUID();
-        return executeModelTurn(this.roles.provider, input, {
+        return this.execution.model(input, {
             operationId, signal, stream: true,
+            onPrepared: prepared => { report = prepared; },
             ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : {}),
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
             onIntent: intent => this.change(id, 'model.intent', record => {
@@ -425,7 +386,7 @@ class HarnessSessionClient implements SessionClient {
                     toolCount += calls.length;
                     if (toolCount > this.limits.maxToolCalls) throw new Error('Run tool-call budget exceeded');
                     const operationIds = new Map<string, string>();
-                    const executions = await executeToolBatch(calls, {
+                    const { executions } = await this.execution.tools(calls, {
                         tools: this.roles.tools, policy: this.roles.policy, signal, maxToolCallsPerTurn: this.limits.maxToolCallsPerBatch,
                         confirmToolCall: async context => {
                             signal.throwIfAborted();
@@ -499,8 +460,5 @@ class HarnessSessionClient implements SessionClient {
         // Repeat because completing one serialized action can expose its queued successor.
         while (this.locks.size) await Promise.allSettled([...this.locks.values()]);
         this.closed = true; this.listeners.clear();
-        const errors: unknown[] = [];
-        for (const dispose of [...this.cleanup].reverse()) { try { await dispose(); } catch (error) { errors.push(error); } }
-        if (errors.length) throw new AggregateError(errors, 'Harness cleanup failed');
     }
 }

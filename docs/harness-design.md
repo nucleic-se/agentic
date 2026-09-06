@@ -1,7 +1,72 @@
 # Composable harness: architecture and product plan
 
-Status: initial implementation on feature branch, 5 September 2026.
+Status: foundation consolidation on feature branch, 6 September 2026.
 Branch: `codex/composable-harness`.
+
+The [north star](north-star.md) sets the enduring design priorities and review
+criteria for this harness and its Gears composition.
+
+## Foundation contracts
+
+The harness composer no longer assumes local session execution. `createHarness().compose`
+uses the local session driver by default. Passing `{ driver, extensions }` selects a
+driver with its own typed roles and client, using the same dependency validation,
+activation, failure cleanup and shutdown ordering. Gears supplies a queued driver
+and a runtime role backed by its existing container, workers, mutex and database.
+It does not wrap a second local loop around each queued task.
+
+Both drivers use `createHarnessExecution` for model requests and tool execution.
+The model boundary snapshots raw input, runs the selected `ContextStrategy` once,
+validates its result and optional accounting, then invokes admission/journal hooks
+before dispatch. Selection can change the request's system and messages; it cannot
+change the tool manifest or mutate the original history through the supplied
+snapshot. The operation deadline includes context preparation. Cancellation is
+cooperative: custom context strategies must observe the supplied signal.
+
+`budgetedContext(system, ceiling, policy)` directly composes the existing context
+pipeline. Its optional policy supplies token counting, scoring, protection and
+compression; the harness no longer routes this through the legacy assembler
+adapter. The default reference agent sends an explicit output cap (4096 tokens by default),
+which is reserved inside its context ceiling for both planning and conversation.
+Custom loops must likewise specify an output cap when relying on complete-window
+budgeting. Budgeted requests reject `previousResponseId`: opaque provider-held
+history cannot be included in the local accounting. Unbudgeted integrations may
+use provider continuation explicitly. Context reports contain estimates, not a
+billing guarantee. Drivers that
+reserve a shared token budget must require a report; full-history contexts remain
+available for consumers that do not use token admission.
+
+Driver lifecycle contract:
+
+1. All role names, ownership and extension dependencies validate before factories.
+2. Role factories run in dependency order. Acquired roles have driver-declared
+   disposers; a factory that fails before returning owns its partial cleanup.
+3. `start` establishes the driver, then extensions activate. Failed activation
+   closes the driver and releases all previously acquired resources.
+4. `close` stops admission synchronously and drains accepted work. Extension
+   disposers then run in reverse order, followed by role disposal. The public
+   close promise is shared across callers.
+
+A driver must drain its work before its close settles, even if shutdown reports
+an error. A failed startup must stop any work it started before rejecting.
+The composer owns resource cleanup; it cannot discover untracked background work.
+
+`assertHarnessBoundaryConformance` from `@nucleic-se/agentic/testing` is run by both
+the local session tests and the real queued Gears adapter tests. It verifies
+request-only projection, unchanged tool capabilities, preserved source history,
+and no provider dispatch after invalid or rejected context selection. Dedicated
+execution tests cover deadline/admission failures and accounting consistency.
+Each driver retains its storage, cancellation and crash-recovery tests.
+
+Alpha compatibility: the default loop configuration and normalized composition
+fingerprints can reject earlier persisted sessions. Use a fresh data directory
+for this revision, or finish earlier work on its original revision. No existing
+data is deleted or silently migrated.
+
+This is a foundation consolidation, not automatic memory, retrieval or compaction.
+Those must use this shared boundary when implemented. The local session client
+and Gears task client intentionally expose different host operations; reusable
+agent policies and effects should not be copied into a second implementation.
 
 ## Implemented in this branch
 
@@ -12,8 +77,8 @@ Hermes. Earlier audit fixes remain part of the working tree.
 
 | Surface | Current implementation |
 | --- | --- |
-| Composition | Six required singleton roles: `store`, `loop`, `context`, `provider`, `tools`, `policy`; extension ID dependencies; API version 1; missing-role/conflict/cycle checks before factory calls; reverse cleanup on activation failure |
-| Execution | Shared `executeToolBatch` boundary used by the original kernel and harness; model/tool effects record intent and outcome; outcome and transcript projection commit together |
+| Composition | Shared typed composer with a replaceable driver; the default local session driver requires six singleton roles: `store`, `loop`, `context`, `provider`, `tools`, `policy`; extension ID dependencies; API version 1; missing-role/conflict/cycle checks before factory calls; reverse cleanup on activation failure |
+| Execution | `createHarnessExecution` shares request preparation and effect services across local and queued drivers; existing model/tool executors preserve intent-before-dispatch and receipt semantics |
 | Loops | Conversational loop and planning loop; planning performs a tool-free model operation before the ordinary tool-capable loop |
 | Context | Full history and grouped budgeted context, preserving tool-call/result groups |
 | Sessions | Typed `SessionClient` with create/list/read/submit/resume/fork/cancel/approve, command deduplication, steering/enqueue queues, durable events and ephemeral deltas |

@@ -138,14 +138,4 @@ export interface HarnessRoles {
     policy: IToolPolicy;
 }
 export type RoleName = keyof HarnessRoles;
-export interface Extension {
-    id: string;
-    version: string;
-    apiVersion: 1;
-    /** Non-secret configuration identity used to check resume compatibility. */
-    configuration?: string;
-    requires?: string[];
-    /** Declaration only; factories run after the composition validates. */
-    roles?: { [K in RoleName]?: () => HarnessRoles[K] | Promise<HarnessRoles[K]> };
-    activate?(client: SessionClient): Promise<void | (() => void | Promise<void>)>;
-}
+export type Extension = import('./composition.js').HarnessExtension<HarnessRoles, SessionClient>;

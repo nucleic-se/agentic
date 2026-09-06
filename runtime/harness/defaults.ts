@@ -8,7 +8,7 @@ import type { IValidatedToolRuntime, ToolCallOptions, ToolCallResult } from '../
 import { FsToolRuntime } from '../../tools/fs.js';
 import { SearchToolRuntime } from '../../tools/search.js';
 import { ShellToolRuntime } from '../../tools/shell.js';
-import { AgentContextAssembler } from '../AgentContextAssembler.js';
+import { composeAgentContext, type ContextCompositionOptions } from '../ContextPipeline.js';
 import type { ContextStrategy, LoopServices, LoopStrategy } from './types.js';
 
 async function drain(services: LoopServices, mode: 'steer' | 'enqueue'): Promise<boolean> {
@@ -16,14 +16,15 @@ async function drain(services: LoopServices, mode: 'steer' | 'enqueue'): Promise
     return messages.length > 0;
 }
 
-export function conversationalLoop(options: { maxTurns?: number } = {}): LoopStrategy {
+export function conversationalLoop(options: { maxTurns?: number; maxTokens?: number } = {}): LoopStrategy {
     const maxTurns = options.maxTurns ?? 20;
     if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) throw new RangeError('maxTurns must be a positive safe integer');
+    if (options.maxTokens !== undefined && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1)) throw new RangeError('maxTokens must be a positive safe integer');
     return { async run(services) {
         for (let turn = 0; turn < maxTurns; turn++) {
             services.signal.throwIfAborted();
             await drain(services, 'steer');
-            const response = await services.model.request(await services.context());
+            const response = await services.model.request({ ...await services.context(), ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }) });
             if (response.stopReason === 'max_tokens') throw new Error('Model output reached its token limit');
             const calls = response.message.toolCalls ?? [];
             if (response.stopReason === 'tool_use' && !calls.length) throw new Error('Model requested tools without tool calls');
@@ -43,13 +44,13 @@ export function conversationalLoop(options: { maxTurns?: number } = {}): LoopStr
 }
 
 /** An explicit planning model operation precedes the ordinary tool-capable loop. */
-export function planningLoop(options: { maxTurns?: number } = {}): LoopStrategy {
+export function planningLoop(options: { maxTurns?: number; maxTokens?: number } = {}): LoopStrategy {
     const conversation = conversationalLoop(options);
     return { async run(services) {
         services.signal.throwIfAborted();
         await drain(services, 'steer');
         const context = await services.context();
-        const plan = await services.model.request({ ...context, tools: [],
+        const plan = await services.model.request({ ...context, tools: [], ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
             system: `${context.system ?? ''}\nProduce a concise plan for the user's task. Do not execute tools. A subsequent step will carry out the plan.` });
         if (plan.stopReason === 'max_tokens' || plan.stopReason === 'tool_use' || plan.message.toolCalls?.length) {
             throw new Error('Planning response must be complete and contain no tool calls');
@@ -62,15 +63,13 @@ export function fullHistoryContext(system = ''): ContextStrategy {
     return { async assemble(messages, signal, options) { signal.throwIfAborted(); return { system: options?.system ?? system, messages: structuredClone(messages) }; } };
 }
 
-export function budgetedContext(system: string, tokenBudget: number): ContextStrategy {
+export function budgetedContext(system: string, tokenBudget: number, policy: ContextCompositionOptions = {}): ContextStrategy {
     if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1) throw new RangeError('tokenBudget must be a positive safe integer');
-    const assembler = new AgentContextAssembler({ systemPrompt: system, tokenBudget });
     return { async assemble(messages, signal, options) {
         signal.throwIfAborted();
-        const input = [...messages].reverse().find(message => message.role === 'user')?.content ?? '';
-        const result = await assembler.assemble({ messages: structuredClone(messages), userInput: input, tokenBudget, signal, ...options });
+        const result = await composeAgentContext({ messages, system, tokenBudget, signal, ...options }, policy);
         signal.throwIfAborted();
-        return result;
+        return { system: result.system, messages: result.messages, report: { usage: result.usage, decisions: result.decisions } };
     } };
 }
 

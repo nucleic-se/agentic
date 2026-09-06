@@ -4,3 +4,8 @@ export { MemorySessionStore } from './stores.js';
 export { conversationalLoop, planningLoop, fullHistoryContext, budgetedContext, codingToolRuntime, defaultCodingPolicy } from './defaults.js';
 export { createDefaultAgent, defaultAgentExtensions } from './preset.js';
 export type { DefaultAgentOptions } from './preset.js';
+
+export type { HarnessClient, HarnessDriver, HarnessExtension, DriverComposition } from './composition.js';
+export { compositionFingerprint } from './composition.js';
+export { createHarnessExecution } from './execution.js';
+export type { HarnessExecution, HarnessExecutionRoles, HarnessModelOptions } from './execution.js';

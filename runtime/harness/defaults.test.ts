@@ -39,6 +39,15 @@ function response(content: string, tool = false): TurnResponse {
 }
 
 describe('default harness strategies', () => {
+    it('reserves the configured output cap in both planning and conversation requests', async () => {
+        const run = setup([response('Plan'), response('Answer')]);
+        await planningLoop({ maxTokens: 128 }).run(run.services);
+        expect(run.requests.map(request => request.maxTokens)).toEqual([128, 128]);
+        const context = await budgetedContext('system', 1000).assemble(run.requests[0].messages, run.services.signal,
+            { tools: run.requests[0].tools, system: run.requests[0].system, reservedOutputTokens: run.requests[0].maxTokens });
+        expect(context.report?.usage.reservedOutputTokens).toBe(128);
+        expect(() => conversationalLoop({ maxTokens: 0 })).toThrow('maxTokens');
+    });
     it('planning makes two model operations before executing tools, with no planning tools', async () => {
         const run = setup([response('Plan: inspect then answer'), response('', true), response('Answer')]);
         await planningLoop().run(run.services);

@@ -3,3 +3,5 @@ export { assertProviderConformance } from './provider.js';
 export type { ProviderScenario, ProviderScenarioFixture, ProviderScenarioFactory, ConformanceReport } from './provider.js';
 export { assertSessionStoreConformance } from './store.js';
 export type { SessionStoreFixture, SessionStoreFactory } from './store.js';
+export { assertHarnessBoundaryConformance } from './harness.js';
+export type { HarnessBoundaryFixture, HarnessBoundaryFactory } from './harness.js';
