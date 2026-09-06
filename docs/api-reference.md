@@ -353,16 +353,21 @@ interface ToolCallOptions {
 | `WebToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
 | `SkillToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
 
-`FsToolRuntime.fs_read` reads regular files only. Full reads and encoded output
-are capped at 256 KiB. UTF-8 line ranges scan incrementally and return complete
-numbered lines within that ceiling; truncated output names the next `offset`
+`FsToolRuntime.fs_read` reads regular files only, with a 256 KiB output ceiling.
+UTF-8 reads default to 200 numbered lines starting at line 1. Use search to locate
+relevant code, then `offset` and `limit` to read it; larger ranges require an
+explicit `limit`. All UTF-8 reads scan incrementally and return complete numbered
+lines within that ceiling; truncated output names the next `offset`
 and includes `data.nextOffset`. A single line that cannot fit is rejected
 explicitly. `data.totalLines` is present only when the scan reaches EOF. Base64
 is supported for full reads, not line ranges. Reads check cancellation between
-asynchronous chunks.
+asynchronous chunks. The default coding extension is version 3: UTF-8 reads
+without range arguments now return numbered pages instead of whole-file text.
+Older persisted sessions require their original composition.
 
-`SearchToolRuntime` canonicalizes search paths against its root, so a symlink
-cannot point a search outside that root. Each call owns a worker, allowing
+`SearchToolRuntime` accepts an explicit file or directory path in every output
+mode, applies include filters to either, and canonicalizes paths against its root.
+A symlink cannot point a search outside that root. Each call owns a worker, allowing
 cancellation to stop regex evaluation and traversal. Without cancellation, a
 30-second deadline still applies. The worker is terminated before the result
 returns. Content and file-count results are bounded; `count` mode considers at

@@ -14,7 +14,7 @@ const DEFINITIONS: ToolDefinition[] = [
             required: ['pattern'],
             properties: {
                 pattern:        { type: 'string', description: 'Regex or literal string to search for.' },
-                path:           { type: 'string', description: 'Subdirectory to search in (relative to root). Default: root.' },
+                path:           { type: 'string', description: 'File or directory to search (relative to root). Default: root.' },
                 include:        { type: 'string', description: 'Glob pattern to filter files (e.g. "*.ts", "**/*.md"). Default: all files.' },
                 case_sensitive: { type: 'boolean', description: 'Case-sensitive match. Default: false.' },
                 literal:        { type: 'boolean', description: 'Treat pattern as literal string, not regex. Default: false.' },
@@ -32,7 +32,7 @@ const DEFINITIONS: ToolDefinition[] = [
             required: ['pattern'],
             properties: {
                 pattern: { type: 'string', description: 'Glob pattern (e.g. "**/*.md", "src/*.ts").' },
-                path:    { type: 'string', description: 'Subdirectory to search in. Default: root.' },
+                path:    { type: 'string', description: 'File or directory to search. Default: root.' },
             },
         },
     },

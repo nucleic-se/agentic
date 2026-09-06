@@ -38,6 +38,11 @@ function matchesGlob(filename: string, pattern: string): boolean {
 }
 
 function* walkFiles(dir: string, root: string, include?: string): Generator<string> {
+    // Explicit file paths are as useful as directory roots for focused inspection.
+    if (fs.statSync(dir).isFile()) {
+        if (!include || matchesGlob(path.relative(root, dir), include) || matchesGlob(path.basename(dir), include)) yield dir
+        return
+    }
     let entries: fs.Dirent[]
     try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
 

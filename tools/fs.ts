@@ -64,7 +64,7 @@ function isProtectedSystemWrite(root: string, abs: string): boolean {
 const DEFINITIONS: ToolDefinition[] = [
     {
         name:        'fs_read',
-        description: 'Read a regular file, with a 256 KiB output ceiling. UTF-8 offset/limit selects lines incrementally; truncated ranges include nextOffset. A single oversized line is rejected. totalLines is available only after EOF.',
+        description: 'Read a regular file, with a 256 KiB output ceiling. UTF-8 reads return numbered lines, defaulting to 200 lines. Use search_grep to locate relevant code, then offset/limit for focused reads; truncated ranges include nextOffset. A single oversized line is rejected. totalLines is available only after EOF.',
         parameters: {
             type: 'object',
             required: ['path'],
@@ -72,7 +72,7 @@ const DEFINITIONS: ToolDefinition[] = [
                 path:     { type: 'string', description: 'File path (relative to working root or absolute).' },
                 encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Encoding. Default: utf8.' },
                 offset:   { type: 'integer', description: 'Start reading from this line number (1-based). Default: 1.' },
-                limit:    { type: 'integer', description: 'Maximum number of lines to return. Default: all lines.' },
+                limit:    { type: 'integer', description: 'Maximum number of lines to return. Default: 200; request a larger range explicitly when needed.' },
             },
         },
     },
@@ -158,7 +158,7 @@ async function handleRead(root: string, args: Record<string, unknown>, options?:
     if (!withinRoot(root, abs)) return fail(`Path escapes working root: ${filePath}`)
     const hasLineRange = args.offset !== undefined || args.limit !== undefined
     const offset = args.offset === undefined ? 1 : args.offset
-    const limit = args.limit === undefined ? Number.MAX_SAFE_INTEGER : args.limit
+    const limit = args.limit === undefined ? 200 : args.limit
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 1 ||
         typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1) return fail('offset and limit must be positive safe integers')
     const encoding = args.encoding ?? 'utf8'
@@ -172,7 +172,7 @@ async function handleRead(root: string, args: Record<string, unknown>, options?:
         const stat = await file.stat()
         if (!stat.isFile()) return fail('Not a regular file')
         const buffer = Buffer.alloc(8192)
-        if (!hasLineRange) {
+        if (encoding === 'base64') {
             if (stat.size > MAX_READ_BYTES) return fail(`File too large: ${stat.size} bytes (max ${MAX_READ_BYTES}). Use offset/limit to read a line range.`)
             const chunks: Buffer[] = []
             let bytes = 0

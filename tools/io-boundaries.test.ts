@@ -111,3 +111,45 @@ it('runs the search worker from a module-eval parent process', async () => {
     expect(result.error).toBeUndefined()
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: true })
 })
+
+
+it('pages default UTF-8 reads and reconstructs every line through continuation offsets', async () => {
+    const lines = Array.from({ length: 451 }, (_, i) => `line-${i + 1}-🙂`)
+    await writeFile(join(root, 'paged'), lines.join('\n'))
+    const runtime = codingToolRuntime(root)
+    const restored: string[] = []
+    let offset: number | undefined
+    for (let page = 0; page < 3; page++) {
+        const result = await runtime.call('fs_read', { path: 'paged', ...(offset ? { offset } : {}) })
+        expect(result.ok).toBe(true)
+        const data = result.data as { linesReturned: number; truncated: boolean; nextOffset?: number }
+        expect(data.linesReturned).toBe(page < 2 ? 200 : 51)
+        restored.push(...result.content.split('\n').filter(line => !line.startsWith('[truncated;')).map(line => line.replace(/^\d+: /, '')))
+        expect(data.truncated).toBe(page < 2)
+        offset = data.nextOffset
+    }
+    expect(offset).toBeUndefined()
+    expect(restored).toEqual(lines)
+    expect(await runtime.call('fs_read', { path: 'paged', limit: 500 })).toMatchObject({ ok: true, data: { linesReturned: 451, truncated: false } })
+})
+
+it('keeps base64 reads exact and independent of the default text page size', async () => {
+    const bytes = Buffer.from(Array.from({ length: 1024 }, (_, i) => i % 256))
+    await writeFile(join(root, 'binary'), bytes)
+    expect(await new FsToolRuntime(root).call('fs_read', { path: 'binary', encoding: 'base64' })).toMatchObject({ ok: true, content: bytes.toString('base64') })
+})
+
+
+it('searches an explicit file in every output mode, respecting include filters and confinement', async () => {
+    await writeFile(join(root, 'selected.ts'), 'before\nhit\nhit\nafter')
+    await writeFile(join(root, 'other.ts'), 'hit')
+    const runtime = new SearchToolRuntime(root)
+    expect(await runtime.call('search_grep', { path: 'selected.ts', pattern: 'hit', context_lines: 1 })).toMatchObject({ ok: true, data: { count: 2 } })
+    expect(await runtime.call('search_grep', { path: 'selected.ts', pattern: 'hit', output: 'count' })).toMatchObject({ ok: true, data: { fileCount: 1, totalMatches: 2 } })
+    expect(await runtime.call('search_grep', { path: 'selected.ts', pattern: 'hit', output: 'files_only', include: '*.ts' })).toMatchObject({ ok: true, content: 'selected.ts' })
+    expect(await runtime.call('search_grep', { path: 'selected.ts', pattern: 'hit', include: '*.md' })).toMatchObject({ ok: true, content: 'No matches found.' })
+    expect(await runtime.call('search_find', { path: 'selected.ts', pattern: '*.ts' })).toMatchObject({ ok: true, content: 'selected.ts' })
+    await writeFile(join(base, 'outside.ts'), 'hit')
+    await symlink(join(base, 'outside.ts'), join(root, 'escape.ts'))
+    expect((await runtime.call('search_grep', { path: 'escape.ts', pattern: 'hit' })).ok).toBe(false)
+})
