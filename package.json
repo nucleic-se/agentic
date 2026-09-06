@@ -82,6 +82,14 @@
     "./context": {
       "types": "./dist/runtime/context.d.ts",
       "import": "./dist/runtime/context.js"
+    },
+    "./testing": {
+      "types": "./dist/runtime/testing/index.d.ts",
+      "import": "./dist/runtime/testing/index.js"
+    },
+    "./evaluation": {
+      "types": "./dist/runtime/evaluation/context.d.ts",
+      "import": "./dist/runtime/evaluation/context.js"
     }
   },
   "files": [
@@ -96,7 +104,10 @@
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "agent": "node dist/demo/agent/main.js",
-    "agent:web": "node dist/demo/agent/main.js --web"
+    "agent:web": "node dist/demo/agent/main.js --web",
+    "test:reliability": "vitest run runtime/harness/crash-recovery.test.ts runtime/testing runtime/evaluation",
+    "eval:context": "npm run build && node dist/runtime/evaluation/context-cli.js",
+    "eval:live": "npm run build && node dist/runtime/evaluation/live-cli.js"
   },
   "engines": {
     "node": ">=20.18.1"

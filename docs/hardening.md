@@ -1,5 +1,11 @@
 # Hardening cycle — September 2026
 
+The subsequent [reliability evaluation cycle](reliability-evaluation.md) adds
+process-crash recovery checks, reusable adapter conformance checks, and context
+evaluation without changing production runtime behavior. Validation on September
+6: 467 tests pass; both live context tasks pass using subscription auth. The
+independent Gears example passes six tests and a live queued model request.
+
 The repository audit at `38d0241` produced 12 confirmed findings. The first
 remediation and hardening cycle fixes all 12 and adds integration regressions in
 `runtime/Hardening.test.ts`.
