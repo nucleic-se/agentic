@@ -106,6 +106,8 @@
     "agent": "node dist/demo/agent/main.js",
     "agent:web": "node dist/demo/agent/main.js --web",
     "test:reliability": "vitest run runtime/harness/crash-recovery.test.ts runtime/testing runtime/evaluation",
+    "eval:retention:live": "npm run build && node dist/runtime/evaluation/retention-live-cli.js",
+    "eval:retention": "npm run build && node dist/runtime/evaluation/retention-cli.js",
     "eval:context": "npm run build && node dist/runtime/evaluation/context-cli.js",
     "eval:live": "npm run build && node dist/runtime/evaluation/live-cli.js"
   },

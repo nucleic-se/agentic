@@ -194,3 +194,5 @@ export async function runContextEvaluation(
         thresholds: { constraintRetention: 1, evidenceRetention: 1, budgetOverrun: 0, failedChecks: 0 },
         passed: results.every(result => result.passed), cases: results };
 }
+
+export { runRetentionEvaluation } from './retention.js';

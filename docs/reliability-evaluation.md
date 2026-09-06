@@ -65,11 +65,43 @@ adapter contracts, not the upstream service's availability or behavior.
 `@nucleic-se/agentic/evaluation` exports `runContextEvaluation` and
 `contextEvaluationCases` for running the corpus against another context composer.
 
-## Independent runtime proof
+## Recoverable evidence evaluation
 
-Gears' separate `examples/agentic-harness` package composes the public context
-and execution primitives with its own queue, worker, scheduled-job registrar,
-and application-owned transactional journal. It does not use Agentic's bundled
-harness host. Gears remains an infrastructure library without an Agentic core
-dependency. The example handles one model turn per task; it is intentionally
-not yet a conversational, tool-using replacement for the shipped harness.
+```sh
+npm run eval:retention
+# Opt-in live model comparison using subscription auth and fixed synthetic evidence:
+npm run eval:retention:live
+```
+
+The deterministic comparison uses identical source history in three modes: full
+payloads, recoverable references, and no retrieval grant. Each runs at generous
+and constrained budgets. It checks immutable source data, tool pairs, valid visible
+references, grants and ceilings. `answerAvailable` is separate from `passed`:
+a baseline can respect its contracts while dropping the requested evidence.
+The recovery oracle follows the actual retained reference; it is not a model.
+`runRetentionEvaluation` is also exported from `@nucleic-se/agentic/evaluation`.
+
+The live comparison sends the same synthetic archive-code task through shared
+harness execution in full and recoverable modes. It permits at most four model
+calls per mode, validates retrieval indices, and has no workspace or write tools.
+Reports include exact intents/receipts, answer, retrieval count, usage and duration.
+The reference mode must actually retrieve the source before passing. Save stdout
+outside the repository when retaining run evidence. Model choice is controlled by
+`AGENTIC_EVAL_MODEL`, defaulting to `gpt-5.6-terra`.
+
+These tests distinguish request-size reduction from actual model behavior and
+end-to-end cost. A single fixed-order model comparison is not a performance study.
+The current fixture demonstrated a 5,382-to-1,967 estimated-token reduction;
+one live run answered correctly in both modes, using 2,748 input tokens in one
+full-context call versus 2,363 across two recovery calls. This is evidence for
+that fixture only, not a general efficiency claim.
+
+## Gears composition proof
+
+Gears' separate `examples/agentic-harness` package uses the shared Agentic harness
+composer, context and execution contracts with a Gears driver. Gears owns queue,
+worker, scheduler and transactional task storage; its core has no Agentic dependency.
+The standalone composition supports tools, children, scheduled continuation and
+inspection. Its full dogfood scenario uses fresh data and a forced checkpoint
+restart. The older one-turn example remains available separately. See the example's
+`README.md` and `VALIDATION.md` in the Gears repository for current behavior and limits.
