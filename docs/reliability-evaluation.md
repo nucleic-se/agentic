@@ -24,6 +24,7 @@ is deterministic: it does not measure live model task success.
 For a separate, opt-in model check using existing Codex subscription auth:
 
 ```sh
+# Defaults to gpt-5.6-terra for routine dogfooding
 npm run eval:live
 # Optional model override:
 AGENTIC_EVAL_MODEL=gpt-6-astra npm run eval:live

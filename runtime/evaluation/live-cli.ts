@@ -4,7 +4,7 @@ import { executeModelTurn } from '../ModelExecutor.js';
 import { composeAgentContext } from '../ContextPipeline.js';
 import { contextEvaluationCases } from './context.js';
 
-const model = process.env.AGENTIC_EVAL_MODEL ?? 'gpt-6-astra';
+const model = process.env.AGENTIC_EVAL_MODEL ?? 'gpt-5.6-terra';
 const provider = new CodexSubscriptionProvider({ model, reasoningEffort: 'low' });
 const results: unknown[] = [];
 let passed = true;
