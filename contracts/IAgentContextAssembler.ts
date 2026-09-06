@@ -33,7 +33,7 @@
  */
 
 import type { Message, ToolDefinition } from './llm.js'
-import type { PromptSection } from './IPromptEngine.js'
+import type { PromptSection, SystemSectionRange } from './IPromptEngine.js'
 
 // ── Input ─────────────────────────────────────────────────────────────────────
 
@@ -116,4 +116,9 @@ export interface ContextDecision {
     references?: Array<{ messageIndex: number; reference: string; originalCharacters: number; retainedCharacters: number }>;
 }
 
-export interface ContextReport { usage: ContextTokenUsage; decisions: ContextDecision[]; }
+export interface ContextReport {
+    usage: ContextTokenUsage;
+    decisions: ContextDecision[];
+    /** Exact selected system-section boundaries after rendering and compression. */
+    systemSections?: SystemSectionRange[];
+}

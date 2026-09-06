@@ -3,7 +3,7 @@ import { projectToolOutput } from './ToolOutput.js';
 export { projectToolOutput } from './ToolOutput.js';
 import type { Message, ToolDefinition, ToolResultMessage } from '../contracts/llm.js';
 import type { ITokenCounter } from '../contracts/ITokenCounter.js';
-import type { IPromptContributor, PromptContributionContext, PromptSection } from '../contracts/IPromptEngine.js';
+import type { IPromptContributor, PromptContributionContext, PromptSection, SystemSectionRange } from '../contracts/IPromptEngine.js';
 import { HeuristicTokenCounter } from './HeuristicTokenCounter.js';
 import { ContextBudgetExceededError, renderPromptSections, sectionPriority, sectionProtected, snapshotPromptSection } from './PromptEngine.js';
 
@@ -50,6 +50,7 @@ export interface ContextCompositionOptions extends ContextTokenOptions {
 export type { ContextTokenUsage, ContextDecision, ContextReport } from '../contracts/IAgentContextAssembler.js';
 import type { ContextTokenUsage, ContextDecision } from '../contracts/IAgentContextAssembler.js';
 export interface ContextCompositionResult {
+    systemSections: SystemSectionRange[];
     system: string;
     messages: Message[];
     includedSections: PromptSection[];
@@ -211,10 +212,21 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             .map(item => item.section);
         const rendered = renderPromptSections(keptSections);
         const finalSystem = [system, rendered.text].filter(Boolean).join('\n\n');
+        // Ranges describe actual output, never pre-selection or pre-compression text.
+        const systemSections: SystemSectionRange[] = [];
+        let end = 0;
+        if (system) { end = system.length; systemSections.push({ stability: 'retained', start: 0, end }); }
+        for (const section of rendered.included) {
+            const text = section.text();
+            if (!text) continue;
+            const start = end + (end ? 2 : 0);
+            end = start + text.length;
+            systemSections.push({ id: section.id, stability: section.stability ?? 'retained', start, end });
+        }
         const messages = candidates.filter((item): item is Candidate & { kind: 'messages' } => item.kind === 'messages' && item.action !== 'dropped' && (!protectedOnly || item.protected))
             .flatMap(item => item.group.messages);
         const usage = estimateContextTokens({ system: finalSystem, messages, tools, responseSchema, reservedOutputTokens: input.reservedOutputTokens }, tokenOptions);
-        return { system: finalSystem, messages, includedSections: rendered.included, usage };
+        return { system: finalSystem, systemSections, messages, includedSections: rendered.included, usage };
     };
     if (options.maxToolResultCharacters !== undefined) {
         integer(options.maxToolResultCharacters, 'maxToolResultCharacters', 1);

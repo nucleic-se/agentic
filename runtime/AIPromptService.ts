@@ -37,7 +37,7 @@ export class AIPromptBuilder<T = string> implements IAIPromptBuilder<T> {
     }
     context(text: string, options: PromptContextOptions = {}): IAIPromptBuilder<T> {
         this.sections.push({ id: options.id ?? `context:${this.sections.length}`, priority: options.priority ?? 0,
-            sticky: options.protected ?? false, text: () => text });
+            sticky: options.protected ?? false, stability: options.stability, text: () => text });
         return this;
     }
     contextGroup(id: string, members: readonly string[], options: Omit<PromptContextOptions, 'id'> = {}): IAIPromptBuilder<T> {
@@ -89,7 +89,7 @@ export class AIPromptBuilder<T = string> implements IAIPromptBuilder<T> {
             ...(budget ? { maxTokens: budget.output } : {}),
             ...(schema ? { schema } : {}),
         };
-        return { request, report: { usage: composed.usage, decisions: composed.decisions } };
+        return { request, report: { usage: composed.usage, decisions: composed.decisions, systemSections: composed.systemSections } };
     }
     async prepare(options?: ProviderCallOptions): Promise<PreparedPrompt> {
         const execution = executionSignal(options ?? {});

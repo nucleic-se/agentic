@@ -211,3 +211,44 @@ what message history the model sees.
 
 The two are composable: a `IAgentContextAssembler` implementation can use `IContextAssembler`
 internally to render its `system` string.
+## Stable and transient sections
+
+Builders accept a provider-neutral `stability` hint on `context` and
+`contextGroup`: `stable`, `retained` (the default), or `transient`.
+
+```ts
+const prepared = await prompts.use()
+  .context('Follow the task instructions and report evidence.', {
+    id: 'instructions', stability: 'stable', protected: true,
+  })
+  .context('Relevant facts selected for this turn.', {
+    id: 'evidence', stability: 'retained', priority: 20,
+  })
+  .context('Remaining task calls: 8', {
+    id: 'resources', stability: 'transient', protected: true,
+  })
+  .user('Continue the task.')
+  .prepare();
+```
+
+Selection still uses priority and protection. Stability neither protects content
+nor freezes it across turns. Rendering groups selected sections by stability,
+then phase. Stable sections use ID ordering within a phase so changing scores
+cannot shuffle them; other sections retain score ordering. Existing unannotated
+sections keep their previous ordering. Base `.system()` text still precedes all
+sections and is conservatively reported as retained; use an explicit stable
+section when its lifetime is known. Conversation messages keep their original
+order and are not rearranged by these hints. Transient system sections are still
+part of the system string, not automatically moved after conversation history.
+
+`prepared.report.systemSections` contains each selected nonempty section's ID,
+stability, and half-open UTF-16 `start`/`end` offsets into
+`prepared.request.system`. Base system text has no section ID. Separators are
+excluded; ranges are rebuilt after selection and compression. Atomic context
+groups expose one range. The same report is available from the conversation
+assembler and default budgeted harness context, so snapshots can inspect it.
+
+These are composition boundaries, not cache keys or cache-hit guarantees.
+Existing providers receive ordinary strings and messages. Future adapter code
+can consume the prepared report to choose supported cache controls; no OpenAI,
+Anthropic, or other vendor's wire fields belong in this builder metadata.

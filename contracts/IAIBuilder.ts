@@ -3,11 +3,13 @@ import type { z } from 'zod';
 import type { ModelTier, ProviderCallOptions, StructuredRequest, TurnRequest } from './llm.js';
 import type { ITokenCounter } from './ITokenCounter.js';
 import type { ContextReport } from './IAgentContextAssembler.js';
+import type { ContextStability } from './IPromptEngine.js';
 
 export interface PromptContextOptions {
     id?: string;
     priority?: number;
     protected?: boolean;
+    stability?: ContextStability;
 }
 export interface PromptBudget {
     total: number;

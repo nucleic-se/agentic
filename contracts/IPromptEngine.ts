@@ -9,14 +9,25 @@ import type { ITokenCounter } from './ITokenCounter.js';
 import type { MessageProvenance } from './llm.js';
 
 export type PromptSectionTag = string;
+/** Expected lifetime, not priority, protection, or a cache guarantee. */
+export type ContextStability = 'stable' | 'retained' | 'transient';
+
+export interface SystemSectionRange {
+    /** Absent for the base system instructions. */
+    id?: string;
+    stability: ContextStability;
+    /** Half-open UTF-16 offsets into the final system string, excluding separators. */
+    start: number;
+    end: number;
+}
 
 /**
  * Structural position in the assembled prompt.
- * Sections are grouped by phase (in the order below),
- * then ranked by score within each phase.
+ * Within each stability group, sections are grouped by phase (in the order below),
+ * then ordered by ID for stable sections or score for other sections.
  */
 export type PromptSectionPhase =
-    | 'constraint'    // system rules, safety — always first, always sticky
+    | 'constraint'    // system rules, safety — first within stability group, always sticky
     | 'task'          // current objective framing
     | 'memory'        // retrieved memory items
     | 'tools'         // tool catalog / available actions
@@ -26,6 +37,8 @@ export type PromptSectionPhase =
 export interface PromptSection {
     /** Unique section identifier */
     id: string;
+    /** Rendering group: stable first, retained (default), then transient. */
+    stability?: ContextStability;
 
     /** Attribution survives context selection and compression. */
     provenance?: MessageProvenance;
@@ -56,8 +69,8 @@ export interface PromptSection {
 
     /**
      * Structural position in the assembled prompt.
-     * Sections are grouped by phase (in the order above),
-     * then ranked by score within each phase.
+     * Sections are grouped by stability, then phase (in the order above).
+     * Stable sections use ID ordering within a phase; other sections rank by score.
      * Defaults to 'task' when omitted for backward compatibility.
      */
     phase?: PromptSectionPhase;
@@ -97,7 +110,7 @@ export interface IPromptEngine {
      * Scoring: one priority; deprecated weight fields are normalized for compatibility
      * Sticky and constraint sections are required; an oversized required set throws.
      * Non-sticky sections are ranked by score desc, then stable id.
-     * Selection is global by priority; phase controls rendering only.
+     * Selection is global by priority; stability and phase control rendering only.
      * Dropped sections are passed to options.onDrop if provided.
      */
     compose(sections: PromptSection[], tokenBudget: number, options?: PromptComposeOptions): PromptComposeResult;

@@ -47,6 +47,6 @@ export class AgentContextAssembler implements IAgentContextAssembler {
             compressSection: this.config.compressSection,
             onDrop: this.config.onDrop,
         });
-        return { system: result.system, messages: result.messages, report: { usage: result.usage, decisions: result.decisions } };
+        return { system: result.system, messages: result.messages, report: { usage: result.usage, decisions: result.decisions, systemSections: result.systemSections } };
     }
 }

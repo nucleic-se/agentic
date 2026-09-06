@@ -8,6 +8,8 @@
 export type {
     PromptSection,
     PromptSectionTag,
+    ContextStability,
+    SystemSectionRange,
     PromptSectionPhase,
     PromptComposeResult,
     PromptComposeOptions,

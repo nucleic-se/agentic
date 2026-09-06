@@ -8,6 +8,7 @@ export class ContextBudgetExceededError extends Error {
     }
 }
 const phases: PromptSectionPhase[] = ['constraint', 'task', 'memory', 'tools', 'history', 'user'];
+const stabilities = ['stable', 'retained', 'transient'];
 /** Legacy multipliers are normalized at the boundary; new callers supply priority only. */
 export function sectionPriority(section: PromptSection): number {
     const priority = section.priority * (section.weight ?? 1) * (section.contextMultiplier ?? 1);
@@ -19,6 +20,7 @@ export function sectionProtected(section: PromptSection): boolean {
 }
 export function snapshotPromptSection(section: PromptSection): PromptSection {
     sectionPriority(section);
+    if (section.stability !== undefined && !stabilities.includes(section.stability)) throw new TypeError(`Invalid stability for section ${section.id}`);
     const text = section.text();
     if (typeof text !== 'string') throw new TypeError(`Prompt section ${section.id} did not render text`);
     return { ...section, tags: [...(section.tags ?? [])], text: () => text };
@@ -26,7 +28,10 @@ export function snapshotPromptSection(section: PromptSection): PromptSection {
 /** Placement is independent of protection and selection priority. */
 export function renderPromptSections(sections: readonly PromptSection[]): { text: string; included: PromptSection[] } {
     const phase = (s: PromptSection) => (phases.includes(s.phase as PromptSectionPhase) ? phases.indexOf(s.phase!) : phases.indexOf('task'));
-    const included = [...sections].sort((a, b) => phase(a) - phase(b) || sectionPriority(b) - sectionPriority(a) || a.id.localeCompare(b.id));
+    const stability = (s: PromptSection) => stabilities.indexOf(s.stability ?? 'retained');
+    const included = [...sections].sort((a, b) => stability(a) - stability(b) || phase(a) - phase(b) ||
+        // Stable material must not shuffle when relevance scores change.
+        (a.stability === 'stable' ? 0 : sectionPriority(b) - sectionPriority(a)) || a.id.localeCompare(b.id));
     return { text: included.map(s => s.text()).filter(Boolean).join('\n\n'), included };
 }
 /** Select globally by priority, then render by phase, charging the rendered system message. */

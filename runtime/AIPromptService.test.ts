@@ -8,6 +8,22 @@ function provider(turn: ILLMProvider['turn']): ILLMProvider {
 }
 
 describe('fluent composition through shared model execution', () => {
+    it('exposes stability boundaries while sending ordinary portable requests', async () => {
+        const turn = vi.fn<ILLMProvider['turn']>(async () => answer('ok'));
+        const builder = new AIPromptService(provider(turn)).use()
+            .context('remaining: 4', { id: 'state', stability: 'transient', priority: 100 })
+            .contextGroup('instructions', ['Be accurate.', 'Cite evidence.'], { stability: 'stable', protected: true })
+            .context('a fact', { id: 'evidence' }).user('Proceed');
+        const prepared = await builder.prepare();
+        expect(prepared.report.systemSections?.map(range => ({ id: range.id, text: prepared.request.system!.slice(range.start, range.end) }))).toEqual([
+            { id: 'instructions', text: 'Be accurate.\n\nCite evidence.' }, { id: 'evidence', text: 'a fact' }, { id: 'state', text: 'remaining: 4' },
+        ]);
+        expect(await builder.run()).toBe('ok');
+        expect(turn.mock.calls[0][0]).toEqual(prepared.request);
+        expect(Object.keys(prepared.request).sort()).toEqual(['messages', 'system']);
+        const structured = await builder.schema({ type: 'object' }).prepare();
+        expect(structured.report.systemSections).toEqual(prepared.report.systemSections);
+    });
     it('routes tier requests instead of silently using the default model', async () => {
         const fallback = provider(vi.fn(async () => answer('default')));
         const selected = provider(vi.fn(async () => answer('selected')));

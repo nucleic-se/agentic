@@ -18,6 +18,29 @@ const counter: ITokenCounter = {
 const tools: ToolDefinition[] = [{ name: 'inspect', description: 'Inspect a workspace', parameters: { type: 'object', properties: { path: { type: 'string' } } } }];
 
 describe('composable context primitives', () => {
+    it('preserves stable ordering independently of priority and reports exact Unicode ranges', async () => {
+        const input = [section('state', 'budget 10', 100, { stability: 'transient' }),
+            section('z', 'second 🌱', 99, { stability: 'stable' }),
+            section('a', 'first', 1, { stability: 'stable' }), section('evidence', 'retained')];
+        const first = await composeAgentContext({ system: 'base', sections: input, messages: [], tokenBudget: 1000 });
+        input[1].priority = 0; input[2].priority = 1000; input[0].text = () => 'budget 9';
+        const next = await composeAgentContext({ system: 'base', sections: input.reverse(), messages: [], tokenBudget: 1000 });
+        expect(first.system).toBe('base\n\nfirst\n\nsecond 🌱\n\nretained\n\nbudget 10');
+        expect(next.system).toBe(first.system.replace('budget 10', 'budget 9'));
+        expect(first.systemSections.map(s => first.system.slice(s.start, s.end))).toEqual(['base', 'first', 'second 🌱', 'retained', 'budget 10']);
+        expect(first.systemSections.map(s => s.stability)).toEqual(['retained', 'stable', 'stable', 'retained', 'transient']);
+    });
+    it('does not protect stable sections and rebuilds ranges after dropping and compression', async () => {
+        const sections = [section('optional', 'x'.repeat(100), 0, { stability: 'stable' }),
+            section('state', 'y'.repeat(100), 10, { stability: 'transient' })];
+        const result = await composeAgentContext({ sections, messages: [], tokenBudget: 12 }, {
+            tokenCounter: counter, compressSection: s => s.id === 'state' ? '🌱' : null,
+        });
+        expect(result.system).toBe('🌱');
+        expect(result.systemSections).toEqual([{ id: 'state', stability: 'transient', start: 0, end: 2 }]);
+        expect(result.decisions.find(s => s.id === 'optional')).toMatchObject({ action: 'dropped', protected: false });
+        expect(sections[1].text()).toBe('y'.repeat(100));
+    });
     it('adds predicate protection without revoking explicit sticky messages', async () => {
         const messages: Message[] = [
             { role: 'user', content: 'objective', sticky: true },
