@@ -464,3 +464,27 @@ history. The next request projects fresh state. This keeps stable instructions
 and available history reusable as a prefix, without promising provider cache hits.
 The default Agentic agent already keeps its configured system instruction stable;
 it does not need Gears task-tree fields or a parallel implementation of them.
+
+### Recoverable tool evidence
+
+`ContextCompositionOptions.referenceToolResult(message, messageIndex, tools)` is
+an optional host policy. Return a retrieval instruction only when the original
+text is durably available and the current task can retrieve it; otherwise return
+`null`. The callback receives isolated snapshots. Hosts own reference validity
+and must preserve the source behind it across later projections and restarts.
+
+Before budget pressure, the pipeline replaces eligible older tool-result text
+longer than 1,200 characters with a 400-character preview and that reference,
+only when doing so reduces estimated tokens. Protected/recent groups, error
+results and native content blocks are excluded. Tool-call identities and grouping
+remain unchanged; original history is never mutated. Selection reports include
+source indices, retrieval instructions and original/retained character counts.
+A later pressure compressor cannot erase the reference. The existing whole-group
+drop policy still applies if the request remains too large.
+
+When this policy is configured, implicit lossy text truncation is disabled;
+callers may still explicitly supply a compressor for unreferenced messages.
+This is deterministic retention, not a semantic summary or automatic relevance
+search. The default Agentic composition does not enable it without a retrieval
+implementation. Gears supplies its own-task `read_tool_result` capability backed
+by existing durable conversation storage; no second memory database is added.

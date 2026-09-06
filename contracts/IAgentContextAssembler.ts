@@ -113,6 +113,7 @@ export interface ContextDecision {
     action: 'kept' | 'compressed' | 'dropped';
     score: number;
     protected: boolean;
+    references?: Array<{ messageIndex: number; reference: string; originalCharacters: number; retainedCharacters: number }>;
 }
 
 export interface ContextReport { usage: ContextTokenUsage; decisions: ContextDecision[]; }

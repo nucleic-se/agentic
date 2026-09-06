@@ -28,6 +28,10 @@ export interface ContextTokenOptions {
 }
 export interface ContextCompositionOptions extends ContextTokenOptions {
     minRecentGroups?: number;
+    /** Opt-in retention: return an exact-source retrieval instruction for an older text result.
+     * Return null when the source cannot be recovered with the current tool grants.
+     * The host must preserve the original message at this index. */
+    referenceToolResult?(message: ToolResultMessage, messageIndex: number, tools: readonly ToolDefinition[]): string | null;
     scoreGroup?(messages: readonly Message[], groupIndex: number): number;
     protectMessage?(message: Message, messageIndex: number): boolean;
     compressMessage?(message: Message): Promise<Message | null> | Message | null;
@@ -179,7 +183,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     }
     const messageGroups = groups(input.messages);
     type Item = { kind: 'messages'; group: Group; } | { kind: 'section'; section: PromptSection; };
-    type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; order: number };
+    type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; references?: ContextDecision['references']; order: number };
     const candidates: Candidate[] = sections.map((section, index) => ({ kind: 'section', section, id: section.id,
         score: sectionPriority(section),
         protected: sectionProtected(section), action: 'kept', order: index }));
@@ -193,6 +197,24 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             protected: group.unbound || sticky || score === Infinity || index >= messageGroups.length - recent,
             action: 'kept', order: sections.length + index });
     });
+    // Retain source identity and tool pairs; replace only old, recoverable text payloads.
+    if (options.referenceToolResult) for (const item of candidates) {
+        if (item.kind !== 'messages' || item.protected) continue;
+        item.group.messages = item.group.messages.map((message, offset) => {
+            if (message.role !== 'tool_result' || message.isError || message.contentBlocks?.length || message.content.length <= 1200) return message;
+            const messageIndex = item.group.firstIndex + offset;
+            const reference = options.referenceToolResult!(structuredClone(message), messageIndex, structuredClone(tools));
+            if (reference === null) return message;
+            if (typeof reference !== 'string' || !reference.trim()) throw new ContextCompressionError('Tool result reference must be nonempty text or null');
+            const content = `[Earlier tool result; exact saved text: ${reference}]\nPreview (not the full result):\n${message.content.slice(0, 400)}`;
+            if (content.length >= message.content.length ||
+                estimateContextTokens({ messages: [{ ...message, content }] }, tokenOptions).totalTokens >=
+                estimateContextTokens({ messages: [message] }, tokenOptions).totalTokens) return message;
+            item.action = 'compressed';
+            (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
+            return { ...message, content };
+        });
+    }
     const render = (protectedOnly = false) => {
         const keptSections = candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action !== 'dropped' && (!protectedOnly || item.protected))
             .map(item => item.section);
@@ -212,8 +234,10 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         input.signal?.throwIfAborted();
         if (item.kind === 'messages') {
             const compressed: Message[] = [];
-            for (const message of item.group.messages) {
-                const replacement = await (options.compressMessage ?? compressToolResult)(structuredClone(message));
+            const compressMessage = options.compressMessage ?? (options.referenceToolResult ? () => null : compressToolResult);
+            for (const [offset, message] of item.group.messages.entries()) {
+                const referenced = item.references?.some(reference => reference.messageIndex === item.group.firstIndex + offset);
+                const replacement = referenced ? null : await compressMessage(structuredClone(message));
                 input.signal?.throwIfAborted();
                 if (replacement !== null && (!replacement || typeof replacement.content !== 'string' || !isDeepStrictEqual(protectedShape(message), protectedShape(replacement)))) {
                     throw new ContextCompressionError('Message compression may change text only; identity, provenance, protection, tool calls and media must remain unchanged');
@@ -251,5 +275,5 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     }
     return { ...result, messages: structuredClone(result.messages),
         excludedSections: candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action === 'dropped').map(item => item.section),
-        decisions: candidates.map(({ kind, id, score, protected: protectedItem, action }) => ({ kind, id, score, protected: protectedItem, action })) };
+        decisions: candidates.map(({ kind, id, score, protected: protectedItem, action, references }) => ({ kind, id, score, protected: protectedItem, action, ...(references ? { references } : {}) })) };
 }
