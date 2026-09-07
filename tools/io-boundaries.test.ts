@@ -12,6 +12,25 @@ let base: string, root: string
 beforeEach(async () => { base = await mkdtemp(join(tmpdir(), 'agentic-io-test-')); root = join(base, 'root'); await mkdir(root) })
 afterEach(async () => { await rm(base, { recursive: true, force: true }) })
 
+it('matches globstar directories at zero or multiple depths in find and grep', async () => {
+    await mkdir(join(root, 'src', 'nested'), { recursive: true })
+    const names = ['ledger-1.json', 'src/ledger-2.json', 'src/nested/ledger-3.json']
+    for (const name of names) await writeFile(join(root, name), 'evidence')
+    await writeFile(join(root, 'src', 'literal§§.json'), 'literal')
+    const search = new SearchToolRuntime(root)
+    for (const pattern of ['**/ledger-*.json', '**/ledger-?.json']) {
+        const found = await search.call('search_find', { pattern })
+        expect(found.content.split('\n').sort()).toEqual(names)
+        const matches = await search.call('search_grep', { pattern: 'evidence', include: pattern, output: 'files_only' })
+        expect(matches.content.split('\n').sort()).toEqual(names)
+    }
+    const nested = await search.call('search_find', { pattern: 'src/**/ledger-*.json' })
+    expect(nested.content.split('\n').sort()).toEqual(names.slice(1))
+    const shallow = await search.call('search_find', { pattern: 'src/ledger-*.json' })
+    expect(shallow.content).toBe('src/ledger-2.json')
+    expect((await search.call('search_find', { pattern: 'src/literal§§.json' })).content).toBe('src/literal§§.json')
+});
+
 it('returns complete coding read pages that survive context presentation unchanged', async () => {
     const source = Array.from({ length: 180 }, (_, index) => `const value${index} = "${'🌱quoted '.repeat(7)}";`)
     await writeFile(join(root, 'source.ts'), source.join('\n'))

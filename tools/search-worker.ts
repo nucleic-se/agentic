@@ -44,13 +44,15 @@ function withinRoot(root: string, abs: string): boolean {
 }
 
 function matchesGlob(filename: string, pattern: string): boolean {
-    // Simple glob: * matches any chars except /, ** matches anything
-    const regex = pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')   // escape regex specials except * and ?
-        .replace(/\*\*/g, '§§')                   // placeholder for **
-        .replace(/\*/g, '[^/]*')                  // * matches within segment
-        .replace(/\?/g, '[^/]')                   // ? matches one char
-        .replace(/§§/g, '.*')                     // ** matches across segments
+    // A globstar directory may match zero directories, including files at the root.
+    const segments = pattern.split('/')
+    const regex = segments.map((segment, index) => {
+        const last = index === segments.length - 1
+        if (segment === '**') return last ? '.*' : '(?:[^/]+/)*'
+        const part = segment.replace(/[.*+?^${}()|[\]\\]/g,
+            char => char === '*' ? '[^/]*' : char === '?' ? '[^/]' : `\\${char}`)
+        return part + (last ? '' : '/')
+    }).join('')
     return new RegExp(`^${regex}$`).test(filename)
 }
 
