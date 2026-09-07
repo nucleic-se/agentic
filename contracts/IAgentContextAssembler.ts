@@ -121,6 +121,8 @@ export interface ContextDecision {
 }
 
 export interface ContextReport {
+    /** Estimated complete context ceiling, including reserved output, when known. */
+    tokenBudget?: number;
     usage: ContextTokenUsage;
     decisions: ContextDecision[];
     /** Exact selected system-section boundaries after rendering and compression. */

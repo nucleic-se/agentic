@@ -193,3 +193,32 @@ it('does not mistake a presentation cap for history pressure when a section need
     expect(report.decisions.find(d => d.kind === 'messages' && d.action === 'compressed')).toMatchObject({ reason: 'presentation' });
     expect(checkpointBoundary(view, report)).toBeUndefined();
 });
+
+it('can checkpoint before compression using the context-owned ceiling, preserving the recent tail', async () => {
+    const { createHarnessExecution } = await import('./execution.js');
+    const { budgetedContext } = await import('./defaults.js');
+    const { prepareCheckpoint } = await import('./checkpoint.js');
+    const history: Message[] = Array.from({ length: 5 }, () => ({ role: 'assistant', content: 'x'.repeat(1000) }));
+    const execution = createHarnessExecution({ context: budgetedContext('', 2000, { minRecentGroups: 1 }),
+        provider: { turn: async () => { throw new Error('No dispatch while fitting'); }, structured: async () => { throw new Error('unused'); } } });
+    const view = checkpointView(history);
+    const task = await execution.prepareModel({ messages: view.messages, maxTokens: 100 });
+    expect(task.report?.tokenBudget).toBe(2000);
+    expect(task.report!.usage.totalTokens).toBeGreaterThanOrEqual(1300);
+    expect(task.report!.decisions.every(d => d.action === 'kept')).toBe(true);
+    expect(await prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100 })).toBeUndefined();
+    const selected = await prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100, triggerRatio: 0.65 });
+    expect(selected?.through).toBe(4);
+    const previous = { through: selected!.through, text: 'Earlier facts preserved.' };
+    const nextView = checkpointView(history, previous);
+    expect(nextView.messages.at(-1)).toEqual(history.at(-1));
+    const next = await execution.prepareModel({ messages: nextView.messages, maxTokens: 100 });
+    expect(await prepareCheckpoint(execution, history, nextView, next.report!, { previous, maxTokens: 100, triggerRatio: 0.65 })).toBeUndefined();
+
+    const { tokenBudget: _budget, ...unknownCeiling } = task.report!;
+    expect(await prepareCheckpoint(execution, history, view, unknownCeiling, { maxTokens: 100, triggerRatio: 0.65 })).toBeUndefined();
+    const protectedReport = { ...task.report!, decisions: task.report!.decisions.map(d => ({ ...d, protected: true })) };
+    expect(await prepareCheckpoint(execution, history, view, protectedReport, { maxTokens: 100, triggerRatio: 0.65 })).toBeUndefined();
+    for (const triggerRatio of [0, -1, NaN, Infinity, 1.01])
+        await expect(prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100, triggerRatio })).rejects.toThrow('triggerRatio');
+});

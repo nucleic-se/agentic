@@ -72,7 +72,7 @@ export function budgetedContext(system: string, tokenBudget: number, policy: Con
         signal.throwIfAborted();
         const result = await composeAgentContext({ messages, system, tokenBudget, signal, ...options }, { protectCurrentUserMessage: true, ...policy });
         signal.throwIfAborted();
-        return { system: result.system, messages: result.messages, report: { usage: result.usage, decisions: result.decisions, systemSections: result.systemSections } };
+        return { system: result.system, messages: result.messages, report: { tokenBudget: result.tokenBudget, usage: result.usage, decisions: result.decisions, systemSections: result.systemSections } };
     } };
 }
 

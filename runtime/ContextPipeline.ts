@@ -54,6 +54,7 @@ export interface ContextCompositionOptions extends ContextTokenOptions {
 export type { ContextTokenUsage, ContextDecision, ContextReport } from '../contracts/IAgentContextAssembler.js';
 import type { ContextTokenUsage, ContextDecision } from '../contracts/IAgentContextAssembler.js';
 export interface ContextCompositionResult {
+    tokenBudget: number;
     systemSections: SystemSectionRange[];
     system: string;
     messages: Message[];
@@ -343,7 +344,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         if (item.kind === 'messages') for (const message of item.group.messages) options.onDrop?.(structuredClone(message));
         else options.onDropSection?.(snapshotSection(item.section));
     }
-    return { ...result, messages: structuredClone(result.messages),
+    return { ...result, tokenBudget: budget, messages: structuredClone(result.messages),
         excludedSections: candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action === 'dropped').map(item => item.section),
         decisions: candidates.map(item => ({ kind: item.kind, id: item.id, score: item.score, protected: item.protected, action: item.action,
             ...(item.reason ? { reason: item.reason } : {}),

@@ -25,6 +25,7 @@ function validateReport(report: ContextReport | undefined, outputTokens: number)
     if (!report) return;
     const parts = ['systemTokens', 'messageTokens', 'toolTokens', 'schemaTokens', 'reservedOutputTokens'] as const;
     if (!report.usage || !Array.isArray(report.decisions) ||
+        (report.tokenBudget !== undefined && (!Number.isSafeInteger(report.tokenBudget) || report.tokenBudget < 1 || report.usage.totalTokens > report.tokenBudget)) ||
         [...parts, 'totalTokens' as const].some(key => !Number.isSafeInteger(report.usage[key]) || report.usage[key] < 0) ||
         report.usage.totalTokens !== parts.reduce((total, key) => total + report.usage[key], 0) ||
         report.usage.reservedOutputTokens < outputTokens) throw new Error('Context strategy returned inconsistent token accounting');

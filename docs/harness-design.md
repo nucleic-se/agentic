@@ -545,10 +545,15 @@ composition identity when upgrading from offsets into unprojected messages.
 
 Context decisions record whether a change was caused by `budget` pressure or an
 optional `presentation` cap.
-`prepareCheckpoint` starts when older, unprotected history is shortened under
+By default, `prepareCheckpoint` starts when older, unprotected history is shortened under
 that pressure or dropped. It does not wait for eviction after recoverable tool
-previews have already made the request fit. Fitting contexts and shortening
-confined to protected recent groups do not start maintenance.
+previews have already made the request fit.
+
+Hosts can set `triggerRatio` to start earlier, when estimated usage reaches that
+fraction of `ContextReport.tokenBudget`. The context strategy owns this ceiling,
+including reserved output; hosts need not guess it from a model name or duplicate
+context configuration. Without a reported ceiling, the pressure trigger remains
+available. Timing never makes protected recent groups eligible for summarization.
 
 `prepareCheckpoint` first fits whole source groups, retaining the protected recent
 tail, then uses bounded chunks if
@@ -576,7 +581,8 @@ policy explicitly before conversion and commit the resulting message with its
 receipt. Source retrieval may remain text-only; rich ordinary tool results are
 not silently flattened.
 
-The Gears composition drives automatic checkpoints. The local session driver
+The Gears composition drives automatic checkpoints at 80% of the reported ceiling,
+with pressure as a fallback. The local session driver
 continues to expose explicit maintenance; shared primitives do not require every
 composition to use the same policy. A protected instruction, prior summary or
 output reservation that alone exceeds the ceiling cannot be fixed by dropping

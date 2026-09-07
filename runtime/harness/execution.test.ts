@@ -34,6 +34,18 @@ it('rejects an independently constructed request before dispatch', async () => {
     expect(turn).not.toHaveBeenCalled();
 });
 
+it('rejects an invalid or exceeded reported ceiling before model dispatch', async () => {
+    const { turn } = fixture();
+    for (const tokenBudget of [0, NaN, 2]) {
+        const execution = createHarnessExecution({ provider: { turn, structured: async () => { throw new Error('unused'); } },
+            context: { assemble: async messages => ({ messages, report: { tokenBudget, decisions: [], usage: {
+                systemTokens: 0, messageTokens: 3, toolTokens: 0, schemaTokens: 0, reservedOutputTokens: 0, totalTokens: 3,
+            } } }) } });
+        await expect(execution.model({ messages: [{ role: 'user', content: 'task' }] })).rejects.toThrow('inconsistent token accounting');
+    }
+    expect(turn).not.toHaveBeenCalled();
+});
+
 it('binds accounting and dispatch to the same snapshot despite edits to inspection copies', async () => {
     const { execution, turn } = fixture();
     const prepared = await execution.prepareModel({ messages: [{ role: 'user', content: 'small' }] });

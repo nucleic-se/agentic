@@ -110,13 +110,19 @@ export function checkpointRequest(history: readonly Message[], through: number, 
 export async function prepareCheckpoint(
     execution: HarnessExecution,
     history: readonly Message[], view: CheckpointView, report: ContextReport,
-    configuration: { previous?: WorkingCheckpoint; notes?: string; maxTokens: number; cacheScope?: string },
+    configuration: { previous?: WorkingCheckpoint; notes?: string; maxTokens: number; cacheScope?: string;
+        /** Start before pressure at this fraction (0, 1] of the reported context ceiling.
+         * Without a reported ceiling, only pressure and partial progress trigger maintenance. */
+        triggerRatio?: number },
     options: ModelTurnOptions = {},
 ) {
     const start = sourceBoundary(history, configuration.previous);
     const boundaries = sourceBoundaries(view, report);
     const partial = configuration.previous?.partial;
-    if (!partial && !boundaries.some(boundary => boundary.reclaim && boundary.end > start)) return undefined;
+    const ratio = configuration.triggerRatio;
+    if (ratio !== undefined && (!Number.isFinite(ratio) || ratio <= 0 || ratio > 1)) throw new RangeError('Checkpoint triggerRatio must be greater than zero and no greater than one');
+    const due = ratio !== undefined && report.tokenBudget !== undefined && report.usage.totalTokens >= report.tokenBudget * ratio;
+    if (!partial && !due && !boundaries.some(boundary => boundary.reclaim && boundary.end > start)) return undefined;
     type Selection = { through: number; partial?: WorkingCheckpoint['partial']; sourceRange: CheckpointSourceRange; prepared: PreparedHarnessModel };
     const prepare = (request: ReturnType<typeof evidenceRequest>) => execution.prepareModel({
         ...request, maxTokens: configuration.maxTokens, cacheScope: configuration.cacheScope,
