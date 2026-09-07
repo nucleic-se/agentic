@@ -522,6 +522,13 @@ committed. These are separate facts when a process stops between dispatch and co
 
 ### Source views and maintenance
 
+`readArchivedToolResult(history, reference)` retrieves a text page by saved message
+index or tool-call ID. Each page returns both identifiers, the tool name, exact
+text and pagination offsets. The host supplies the authorized task archive; the
+primitive neither reruns tools nor searches other sessions. Ambiguous call IDs
+are rejected. This lets a summary retain a source index without also reproducing
+every metadata field from the original result.
+
 `checkpointView(history, checkpoint, transient)` derives the model-visible view
 and its source map together. Original messages remain in the host's append-only
 archive. Transient host state has no archive index. The latest human message stays

@@ -15,4 +15,4 @@ export type { HarnessSnapshot } from './inspection.js';
 
 export { checkpointView, checkpointBoundary, checkpointRequest, prepareCheckpoint, type WorkingCheckpoint, type CheckpointSourceRange } from './checkpoint.js';
 
-export { toToolResultMessage } from '../ToolOutput.js';
+export { toToolResultMessage, readArchivedToolResult } from '../ToolOutput.js';
