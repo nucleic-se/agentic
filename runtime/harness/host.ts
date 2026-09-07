@@ -134,8 +134,8 @@ class HarnessSessionClient implements SessionClient {
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
             onRequest: async request => { await this.change(id, 'model.request', () => {}, { operationId, request }); },
             onIntent: intent => this.change(id, 'model.intent', record => {
-                record.operations.push({ id: intent.operationId, runId, kind: 'model', status: 'intent', input: intent.request, createdAt: intent.startedAt, ...(report ? { contextReport: structuredClone(report) } : {}) });
-            }, { operationId, purpose: options.checkpoint ? 'checkpoint' : options.maintenance ? 'maintenance' : 'task', ...(options.checkpoint ? { sourceRange: options.checkpoint.sourceRange } : {}) }).then(() => undefined),
+                record.operations.push({ id: intent.operationId, runId, kind: 'model', status: 'intent', requestRef: { sessionId: id, sequence: record.revision + 1 }, createdAt: intent.startedAt });
+            }, { operationId, request: intent.request, ...(report ? { contextReport: report } : {}), purpose: options.checkpoint ? 'checkpoint' : options.maintenance ? 'maintenance' : 'task', ...(options.checkpoint ? { sourceRange: options.checkpoint.sourceRange } : {}) }).then(() => undefined),
             onOutcome: async outcome => {
                 const completed = outcome.outcome === 'completed' || outcome.outcome === 'partial';
                 const data: Record<string, unknown> = { operationId, outcome: outcome.outcome, dispatched: outcome.dispatched, durationMs: outcome.durationMs };

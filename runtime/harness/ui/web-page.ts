@@ -117,7 +117,23 @@ async function inspectSession(after = 0) {
   const panel = $('inspection-data'); panel.replaceChildren();
   function detail(label, value) { const row = text('details', ''); row.append(text('summary', label), text('pre', JSON.stringify(value, null, 2))); panel.append(row); }
   detail('Session state, queues, approvals and budgets', inspection.state);
-  for (const op of inspection.state.operations) detail(op.kind + ' · ' + op.status + ' · ' + op.id, op);
+  for (const op of inspection.state.operations) {
+    detail(op.kind + ' · ' + op.status + ' · ' + op.id, op);
+    if (op.requestRef) {
+      const button = text('button', 'Load exact request · ' + op.id);
+      const sessionId = inspectedSession, captured = inspection;
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          const saved = await api('sessions/' + encode(sessionId) + '/operations/' + encode(op.id));
+          if (inspection !== captured || inspectedSession !== sessionId) return;
+          (inspection.loadedOperations ??= []).push(saved);
+          detail('Exact recorded request · ' + op.id, saved);
+        } catch (e) { button.disabled = false; error(e); }
+      };
+      panel.append(button);
+    }
+  }
   for (const event of inspection.events) detail('#' + event.sequence + ' · ' + event.type, event);
   $('next-trace').disabled = inspection.nextSequence >= inspection.revision || inspection.events.length === 0;
 }

@@ -668,5 +668,13 @@ native vision understanding of image data encoded in checkpoint source JSON.
 Session list reads return `SessionSummary`: ID, title, status, revision and creation/
 update timestamps. Both stores project these fields; SQLite does so before returning
 rows to JavaScript. Use `get(id)` for a full session and paged events for its trace.
-This keeps list payloads independent of transcript size. Full-session state still
-retains operations and messages; compacting that active state is separate work.
+This keeps list payloads independent of transcript size. Full-session state retains messages, tool arguments/results and model outcomes.
+Model inputs and full context reports live in immutable `model.intent` events;
+active operations retain only a `{ sessionId, sequence }` request reference. The
+intent and reference commit together before provider dispatch. Forked operations
+retain references to their original session journal. `inspectOperation` resolves a
+single exact request and verifies its operation identity without assembling context
+or invoking the provider. The web inspector loads these requests on demand and
+includes loaded operations in its exported snapshot. Event history must remain
+available while operations reference it; this change does not introduce pruning.
+Whole-record writes and retained outcomes still grow with task history.

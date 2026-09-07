@@ -18,8 +18,10 @@ export interface Operation {
     dispatched?: boolean;
     name?: string;
     callId?: string;
-    contextReport?: ContextReport;
-    input: unknown;
+    /** Immutable model intent; inherited operations keep their source session on fork. */
+    requestRef?: { sessionId: string; sequence: number };
+    /** Tool arguments. Model requests are retrieved from requestRef. */
+    input?: unknown;
     output?: unknown;
     createdAt: number;
 }

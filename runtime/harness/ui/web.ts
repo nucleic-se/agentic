@@ -1,4 +1,4 @@
-import { inspectHarness } from '../inspection.js';
+import { inspectHarness, inspectOperation } from '../inspection.js';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Extension, SessionClient } from '../types.js';
@@ -103,6 +103,10 @@ export async function startWebUi(client: SessionClient, options: WebUiOptions): 
                     if (input.title !== undefined && typeof input.title !== 'string') throw new HttpError(400, 'Invalid title');
                     json(res, 201, await client.create(input.title as string | undefined)); return;
                 }
+            }
+            const operationRoute = /^\/api\/sessions\/([^/]+)\/operations\/([^/]+)$/.exec(url.pathname);
+            if (req.method === 'GET' && operationRoute) {
+                json(res, 200, await inspectOperation(client, decodeURIComponent(operationRoute[1]), decodeURIComponent(operationRoute[2]))); return;
             }
             const match = /^\/api\/sessions\/([^/]+)(?:\/(inspect|events|submit|cancel|approve|fork|resume))?$/.exec(url.pathname);
             if (!match) throw new HttpError(404, 'Route not found');

@@ -1,3 +1,4 @@
+import { inspectOperation } from './inspection.js';
 import { expect, it, vi } from 'vitest';
 import { createHarness } from './host.js';
 import { createHarnessExecution } from './execution.js';
@@ -34,7 +35,11 @@ it('journals a stable session cache scope across reopen and separates forks', as
         expect(intents).toHaveLength(2);
         const operations = (await second.get(session.id)).operations.filter(operation => operation.kind === 'model');
         expect(operations).toHaveLength(2);
-        for (const operation of operations) expect((operation.input as TurnRequest).cacheScope).toBe(requests[0].cacheScope);
+        for (const operation of operations) {
+            expect((await inspectOperation(second, fork.id, operation.id)).request)
+                .toEqual((await inspectOperation(second, session.id, operation.id)).request);
+        }
+        for (const operation of operations) expect((await inspectOperation(second, session.id, operation.id)).request?.cacheScope).toBe(requests[0].cacheScope);
     } finally { await second.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
@@ -172,8 +177,9 @@ it('inspects the exact admitted request during execution without rebuilding cont
         const snapshot = await inspectHarness(client, session.id);
         const op = snapshot.state.operations[0];
         expect(op.status).toBe('intent');
-        expect(op.input).toEqual(dispatched);
-        expect(op.contextReport?.usage.reservedOutputTokens).toBe(100);
+        expect(op.input).toBeUndefined();
+        expect((await inspectOperation(client, session.id, op.id)).request).toEqual(dispatched);
+        expect((await inspectOperation(client, session.id, op.id)).contextReport?.usage.reservedOutputTokens).toBe(100);
         expect(snapshot.events.every(event => event.sequence <= snapshot.revision)).toBe(true);
         await inspectHarness(client, session.id);
         expect(context.assemble).toHaveBeenCalledOnce();
@@ -181,7 +187,7 @@ it('inspects the exact admitted request during execution without rebuilding cont
         expect((await client.get(session.id)).messages).toHaveLength(1);
         release(); await client.wait(session.id);
         const finished = await inspectHarness(client, session.id);
-        expect(finished.state.operations[0].input).toEqual(dispatched);
+        expect((await inspectOperation(client, session.id, op.id)).request).toEqual(dispatched);
         expect(finished.state.operations[0].status).toBe('completed');
     } finally { release(); await client.close(); }
 });
@@ -214,4 +220,16 @@ it('disposes late activation resources and rejects composition when activation c
     expect(events).toEqual(['stop', 'dispose', 'late cleanup']);
     expect(lateCleanup).toHaveBeenCalledOnce();
     expect(laterActivation).not.toHaveBeenCalled();
+});
+
+it('rejects missing or mismatched request references without reconstructing context', async () => {
+    const operation = { id: 'model-1', runId: 'run', kind: 'model' as const, status: 'completed' as const, createdAt: 1,
+        requestRef: { sessionId: 'source-session', sequence: 42 } };
+    const get = vi.fn(async () => ({ operations: [operation] }) as import('./types.js').SessionRecord);
+    const events = vi.fn(async () => [] as import('./types.js').SessionEvent[]);
+    await expect(inspectOperation({ get, events }, 'fork', 'model-1')).rejects.toThrow('missing or mismatched');
+    expect(events).toHaveBeenCalledWith('source-session', 41, 1);
+    events.mockResolvedValue([{ schemaVersion: 1, id: 'event', sessionId: 'source-session', sequence: 42, type: 'model.intent', timestamp: 1,
+        data: { operationId: 'other-model', request: { messages: [] } } }]);
+    await expect(inspectOperation({ get, events }, 'fork', 'model-1')).rejects.toThrow('missing or mismatched');
 });

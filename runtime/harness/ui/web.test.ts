@@ -50,6 +50,20 @@ describe('web UI adapter',()=>{
         expect((await s.request('/api/login',{token:TOKEN},{'Content-Type':'application/json-unsupported'})).status).toBe(415);
         expect(s.client.submit).not.toHaveBeenCalled();
     });
+    it('loads an exact model request by its recorded operation reference', async () => {
+        const s = await setup();
+        const record = await s.client.get('session-1');
+        record.operations = [{ id: 'model-1', runId: 'run-1', kind: 'model', status: 'intent', createdAt: 1,
+            requestRef: { sessionId: 'session-1', sequence: 1 } }];
+        const request = { system: 'Exact system', messages: [{ role: 'user', content: 'Exact objective' }] };
+        vi.mocked(s.client.events).mockResolvedValue([{ schemaVersion: 1, id: 'event-1', sequence: 1,
+            sessionId: 'session-1', type: 'model.intent', timestamp: 1, data: { operationId: 'model-1', request } }]);
+        const response = await s.request('/api/sessions/session-1/operations/model-1', undefined, { Cookie: s.cookie });
+        expect(response.status).toBe(200);
+        expect((await response.json()).request).toEqual(request);
+        expect(s.client.events).toHaveBeenCalledWith('session-1', 0, 1);
+        expect(s.client.submit).not.toHaveBeenCalled();
+    });
     it('routes session commands through the shared client',async()=>{
         const s = await setup(); const h = {Cookie:s.cookie,Origin:s.url};
         expect((await s.request('/api/sessions',{title:'Build a thing'},h)).status).toBe(201);

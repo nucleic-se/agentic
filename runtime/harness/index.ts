@@ -10,7 +10,7 @@ export { compositionFingerprint } from './composition.js';
 export { createHarnessExecution } from './execution.js';
 export type { HarnessExecution, HarnessExecutionRoles, HarnessModelOptions, HarnessPreparationOptions, PreparedHarnessModel } from './execution.js';
 
-export { inspectHarness } from './inspection.js';
+export { inspectHarness, inspectOperation } from './inspection.js';
 export type { HarnessSnapshot } from './inspection.js';
 
 export { checkpointFromResponse, CHECKPOINT_MAX_CHARACTERS, type CheckpointRejection, checkpointView, checkpointBoundary, checkpointRequest, prepareCheckpoint, type WorkingCheckpoint, type CheckpointSourceRange } from './checkpoint.js';

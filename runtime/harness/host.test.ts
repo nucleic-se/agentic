@@ -1,3 +1,4 @@
+import { inspectOperation } from './inspection.js';
 import { describe, it, expect, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { createHarness } from './host.js';
@@ -255,7 +256,7 @@ describe('approved architectural guarantees', () => {
         try {
             const session = await client.create(); await client.submit(session.id, 'go', { commandId: 'report' });
             const record = await client.wait(session.id);
-            expect(record.operations[0].contextReport?.usage.totalTokens).toBeGreaterThan(0);
+            expect((await inspectOperation(client, record.id, record.operations[0].id)).contextReport?.usage.totalTokens).toBeGreaterThan(0);
             const request = vi.mocked(config.provider.turn).mock.calls[0][0];
             expect(request).not.toHaveProperty('report');
         } finally { await client.close(); }
