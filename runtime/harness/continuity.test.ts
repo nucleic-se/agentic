@@ -8,11 +8,11 @@ import type { TurnRequest } from '../../contracts/llm.js';
 
 const clients: SessionClient[] = [];
 afterEach(async () => { for (const client of clients.splice(0)) await client.close(); });
-async function setup(turn: (request: TurnRequest) => string, maxModelCalls = 20, lifecycle: ContextLifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 })) {
+async function setup(turn: (request: TurnRequest) => string, maxModelCalls = 20, lifecycle: ContextLifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 }), system = 'Complete the audit.') {
     const client = await createHarness().compose({ limits: { maxModelCalls }, extensions: [{ id: 'continuity.test', version: '1', apiVersion: 1, roles: {
         store: () => new MemorySessionStore(),
         loop: () => conversationalLoop({ maxTokens: 64 }),
-        context: () => ({ ...budgetedContext('Complete the audit.', 3000), lifecycle }),
+        context: () => ({ ...budgetedContext(system, 3000), lifecycle }),
         provider: () => ({ turn: async request => ({ message: { role: 'assistant', content: turn(request) }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } }), structured: async () => { throw new Error('unused'); } }),
         tools: () => ({ tools: () => [], validate: (_name, args) => ({ ok: true, args }), call: async () => ({ ok: true, content: 'unused' }) }),
         policy: () => ({ evaluate: async () => ({ kind: 'allow' }) }),
@@ -31,7 +31,7 @@ it.each([false, true])('automatically maintains context without replacing source
     const { client, record } = await setup(request => {
         if (/^(Maintain a concise working checkpoint|Repair a rejected working checkpoint)/.test(request.system ?? '')) {
             const input = JSON.parse(request.messages[0].content);
-            expect(input.output.maxCharacters).toBe(8000);
+            expect(input.output.targetCharacters).toBe(drafts ? 4000 : 8000);
             drafts++;
             if (drafts === 2) {
                 expect(input.rejectedDraft).toBe('too_large');
@@ -44,7 +44,7 @@ it.each([false, true])('automatically maintains context without replacing source
         expect(request.messages.some(m => m.content === record.messages[0].content)).toBe(true);
         expect(request.messages.some(m => m.content.includes('Correction: security'))).toBe(true);
         return 'done';
-    });
+    }, 20, undefined, 'Task instruction. '.repeat(250));
     await client.submit(record.id, 'Continue', { commandId: 'continue' });
     const saved = await client.wait(record.id);
     expect(saved.status).toBe(rejectTwice ? 'failed' : 'idle');
@@ -53,7 +53,7 @@ it.each([false, true])('automatically maintains context without replacing source
     expect(saved.usage.inputTokens).toBe(saved.operations.length * 100);
     const events = await client.events(record.id);
     const decisions = events.map(event => (event.data as { contextDecision?: unknown } | undefined)?.contextDecision).filter(Boolean);
-    expect(decisions[0]).toEqual({ accepted: false, reason: 'too_large', attempt: 1 });
+    expect(decisions[0]).toEqual({ pending: true, attempt: 1 });
     if (rejectTwice) {
         expect(drafts).toBe(2);
         expect((saved.contextState as CheckpointContextState).checkpoint).toBeUndefined();
@@ -78,7 +78,7 @@ it('charges maintenance to the same run call budget as task execution', async ()
     expect(calls).toBe(1);
     expect(saved.status).toBe('failed');
     expect(saved.error).toContain('model-call budget');
-    expect((saved.contextState as CheckpointContextState).checkpoint?.through).toBeGreaterThan(0);
+    expect((saved.contextState as CheckpointContextState).candidate?.through).toBeGreaterThan(0);
     expect(saved.usage.inputTokens).toBe(100);
 });
 
@@ -176,4 +176,28 @@ it('commits provider usage and receipt even when a lifecycle reducer throws', as
     expect(saved.contextState).toBeUndefined();
     expect(saved.messages.slice(0, record.messages.length)).toEqual(record.messages);
     expect((await client.events(record.id)).some(e => e.type === 'model.completed')).toBe(true);
+});
+
+it('uses fitting checkpoints above the character target without repair through the local host', async () => {
+    const draft = 'x'.repeat(8591);
+    let maintenance = 0, tasks = 0;
+    const { client, record } = await setup(request => {
+        expect(request.system).not.toMatch(/^Repair/);
+        if (request.system?.startsWith('Maintain a concise')) { maintenance++; return draft; }
+        tasks++;
+        expect(request.messages.some(m => m.content.endsWith(draft))).toBe(true);
+        return 'done';
+    });
+    await client.submit(record.id, 'Continue', { commandId: 'continue' });
+    const saved = await client.wait(record.id);
+    expect(saved.status).toBe('idle');
+    expect(tasks).toBe(1);
+    expect(maintenance).toBeGreaterThan(0);
+    expect(saved.usage.inputTokens).toBe((maintenance + tasks) * 100);
+    expect((saved.contextState as CheckpointContextState).checkpoint?.text).toBe(draft);
+    expect((saved.contextState as CheckpointContextState).candidate).toBeUndefined();
+    expect(saved.messages.slice(0, record.messages.length)).toEqual(record.messages);
+    const events = await client.events(record.id);
+    const task = events.find(e => e.type === 'model.intent' && (e.data as { purpose?: string }).purpose === 'task')!;
+    expect(task.data).toHaveProperty('contextMetadata.checkpointAccepted');
 });

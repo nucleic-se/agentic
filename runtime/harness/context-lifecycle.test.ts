@@ -30,8 +30,8 @@ it('resumes exact rejected candidate repair from serialized state before trying 
     const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
     const first = await lifecycle.prepare({ request }, execution) as ContextMaintenance;
     expect(first.kind).toBe('maintenance');
-    const rejected = first.reduce(response('x'.repeat(8591)));
-    expect(rejected.decision).toEqual({ accepted: false, reason: 'too_large', attempt: 1 });
+    const rejected = first.reduce({ ...response('x'.repeat(8591)), stopReason: 'max_tokens' });
+    expect(rejected.decision).toEqual({ accepted: false, reason: 'incomplete', attempt: 1 });
     const state = JSON.parse(JSON.stringify(rejected.state));
     const repaired = await lifecycle.prepare({ request, state }, {
         prepareModel: (request, options) => {
@@ -47,10 +47,10 @@ it('resumes exact rejected candidate repair from serialized state before trying 
     }) as ContextMaintenance;
     expect(repaired.kind).toBe('maintenance');
     const accepted = repaired.reduce(response('Verification and security checks remain unfinished.'));
-    expect(accepted.decision).toEqual({ accepted: true });
+    expect(accepted.decision).toEqual({ pending: true, attempt: 2 });
     expect(accepted.state).not.toHaveProperty('rejected');
-    expect(repaired.reduce(response('still too large '.repeat(1000)))).toMatchObject({
-        error: 'Checkpoint rejected after two attempts: too_large', decision: { accepted: false, attempt: 2 },
+    expect(repaired.reduce({ ...response('still incomplete'), stopReason: 'max_tokens' })).toMatchObject({
+        error: 'Checkpoint rejected after two attempts: incomplete', decision: { accepted: false, attempt: 2 },
     });
     expect(state).toEqual(rejected.state);
 });
@@ -81,4 +81,69 @@ it('anchors later source chunks to original human requirements and corrections',
     expect(input.sourceChunk.start).toBe(3);
     expect(input.sourceChunk.text).not.toContain('Do not release');
     expect(input.requirements.some((r: { content: string }) => r.content.includes('Incorrect derived'))).toBe(false);
+});
+
+
+it('admits a complete draft above the character target through real context preparation after serialization', async () => {
+    const { request, execution, history } = fixture();
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const first = await lifecycle.prepare({ request }, execution) as ContextMaintenance;
+    const pending = first.reduce(response('Evidence remains available. '.repeat(350)));
+    expect(pending.decision).toEqual({ pending: true, attempt: 1 });
+    expect(pending.state).not.toHaveProperty('rejected');
+    const state = JSON.parse(JSON.stringify(pending.state));
+    const original = structuredClone(history);
+    const roomier = createHarnessExecution({ context: budgetedContext('', 16000), provider: {
+        turn: async () => { throw new Error('Admission must not dispatch'); }, structured: async () => { throw new Error('unused'); },
+    } });
+    const step = await lifecycle.prepare({ request, state }, roomier);
+    expect(step.kind).toBe('task');
+    expect(step.prepared.report!.usage.totalTokens).toBeLessThanOrEqual(16000);
+    expect(step.prepared.request.messages.find(m => m.content.startsWith('Working checkpoint'))!.content).toContain(state.candidate.text);
+    const accepted = step.reduce!(response('done'));
+    expect(accepted.decision).toEqual({ accepted: true });
+    expect(accepted.state).toEqual({ kind: 'checkpoint', checkpoint: {
+        through: state.candidate.through, text: state.candidate.text,
+        ...(state.candidate.partial ? { partial: state.candidate.partial } : {}),
+    } });
+    expect(state).toEqual(pending.state);
+    expect(history).toEqual(original);
+});
+
+it('repairs actual context overflow once and retains the last valid checkpoint across restart', async () => {
+    const { request: base, execution } = fixture();
+    // The task system consumes space that a tools-free maintenance request does not need.
+    const request = { ...base, system: 'Task instruction. '.repeat(250) };
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const checkpoint = { through: 1, text: 'Previous verified evidence.' };
+    const first = await lifecycle.prepare({ request, state: { kind: 'checkpoint', checkpoint } }, execution) as ContextMaintenance;
+    const pending = first.reduce(response('x'.repeat(8591)));
+    const state = JSON.parse(JSON.stringify(pending.state));
+    expect(state.checkpoint).toEqual(checkpoint);
+    const repair = await lifecycle.prepare({ request, state }, execution) as ContextMaintenance;
+    expect(repair.kind).toBe('maintenance');
+    expect(repair.prepared.request.system).toMatch(/^Repair/);
+    expect(JSON.parse(repair.prepared.request.messages[0].content)).toMatchObject({
+        rejectedDraft: 'too_large', draft: state.candidate.text, sourceRange: state.candidate.sourceRange,
+    });
+    expect(repair.metadata.rejection).toBe('too_large');
+    const twice = repair.reduce(response('x'.repeat(8591)));
+    expect(twice.decision).toEqual({ pending: true, attempt: 2 });
+    const restored = JSON.parse(JSON.stringify(twice.state));
+    expect(restored.checkpoint).toEqual(checkpoint);
+    await expect(lifecycle.prepare({ request, state: restored }, execution)).rejects.toThrow('after two attempts: too_large');
+    await expect(lifecycle.prepare({ request, state: restored }, execution)).rejects.toThrow('after two attempts: too_large');
+    expect(restored).toEqual(twice.state);
+    expect(state).toEqual(pending.state);
+});
+
+it('does not turn cancellation or preparation failures into checkpoint repair', async () => {
+    const { request, execution } = fixture();
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const first = await lifecycle.prepare({ request }, execution) as ContextMaintenance;
+    const pending = first.reduce(response('Complete candidate.'));
+    const error = new Error('Preparation cancelled');
+    await expect(lifecycle.prepare({ request, state: pending.state }, {
+        prepareModel: async () => { throw error; },
+    })).rejects.toBe(error);
 });

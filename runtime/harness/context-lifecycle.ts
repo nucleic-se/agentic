@@ -1,7 +1,8 @@
+import { ContextBudgetExceededError } from '../PromptEngine.js';
 import type { Message, TurnRequest, TurnResponse } from '../../contracts/llm.js';
 import type { HarnessExecution, PreparedHarnessModel } from './execution.js';
 import { checkpointView, prepareCheckpoint, prepareCheckpointRepair, checkpointFromResponse, rejectedCheckpoint,
-    type WorkingCheckpoint, type RejectedCheckpoint } from './checkpoint.js';
+    type WorkingCheckpoint, type RejectedCheckpoint, type CheckpointSourceRange } from './checkpoint.js';
 
 /** The driver supplies preparation only: strategies cannot dispatch or acquire budgets. */
 export type ContextPreparation = Pick<HarnessExecution, 'prepareModel'>;
@@ -49,7 +50,9 @@ export function referenceContextLifecycle(): ContextLifecycle {
 export interface CheckpointContextState {
     kind: 'checkpoint';
     checkpoint?: WorkingCheckpoint;
-    rejected?: RejectedCheckpoint;
+    rejected?: RejectedCheckpoint & { attempt: 1 | 2 };
+    /** A complete response awaiting local context admission. The last accepted checkpoint stays intact. */
+    candidate?: WorkingCheckpoint & { sourceRange: CheckpointSourceRange; attempt: 1 | 2 };
 }
 function checkpointState(value: unknown): CheckpointContextState {
     if (value === undefined) return { kind: 'checkpoint' };
@@ -66,29 +69,51 @@ export function checkpointContextLifecycle(configuration: { maxTokens: number; t
         throw new RangeError('Checkpoint triggerRatio must be greater than zero and no greater than one');
     return { async prepare(input, execution) {
         const { request, suffix = [], notes } = input;
-        const state = checkpointState(input.state);
+        let state = checkpointState(input.state);
         const cacheScope = request.cacheScope === undefined ? undefined : `${request.cacheScope}:checkpoint`;
-        // A rejected candidate already identifies its exact source. Repair does not depend on fitting the task again.
+        let prepared: PreparedHarnessModel | undefined;
+        let validated: CheckpointSourceRange | undefined;
+        if (state.candidate) {
+            const { sourceRange, attempt, ...checkpoint } = state.candidate;
+            try {
+                prepared = await execution.prepareModel({ ...request, messages: checkpointView(request.messages, checkpoint, suffix).messages });
+                validated = sourceRange;
+                state = { kind: 'checkpoint', checkpoint };
+            } catch (error) {
+                if (!(error instanceof ContextBudgetExceededError)) throw error;
+                if (attempt === 2) throw new Error('Checkpoint rejected after two attempts: too_large', { cause: error });
+                state = { kind: 'checkpoint', checkpoint: state.checkpoint,
+                    rejected: { ...checkpoint, sourceRange, reason: 'too_large', attempt } };
+            }
+        }
+        if (state.rejected?.attempt === 2) throw new Error(`Checkpoint rejected after two attempts: ${state.rejected.reason}`);
+        // Invalid responses and candidates that cannot fit share the same one-repair allowance.
         let selected = state.rejected ? await prepareCheckpointRepair(execution, request.messages, state.rejected, {
             maxTokens: config.maxTokens, cacheScope: cacheScope === undefined ? undefined : `${cacheScope}:repair`,
         }) : undefined;
         if (!selected) {
             const view = checkpointView(request.messages, state.checkpoint, suffix);
-            const prepared = await execution.prepareModel({ ...request, messages: view.messages });
+            prepared ??= await execution.prepareModel({ ...request, messages: view.messages });
             if (!prepared.report) throw new Error('Checkpoint strategy requires a context usage report');
             selected = await prepareCheckpoint(execution, request.messages, view, prepared.report, {
                 ...config, previous: state.checkpoint, notes, cacheScope,
             });
-            if (!selected) return { kind: 'task', prepared };
+            if (!selected) return { kind: 'task', prepared,
+                ...(validated ? { metadata: { checkpointAccepted: validated },
+                    reduce: () => ({ state, decision: { accepted: true } }) } : {}) };
         }
         const selection = selected;
         return { kind: 'maintenance', prepared: selection.prepared,
-            metadata: { purpose: 'checkpoint', sourceRange: selection.sourceRange },
+            metadata: { purpose: 'checkpoint', sourceRange: selection.sourceRange,
+                ...(validated ? { checkpointAccepted: validated } : {}),
+                ...(state.rejected ? { rejection: state.rejected.reason } : {}) },
             reduce(response) {
                 const draft = checkpointFromResponse(selection, response);
-                if (draft.ok) return { state: { kind: 'checkpoint', checkpoint: draft.checkpoint }, decision: { accepted: true } };
                 const attempt = state.rejected ? 2 : 1;
-                return { state: { ...state, rejected: rejectedCheckpoint(selection, response, draft.reason) },
+                if (draft.ok) return { state: { kind: 'checkpoint', checkpoint: state.checkpoint,
+                    candidate: { ...draft.checkpoint, sourceRange: structuredClone(selection.sourceRange), attempt } },
+                    decision: { pending: true, attempt } };
+                return { state: { ...state, rejected: { ...rejectedCheckpoint(selection, response, draft.reason), attempt } },
                     decision: { accepted: false, reason: draft.reason, attempt },
                     ...(attempt === 2 ? { error: `Checkpoint rejected after two attempts: ${draft.reason}` } : {}) };
             },

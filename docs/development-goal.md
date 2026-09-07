@@ -111,3 +111,13 @@ Each phase requires appropriate automated checks, isolated live dogfooding,
 inspectable requests and outcomes, and documented limitations. Keep run artifacts
 outside source control. Passing one task does not demonstrate general reliability.
 The goal remains open until all four phases have direct evidence.
+
+
+Checkpoint admission uses the actual context preparation boundary. Complete drafts
+are persisted with their source coverage and retry count before local fit validation;
+the previous accepted checkpoint remains available until validation is committed.
+Character targets guide generation but do not force an extra call for a fitting
+draft. Both hosts must accept fitting long candidates, preserve source history and
+usage receipts, and enforce the one-repair allowance across restart for candidates
+that cannot fit. Live task completion and maintenance overhead remain the acceptance
+criteria for efficiency; a successful preparation is not proof of semantic fidelity.

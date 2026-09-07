@@ -671,16 +671,22 @@ messages. Model-derived and deterministic messages are not promoted into human
 requirements. These requirements participate in preparation and cannot be silently
 truncated to fit; a prior summary is never their sole replacement.
 
-A structurally rejected complete draft is recorded as pending derived state,
-including its exact text and selected source range. `prepareCheckpointRepair`
-prepares one bounded revision of that artifact rather than repeating source
-summarization. Repair targets 4,000 characters with an 8,000-character acceptance
-ceiling, allowing room for imperfect model length estimates. The repaired text
-keeps the same coverage boundary, including partial
-source progress. A second rejection fails without replacing the previous accepted
-checkpoint or original history. Restart preserves both the candidate and the used
-retry allowance. The pending draft is not included in ordinary task context; repair
-preparation must fit it exactly or fail before dispatch.
+A complete draft is saved as a candidate with its exact text, source range and
+attempt count, alongside the provider receipt. The last accepted checkpoint stays
+intact. Before dispatching more work, the lifecycle prepares the candidate against
+the current task request, including its instructions, tools and output reservation.
+The character target is guidance, not an admission ceiling: a longer draft that
+fits needs no repair. Validation metadata appears in the next intent and accepted
+state is committed with that response. If admission or dispatch stops beforehand,
+the persisted candidate can be validated again without regenerating it.
+
+An actual context overflow or an incomplete, empty or tool-calling response permits
+one repair of the exact artifact, retaining its source coverage and partial progress.
+Repair targets 4,000 characters; preparation must fit its input exactly or fail before
+dispatch. A second unusable response stops without replacing the last accepted
+checkpoint or source history. Candidate/rejection state retains the attempt count
+across restart and resume, so neither renews the allowance. Cancellation and other
+preparation errors propagate without being treated as requests for repair.
 Incomplete or ambiguous operations retain ordinary execution recovery semantics.
 Explicit local transcript replacement or tool-result resolution invalidates derived
 context state. Forks retain the unchanged source transcript and derived state together.

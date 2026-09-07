@@ -259,9 +259,9 @@ it('can checkpoint before compression using the context-owned ceiling, preservin
         await expect(prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100, triggerRatio })).rejects.toThrow('triggerRatio');
 });
 
-it('accepts only complete bounded checkpoint text and persists only checkpoint fields', async () => {
-    const { checkpointFromResponse, CHECKPOINT_MAX_CHARACTERS } = await import('./checkpoint.js');
-    const response = { message: { role: 'assistant' as const, content: 'x'.repeat(CHECKPOINT_MAX_CHARACTERS) }, stopReason: 'end_turn' as const };
+it('accepts only complete checkpoint text independently of its context fit and persists only checkpoint fields', async () => {
+    const { checkpointFromResponse, CHECKPOINT_TARGET_CHARACTERS } = await import('./checkpoint.js');
+    const response = { message: { role: 'assistant' as const, content: 'x'.repeat(CHECKPOINT_TARGET_CHARACTERS) }, stopReason: 'end_turn' as const };
     const selection = { through: 3, prepared: { private: true }, partial: { end: 5, offset: 20 } };
     const accepted = checkpointFromResponse(selection, response);
     expect(accepted).toEqual({ ok: true, checkpoint: { through: 3, partial: selection.partial, text: response.message.content } });
@@ -269,10 +269,10 @@ it('accepts only complete bounded checkpoint text and persists only checkpoint f
     expect(selection.partial.offset).toBe(20);
     expect(checkpointFromResponse(selection, { ...response, stopReason: 'max_tokens' })).toEqual({ ok: false, reason: 'incomplete' });
     expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, content: ' ' } })).toEqual({ ok: false, reason: 'empty' });
-    expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, content: response.message.content + 'x' } })).toEqual({ ok: false, reason: 'too_large' });
+    expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, content: response.message.content + 'x' } })).toMatchObject({ ok: true });
     expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, toolCalls: [{ id: 'a', name: 'write', args: {} }] } })).toEqual({ ok: false, reason: 'tool_calls' });
     const request = checkpointRequest([{ role: 'assistant', content: 'evidence' }], 1);
-    expect(JSON.parse(request.messages[0].content).output.maxCharacters).toBe(CHECKPOINT_MAX_CHARACTERS);
+    expect(JSON.parse(request.messages[0].content).output.targetCharacters).toBe(CHECKPOINT_TARGET_CHARACTERS);
 });
 
 it('repairs the saved draft without changing its source coverage or truncating its input', async () => {
@@ -285,7 +285,7 @@ it('repairs the saved draft without changing its source coverage or truncating i
     const prepared = await prepareCheckpointRepair(execution, [], candidate, { maxTokens: 100 });
     const evidence = JSON.parse(prepared.prepared.request.messages[0].content);
     expect(evidence.draft).toBe(candidate.text);
-    expect(evidence.output).toEqual({ targetCharacters: 4000, maxCharacters: 8000 });
+    expect(evidence.output).toEqual({ targetCharacters: 4000 });
     expect(prepared.through).toBe(12);
     expect(prepared.partial).toEqual(candidate.partial);
     expect(prepared.sourceRange).toEqual(candidate.sourceRange);
