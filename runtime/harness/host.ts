@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from 'node:util';
+import { checkpointView, prepareCheckpoint, checkpointFromResponse } from './checkpoint.js';
+import type { PreparedHarnessModel } from './execution.js';
 import { toToolResultMessage } from '../ToolOutput.js';
 import { validateOperationResolution } from './resolution.js';
 import { randomUUID } from 'node:crypto';
@@ -29,6 +32,7 @@ function reconcileInterruptedMessages(record: SessionRecord) {
             content: 'Run interrupted without a committed tool result. This action was not automatically repeated. Check execution history before retrying.',
         });
     }
+    if (!isDeepStrictEqual(record.messages, result)) { delete record.checkpoint; delete record.checkpointRejection; }
     record.messages = result;
 }
 
@@ -117,20 +121,20 @@ class HarnessSessionClient implements SessionClient {
         }
     }
     private async executeModelEffect(id: string, runId: string, request: TurnRequest, signal: AbortSignal,
-        options: { projection?: 'conversation' | 'none'; maintenance?: MaintenanceOptions } = {}): Promise<TurnResponse> {
+        options: { projection?: 'conversation' | 'none'; maintenance?: MaintenanceOptions; prepared?: PreparedHarnessModel; checkpoint?: NonNullable<Awaited<ReturnType<typeof prepareCheckpoint>>> } = {}): Promise<TurnResponse> {
         signal.throwIfAborted();
         const input = { ...request, cacheScope: request.cacheScope ?? `${this.fingerprint}:${id}`, tools: request.tools ?? this.roles.tools.tools() };
         const operationId = randomUUID();
-        const prepared = await this.execution.prepareModel(input, { signal });
+        const prepared = options.prepared ?? await this.execution.prepareModel(input, { signal });
         const report = prepared.report;
         return this.execution.dispatchModel(prepared, {
             operationId, signal, stream: true,
-            ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : {}),
+            ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : options.checkpoint ? { requireComplete: true } : {}),
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
             onRequest: async request => { await this.change(id, 'model.request', () => {}, { operationId, request }); },
             onIntent: intent => this.change(id, 'model.intent', record => {
                 record.operations.push({ id: intent.operationId, runId, kind: 'model', status: 'intent', input: intent.request, createdAt: intent.startedAt, ...(report ? { contextReport: structuredClone(report) } : {}) });
-            }, { operationId }).then(() => undefined),
+            }, { operationId, purpose: options.checkpoint ? 'checkpoint' : options.maintenance ? 'maintenance' : 'task', ...(options.checkpoint ? { sourceRange: options.checkpoint.sourceRange } : {}) }).then(() => undefined),
             onOutcome: async outcome => {
                 const completed = outcome.outcome === 'completed' || outcome.outcome === 'partial';
                 const data: Record<string, unknown> = { operationId, outcome: outcome.outcome, dispatched: outcome.dispatched, durationMs: outcome.durationMs };
@@ -143,15 +147,31 @@ class HarnessSessionClient implements SessionClient {
                     if ('response' in outcome) {
                         op.status = outcome.outcome; op.output = outcome.response;
                         this.addUsage(record, outcome.usage);
-                        if (options.maintenance && outcome.outcome === 'completed' && !signal.aborted) {
+                        if (options.checkpoint && outcome.outcome === 'completed' && !signal.aborted) {
+                            const draft = checkpointFromResponse(options.checkpoint, outcome.response);
+                            if (draft.ok) {
+                                record.checkpoint = draft.checkpoint;
+                                delete record.checkpointRejection;
+                                data.checkpointDecision = { accepted: true };
+                            } else {
+                                const attempt = record.checkpointRejection ? 2 : 1;
+                                record.checkpointRejection = draft.reason;
+                                data.checkpointDecision = { accepted: false, reason: draft.reason, attempt };
+                                if (attempt === 2) {
+                                    projectionFailed = true;
+                                    projectionError = new Error(`Checkpoint rejected after two attempts: ${draft.reason}`);
+                                }
+                            }
+                        } else if (options.maintenance && outcome.outcome === 'completed' && !signal.aborted) {
                             try {
                                 const messages = options.maintenance.project(structuredClone(outcome.response), structuredClone(record));
                                 if (!Array.isArray(messages) || messages.some(message => !message || !['user', 'assistant', 'tool_result'].includes(message.role) || typeof message.content !== 'string')) throw new Error('Maintenance projector returned invalid messages');
                                 data.previousMessages = structuredClone(record.messages);
                                 data.messages = structuredClone(messages);
                                 record.messages = structuredClone(messages);
+                                delete record.checkpoint; delete record.checkpointRejection;
                             } catch (error) { projectionFailed = true; projectionError = error; }
-                        } else if (!options.maintenance && options.projection !== 'none' && outcome.outcome === 'completed') {
+                        } else if (!options.maintenance && !options.checkpoint && options.projection !== 'none' && outcome.outcome === 'completed') {
                             record.messages.push(structuredClone(outcome.response.message));
                         }
                     } else {
@@ -165,6 +185,29 @@ class HarnessSessionClient implements SessionClient {
                 if (projectionFailed) throw projectionError;
             },
         });
+    }
+    private async requestConversation(id: string, runId: string, request: TurnRequest, signal: AbortSignal,
+        policy: { maxTokens: number; triggerRatio?: number }, admit: () => void): Promise<TurnResponse> {
+        const initial = await this.get(id);
+        if (!isDeepStrictEqual(request.messages, initial.messages))
+            throw new Error('Checkpointing requires the complete current conversation');
+        for (;;) {
+            signal.throwIfAborted();
+            const record = await this.get(id);
+            const view = checkpointView(record.messages, record.checkpoint);
+            const prepared = await this.execution.prepareModel({ ...request, messages: view.messages,
+                tools: request.tools ?? this.roles.tools.tools(), cacheScope: request.cacheScope ?? `${this.fingerprint}:${id}` }, { signal });
+            if (!prepared.report) throw new Error('Checkpointing requires a context usage report');
+            const checkpoint = await prepareCheckpoint(this.execution, record.messages, view, prepared.report, {
+                ...policy, previous: record.checkpoint, rejection: record.checkpointRejection,
+                cacheScope: `${this.fingerprint}:${id}:checkpoint`,
+            }, { signal });
+            admit();
+            if (!checkpoint) return this.executeModelEffect(id, runId, request, signal, { prepared });
+            await this.executeModelEffect(id, runId, checkpoint.prepared.request, signal, {
+                prepared: checkpoint.prepared, checkpoint,
+            });
+        }
     }
     async recover() {
         for (const session of await this.roles.store.list()) {
@@ -242,7 +285,7 @@ class HarnessSessionClient implements SessionClient {
             if (record.revision !== expectedRevision) throw new Error('Session revision conflict');
             if (record.queue.length) throw new Error('Cannot replace messages with pending input');
             const previous = record.messages;
-            record.messages = replacement; record.revision++; record.updatedAt = Date.now();
+            record.messages = replacement; delete record.checkpoint; delete record.checkpointRejection; record.revision++; record.updatedAt = Date.now();
             await this.roles.store.commit(id, expectedRevision, record, {
                 schemaVersion: 1, id: randomUUID(), sessionId: id, sequence: record.revision,
                 type: 'messages.replaced', timestamp: record.updatedAt,
@@ -268,6 +311,7 @@ class HarnessSessionClient implements SessionClient {
             const message = toToolResultMessage({ id: callId, name: op.name }, { ...input.result, content: input.result.content.length > 16000 ? input.result.content.slice(0,16000) + '\n[truncated]' : input.result.content });
             let index = record.messages.length - 1;
             while (index >= 0) { const item = record.messages[index]; if (item.role === 'tool_result' && item.toolCallId === callId) break; index--; }
+            delete record.checkpoint; delete record.checkpointRejection;
             if (index >= 0) record.messages[index] = message;
             else record.messages.push(message);
             if (!record.operations.some(item => item.kind === 'tool' && item.status === 'unknown')) { record.status = 'interrupted'; delete record.error; }
@@ -377,9 +421,16 @@ class HarnessSessionClient implements SessionClient {
                 context: async () => { signal.throwIfAborted(); return { messages: (await this.get(id)).messages }; },
                 messages: async () => (await this.get(id)).messages,
                 append, takeQueued,
-                model: { request: async (request: TurnRequest, options?: { projection?: 'conversation' | 'none' }) => {
-                    if (++modelCount > this.limits.maxModelCalls) throw new Error('Run model-call budget exceeded');
-                    return this.executeModelEffect(id, runId, request, signal, options);
+                model: { request: async (request, options) => {
+                    const admit = () => {
+                        if (++modelCount > this.limits.maxModelCalls) throw new Error('Run model-call budget exceeded');
+                    };
+                    if (options?.checkpoint) {
+                        if (options.projection === 'none') throw new Error('Checkpointing requires conversation projection');
+                        return this.requestConversation(id, runId, request, signal, options.checkpoint, admit);
+                    }
+                    admit();
+                    return this.executeModelEffect(id, runId, request, signal, { projection: options?.projection });
                 } },
                 tools: { executeBatch: async calls => {
                     signal.throwIfAborted();

@@ -19,7 +19,7 @@ async function drain(services: LoopServices, mode: 'steer' | 'enqueue'): Promise
     return messages.length > 0;
 }
 
-export function conversationalLoop(options: { maxTurns?: number; maxTokens?: number } = {}): LoopStrategy {
+export function conversationalLoop(options: { maxTurns?: number; maxTokens?: number; checkpoint?: { maxTokens: number; triggerRatio?: number } } = {}): LoopStrategy {
     const maxTurns = options.maxTurns ?? 20;
     if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) throw new RangeError('maxTurns must be a positive safe integer');
     if (options.maxTokens !== undefined && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1)) throw new RangeError('maxTokens must be a positive safe integer');
@@ -27,7 +27,7 @@ export function conversationalLoop(options: { maxTurns?: number; maxTokens?: num
         for (let turn = 0; turn < maxTurns; turn++) {
             services.signal.throwIfAborted();
             await drain(services, 'steer');
-            const response = await services.model.request({ ...await services.context(), ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }) });
+            const response = await services.model.request({ ...await services.context(), ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }) }, { checkpoint: options.checkpoint });
             if (response.stopReason === 'max_tokens') throw new Error('Model output reached its token limit');
             const calls = response.message.toolCalls ?? [];
             if (response.stopReason === 'tool_use' && !calls.length) throw new Error('Model requested tools without tool calls');
@@ -47,14 +47,14 @@ export function conversationalLoop(options: { maxTurns?: number; maxTokens?: num
 }
 
 /** An explicit planning model operation precedes the ordinary tool-capable loop. */
-export function planningLoop(options: { maxTurns?: number; maxTokens?: number } = {}): LoopStrategy {
+export function planningLoop(options: { maxTurns?: number; maxTokens?: number; checkpoint?: { maxTokens: number; triggerRatio?: number } } = {}): LoopStrategy {
     const conversation = conversationalLoop(options);
     return { async run(services) {
         services.signal.throwIfAborted();
         await drain(services, 'steer');
         const context = await services.context();
         const plan = await services.model.request({ ...context, tools: [], ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
-            system: `${context.system ?? ''}\nProduce a concise plan for the user's task. Do not execute tools. A subsequent step will carry out the plan.` });
+            system: `${context.system ?? ''}\nProduce a concise plan for the user's task. Do not execute tools. A subsequent step will carry out the plan.` }, { checkpoint: options.checkpoint });
         if (plan.stopReason === 'max_tokens' || plan.stopReason === 'tool_use' || plan.message.toolCalls?.length) {
             throw new Error('Planning response must be complete and contain no tool calls');
         }
@@ -198,7 +198,7 @@ export function codingToolRuntime(workingRoot: string, options: {
 
 export function defaultCodingPolicy(): IToolPolicy {
     return { async evaluate(context) {
-        return codingToolEffect(context.name) === 'read' || ['memory_search', 'memory_read'].includes(context.name) ? { kind: 'allow' }
+        return codingToolEffect(context.name) === 'read' || ['memory_search', 'memory_read', 'read_tool_result'].includes(context.name) ? { kind: 'allow' }
             : { kind: 'confirm', reason: `Approve ${context.name} with these exact arguments` };
     } };
 }

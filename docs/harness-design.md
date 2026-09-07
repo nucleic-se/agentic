@@ -635,10 +635,29 @@ policy explicitly before conversion and commit the resulting message with its
 receipt. Source retrieval may remain text-only; rich ordinary tool results are
 not silently flattened.
 
-The Gears composition drives automatic checkpoints at 80% of the reported ceiling,
-with pressure as a fallback. The local session driver
-continues to expose explicit maintenance; shared primitives do not require every
-composition to use the same policy. A protected instruction, prior summary or
+Both reference compositions drive automatic checkpoints at 80% of the reported
+ceiling, with pressure as a fallback. The local reference loop opts in through
+`model.request(request, { checkpoint: { maxTokens: 800, triggerRatio: 0.8 } })`.
+Checkpointing requires the complete current conversation and a context report;
+custom projected requests retain their ordinary behavior unless explicitly opted in.
+The host persists `checkpoint` separately from the original transcript. Accepted
+maintenance advances this derived view atomically with its model receipt. Every
+maintenance call consumes the same run call allowance as ordinary task work.
+A structurally rejected complete draft is recorded and retried once; a second
+rejection fails without replacing the previous checkpoint or source history.
+Incomplete or ambiguous operations retain ordinary execution recovery semantics.
+Explicit transcript replacement or tool-result resolution invalidates old checkpoint
+references. Forks retain the unchanged source transcript and checkpoint together.
+
+The default tool composition includes `read_tool_result`, backed by the shared
+archive reader independently of optional cross-task notes. The host supplies the
+session identity; models select only a call ID or original message index and page
+offset. Model-visible tool-call IDs participate in context accounting. Archive
+reads recover saved transcript text, not necessarily all output from an original
+external process. Shell output has its separate saved-output reader.
+
+The local driver also exposes explicit idle maintenance. Shared primitives do not
+require every composition to use the reference policy. A protected instruction, prior summary or
 output reservation that alone exceeds the ceiling cannot be fixed by dropping
 history. Context errors identify protected-content overflow. Chunking also costs
 real model calls and can exhaust a task budget. Checkpoints remain lossy model

@@ -24,9 +24,15 @@ producer request; Gears records and retries one rejected complete draft while
 preserving original history and the last valid checkpoint. Repeated rejection
 stops within ordinary call/token budgets. Incomplete or ambiguous model operations
 retain their existing failure/recovery semantics.
-This phase remains open: the default composition still needs automatic checkpoint
-and source-recovery integration, and the maintenance changes require live evidence.
-Align continuity across both compositions before expanding recall or interfaces.
+The default composition now opts into automatic checkpoints with separate durable
+state and an archive-reading tool independent of recall. Tests exercise the complete
+reference composition, source retrieval, reopen and shared call admission. A bounded
+live continuity diagnostic completed three checkpoints, retrieved the
+original evidence and retained an unfinished verification gate. Maintenance used
+most of that trial’s tokens; broader representative evidence remains required. This
+phase remains open pending representative live continuity evidence and measured
+maintenance overhead. Align proven behavior across both compositions before
+expanding recall or interfaces.
 
 ## 2. A complete coding workflow
 
