@@ -20,4 +20,4 @@ export { readProjectInstructions, projectInstructionText, type ProjectInstructio
 export { validateOperationResolution } from './resolution.js';
 export { memoryToolRuntime, sessionNoteSource, type NoteStore, type NoteSource, type NoteSourceQuery, type NoteSourceReader } from './memory.js';
 
-export { archiveToolRuntime } from './archive.js';
+export { archiveToolRuntime, archivedToolResultReference } from './archive.js';
