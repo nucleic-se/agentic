@@ -520,6 +520,16 @@ before continuation; reopening storage is not permission to replay it. Request
 snapshots explain what was sent, while receipts and host state explain what was
 committed. These are separate facts when a process stops between dispatch and commit.
 
+### Evidence-based recovery
+
+Hosts share `OperationResolution` and `validateOperationResolution` for explicit
+operator evidence: an expected state revision, bounded explanation and known tool
+result. Each host owns its atomic state transition and continuation policy.
+Agentic resolves a journaled tool operation by operation ID. The Gears composition
+resolves its persisted active tool by call ID, preserving original receipts and
+pausing before continuation. Neither path infers an external result or replays the
+uncertain effect.
+
 ### Shared coding tools
 
 The shared coding pack exposes eight tools for reading, listing, searching,

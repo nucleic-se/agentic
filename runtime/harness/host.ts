@@ -1,4 +1,5 @@
 import { toToolResultMessage } from '../ToolOutput.js';
+import { validateOperationResolution } from './resolution.js';
 import { randomUUID } from 'node:crypto';
 import type { Message, TurnRequest, TurnResponse, TokenUsage } from '../../contracts/llm.js';
 import { composeDriver, compositionFingerprint, type DriverComposition, type HarnessClient } from './composition.js';
@@ -253,9 +254,7 @@ class HarnessSessionClient implements SessionClient {
     }
     async resolveOperation(id: string, operationId: string, resolution: OperationResolution): Promise<SessionRecord> {
         this.assertAdmission(); assertId(id); assertId(operationId);
-        const input = structuredClone(resolution);
-        if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0 || typeof input.evidence !== 'string' || !input.evidence.trim() || input.evidence.length > 16000) throw new Error('Resolution requires a revision and bounded evidence');
-        if (!input.result || typeof input.result.ok !== 'boolean' || typeof input.result.content !== 'string' || ['unknown', 'timeout', 'cancelled'].includes(input.result.errorKind ?? '')) throw new Error('Resolution requires a known tool result');
+        const input = validateOperationResolution(resolution);
         return this.change(id, 'tool.resolved', record => {
             if (this.runs.has(id) || record.status === 'running' || record.status === 'waiting') throw new Error('Finish the run before resolving an operation');
             if (record.revision !== input.expectedRevision) throw new Error('Session revision conflict');
