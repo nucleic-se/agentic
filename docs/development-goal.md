@@ -28,6 +28,13 @@ workspace. Exercise interruption, inspect the recorded outcome, and resolve an
 ambiguous operation explicitly without silently replaying it. Preserve the host's
 authorization policy and delegated capability restrictions.
 
+Current evidence: both compositions use the shared coding pack and startup
+instruction discovery, including nested directory rules. Live disposable coding
+tasks changed source, preserved tests and ran verification. An actual process-kill
+scenario exercised inspection, explicit tool resolution, paused continuation and
+no replay of the completed effect. Phase 3 can proceed; richer recovery UI remains
+part of phase 4.
+
 ## 3. Cross-task recall
 
 Start with bounded durable notes and text search with source provenance. Prove

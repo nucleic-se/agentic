@@ -145,8 +145,8 @@ terminal, phone-on-Wi-Fi, token-file, and custom composition instructions.
   Large-history retention, indexed search, pagination, artifact storage, extension
   state migrations, and long-term memory integrations need additional work.
 - Context pruning uses token estimates; the preset does not yet offer rich
-  compaction inspection or context editing. The reference system prompt asks the
-  model to read `AGENTS.md`; deterministic instruction discovery is not built in.
+  compaction inspection or context editing. Project instructions are discovered
+  at composition startup, without hot reload during active sessions.
 - The terminal is a simple line UI, not a full-screen TUI. `/model`, interactive
   context inspection, richer rendering, and a dedicated NDJSON client remain
   planned. Headless embedding already works through `SessionClient`.
@@ -546,9 +546,11 @@ text. Directory enumeration streams entries and stops at the shared 200-item cap
 
 ### Project instructions
 
-The default agent loads the workspace-root `AGENTS.md` before composing its roles.
-`defaultAgentExtensions` is now asynchronous. Additional `instructionDirectories`
-load each selected directory's ancestors in outer-to-inner scope order. The shared
+The default agent discovers root and nested `AGENTS.md` files before composing its
+roles. `defaultAgentExtensions` is asynchronous. Explicit `instructionDirectories`
+restrict loading to selected directories and their ancestors instead of scanning.
+Discovery skips `.git`, `node_modules`, `.data`, `.cache` and linked directories.
+The shared
 `readProjectInstructions` loader returns exact UTF-8 content with source paths and
 directory scopes; `projectInstructionText` renders that snapshot for the context.
 The combined source limit is 64 KiB and overflow fails explicitly. Missing files
@@ -556,8 +558,11 @@ are allowed; paths and resolved sources must stay within the workspace.
 
 Instructions participate in context budgeting and composition identity. Changes
 take effect on the next composition; active sessions retain their original
-snapshot. This does not yet automatically discover new nested scopes as the model
-explores files. Filesystem checks are confinement checks, not an OS sandbox.
+snapshot. All discovered scopes are supplied with directory labels; the loader
+does not rescan or inject new instructions on each tool call. For large instruction
+catalogs, select scopes explicitly. Filesystem checks are confinement checks, not
+an OS sandbox. The reference prompt defers authorization to the host policy;
+changing a policy extension does not require rewriting approval instructions.
 
 ### Source views and maintenance
 

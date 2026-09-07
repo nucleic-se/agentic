@@ -1,4 +1,5 @@
-import { open, realpath } from 'node:fs/promises';
+import { open, opendir, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export interface ProjectInstruction {
@@ -8,9 +9,23 @@ export interface ProjectInstruction {
     content: string;
 }
 
-/** Load applicable instructions in outer-to-inner scope order, without scanning a repository. */
-export async function readProjectInstructions(workspace: string, directories: readonly string[] = ['.'], signal?: AbortSignal): Promise<ProjectInstruction[]> {
+/** Discover scoped instructions once, or load only explicitly selected directory scopes. */
+export async function readProjectInstructions(workspace: string, directories?: readonly string[], signal?: AbortSignal): Promise<ProjectInstruction[]> {
     const root = await realpath(workspace);
+    if (directories === undefined) {
+        const found: string[] = [], pending = [root];
+        const excluded = new Set(['.git', 'node_modules', '.data', '.cache']);
+        while (pending.length) {
+            signal?.throwIfAborted();
+            const directory = pending.pop()!;
+            for await (const entry of await opendir(directory)) {
+                signal?.throwIfAborted();
+                if (entry.name === 'AGENTS.md') found.push(directory);
+                if (entry.isDirectory() && !excluded.has(entry.name)) pending.push(join(directory, entry.name));
+            }
+        }
+        directories = found;
+    }
     const withinRoot = (path: string) => {
         const rel = relative(root, path);
         if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
@@ -32,7 +47,7 @@ export async function readProjectInstructions(workspace: string, directories: re
         try { source = await realpath(path); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
         withinRoot(source);
-        const file = await open(source, 'r');
+        const file = await open(source, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
         try {
             if (!(await file.stat()).isFile()) throw new Error(`Project instructions must be a regular file: ${path}`);
             const buffer = Buffer.alloc(remaining + 1);

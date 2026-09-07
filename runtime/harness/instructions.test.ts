@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { readProjectInstructions } from './instructions.js';
 import { defaultAgentExtensions } from './preset.js';
 import { compositionFingerprint } from './composition.js';
+import { execFileSync } from 'node:child_process';
 
 const roots: string[] = [];
 async function workspace() { const root = await mkdtemp(join(tmpdir(), 'agentic-instructions-')); roots.push(root); return root; }
@@ -38,6 +39,23 @@ it('loads applicable scopes once and preserves exact text and source paths', asy
     expect((await readProjectInstructions(root))[0].content).toBe('Updated');
 });
 
+it('discovers nested scopes while excluding dependency, state and linked directory trees', async () => {
+    const root = await workspace(), outside = await workspace();
+    for (const directory of ['src/deep', 'node_modules/package', '.git', '.data', '.cache']) {
+        await mkdir(join(root, directory), { recursive: true });
+        await writeFile(join(root, directory, 'AGENTS.md'), directory);
+    }
+    await writeFile(join(root, 'AGENTS.md'), 'root');
+    await writeFile(join(outside, 'AGENTS.md'), 'outside');
+    await symlink(outside, join(root, 'linked'));
+    expect((await readProjectInstructions(root)).map(instruction => instruction.path)).toEqual(['AGENTS.md', 'src/deep/AGENTS.md']);
+    expect((await readProjectInstructions(root, ['.'])).map(instruction => instruction.path)).toEqual(['AGENTS.md']);
+    expect((await readProjectInstructions(root, ['node_modules/package'])).map(instruction => instruction.path)).toEqual(['AGENTS.md', 'node_modules/package/AGENTS.md']);
+    const extensions = await defaultAgentExtensions({ workspace: root });
+    const context = await extensions.find(extension => extension.roles?.context)!.roles!.context!();
+    expect((await context.assemble([], new AbortController().signal)).system).toContain('Scope: src/deep');
+});
+
 it('rejects escaping scopes and sources, excessive instructions and cancellation', async () => {
     const root = await workspace(), outside = await workspace();
     await writeFile(join(outside, 'AGENTS.md'), 'External');
@@ -48,4 +66,17 @@ it('rejects escaping scopes and sources, excessive instructions and cancellation
     await writeFile(join(root, 'AGENTS.md'), 'x'.repeat(65537));
     await expect(readProjectInstructions(root)).rejects.toThrow('64 KiB');
     await expect(readProjectInstructions(root, ['.'], AbortSignal.abort())).rejects.toThrow();
+});
+
+it('bounds the combined discovered text and rejects non-regular instruction sources without blocking', async () => {
+    const root = await workspace();
+    await mkdir(join(root, 'src'));
+    await writeFile(join(root, 'AGENTS.md'), 'a'.repeat(40000));
+    await writeFile(join(root, 'src', 'AGENTS.md'), 'b'.repeat(30000));
+    await expect(readProjectInstructions(root)).rejects.toThrow('64 KiB');
+    if (process.platform !== 'win32') {
+        await rm(join(root, 'AGENTS.md'));
+        execFileSync('mkfifo', [join(root, 'AGENTS.md')]);
+        await expect(readProjectInstructions(root)).rejects.toThrow('regular file');
+    }
 });
