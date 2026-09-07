@@ -27,8 +27,10 @@ export function sessionNoteSource(client: SessionClient): NoteSourceReader {
             ('callId' in query ? operation.callId === query.callId : operation.id === reference![2]));
         if (matches.length !== 1) throw new Error('Source call is missing or ambiguous');
         const operation = matches[0], execution = operation.output as ToolExecution | undefined;
-        if (!['completed', 'failed'].includes(operation.status) || !execution?.result || ['unknown', 'timeout', 'cancelled'].includes(execution.status)) throw new Error('Source has no known tool receipt');
-        return { reference: `session/${sessionId}/operation/${operation.id}`, content: execution.result.content, isError: !execution.result.ok };
+        if (!['completed', 'failed'].includes(operation.status)) throw new Error('Source has no known tool receipt');
+        const result = operation.resolution?.result ?? (execution && !['unknown', 'timeout', 'cancelled'].includes(execution.status) ? execution.result : undefined);
+        if (!result) throw new Error('Source has no known tool receipt');
+        return { reference: `session/${sessionId}/operation/${operation.id}`, content: result.content, isError: !result.ok };
     };
 }
 

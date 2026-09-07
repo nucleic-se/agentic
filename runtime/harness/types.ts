@@ -23,6 +23,8 @@ export interface Operation {
     /** Tool arguments. Model requests are retrieved from requestRef. */
     input?: unknown;
     output?: unknown;
+    /** Operator-verified outcome, separate from the original execution evidence. */
+    resolution?: OperationResolution;
     createdAt: number;
 }
 export interface PendingApproval extends PolicyContext {

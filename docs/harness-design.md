@@ -795,3 +795,12 @@ they preserve history even when little of it remains in the tentative task frame
 The allowance is a conservative minimum for elective work, not a guarantee of
 compression or provider output length. Deferred work leaves the source boundary
 unchanged and dispatches the already-prepared task context.
+
+### Resolved operation evidence
+
+A tool operation retains its original execution in `output`. Operator verification
+is stored separately in the typed `resolution` field, with its evidence and known
+result. Source readers reject unresolved operations and prefer the verified result
+once resolution is committed. Exact source retrieval uses the operation record,
+so long results survive transcript shortening, replacement and store reopening.
+The original uncertain execution remains available for inspection.
