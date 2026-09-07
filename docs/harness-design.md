@@ -733,3 +733,14 @@ their separate accounting fields. These are counter estimates, not provider usag
 receipts. Alternative assemblers may omit group accounting; consumers must treat
 that as unknown rather than zero. The shared execution boundary rejects invalid
 estimates or inconsistent totals when a complete group breakdown is supplied.
+
+
+The checkpoint policy defers elective maintenance when the selected unprotected
+source prefix costs less than its reserved output allowance. It uses the context
+report's original group estimates; it does not count characters independently.
+Missing estimates preserve the assembler's existing maintenance behavior. Budget
+eviction or compression, partial source progress and repair bypass this deferral:
+they preserve history even when little of it remains in the tentative task frame.
+The allowance is a conservative minimum for elective work, not a guarantee of
+compression or provider output length. Deferred work leaves the source boundary
+unchanged and dispatches the already-prepared task context.

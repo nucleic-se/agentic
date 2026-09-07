@@ -96,7 +96,7 @@ export function checkpointView(history: readonly Message[], checkpoint?: Working
 /** Resolve report ranges once, keeping transient messages out of archive boundaries. */
 function sourceBoundaries(view: CheckpointView, report: ContextReport) {
     if (view.messages.length !== view.sourceIndexes.length) throw new Error('Checkpoint view has an inconsistent source map');
-    const boundaries: Array<{ end: number; reclaim: boolean }> = [];
+    const boundaries: Array<{ end: number; reclaim: boolean; tokens?: number }> = [];
     for (const decision of report.decisions) {
         if (decision.kind !== 'messages') continue;
         const range = decision.messageRange;
@@ -107,7 +107,7 @@ function sourceBoundaries(view: CheckpointView, report: ContextReport) {
         for (const source of view.sourceIndexes.slice(range.start, range.end)) {
             if (source !== null) end = Math.max(end, source + 1);
         }
-        if (end && !decision.protected) boundaries.push({ end,
+        if (end && !decision.protected) boundaries.push({ end, tokens: decision.tokens?.original,
             reclaim: decision.action === 'dropped' || (decision.reason === 'budget' && decision.action === 'compressed') });
     }
     return boundaries;
@@ -165,7 +165,16 @@ export async function prepareCheckpoint(
     const ratio = configuration.triggerRatio;
     if (ratio !== undefined && (!Number.isFinite(ratio) || ratio <= 0 || ratio > 1)) throw new RangeError('Checkpoint triggerRatio must be greater than zero and no greater than one');
     const due = ratio !== undefined && report.tokenBudget !== undefined && report.usage.totalTokens >= report.tokenBudget * ratio;
-    if (!partial && !due && !boundaries.some(boundary => boundary.reclaim && boundary.end > start)) return undefined;
+    const pressure = boundaries.some(boundary => boundary.reclaim && boundary.end > start);
+    const worthwhile = (through: number) => {
+        const prefix = boundaries.filter(boundary => boundary.end > start && boundary.end <= through);
+        // Missing accounting is unknown. Never infer zero cost from another assembler's report.
+        return prefix.some(boundary => boundary.tokens === undefined) ||
+            prefix.reduce((total, boundary) => total + boundary.tokens!, 0) >= configuration.maxTokens;
+    };
+    // Elective compaction should have at least its reserved output's worth of source to reclaim.
+    // Eviction and partial progress need preservation regardless of prefix size.
+    if (!partial && !pressure && (!due || !worthwhile(Infinity))) return undefined;
     type Selection = { through: number; partial?: WorkingCheckpoint['partial']; sourceRange: CheckpointSourceRange; prepared: PreparedHarnessModel };
     const prepare = (request: ReturnType<typeof evidenceRequest>) => execution.prepareModel({
         ...request, maxTokens: configuration.maxTokens, cacheScope: configuration.cacheScope,
@@ -210,5 +219,5 @@ export async function prepareCheckpoint(
             break;
         }
     }
-    return selected;
+    return selected && !pressure && !selected.partial && !worthwhile(selected.through) ? undefined : selected;
 }

@@ -294,3 +294,30 @@ it('repairs the saved draft without changing its source coverage or truncating i
     const tooSmall = createHarnessExecution({ context: budgetedContext('', 500), provider: { turn: async () => { throw new Error('unused'); }, structured: async () => { throw new Error('unused'); } } });
     await expect(prepareCheckpointRepair(tooSmall, [], candidate, { maxTokens: 100 })).rejects.toThrow();
 });
+
+it('defers elective maintenance of small prefixes while preserving evicted or partly covered sources', async () => {
+    const { prepareCheckpoint } = await import('./checkpoint.js');
+    const { createHarnessExecution } = await import('./execution.js');
+    const { budgetedContext } = await import('./defaults.js');
+    const history: Message[] = [{ role: 'assistant', content: 'A small but important observation.' },
+        { role: 'assistant', content: 'Recent evidence. '.repeat(180) }];
+    const view = checkpointView(history);
+    const execution = createHarnessExecution({ context: budgetedContext('', 4000, { minRecentGroups: 1 }),
+        provider: { turn: async () => { throw new Error('No dispatch'); }, structured: async () => { throw new Error('unused'); } } });
+    const task = await execution.prepareModel({ messages: history, maxTokens: 64 });
+    const configuration = { maxTokens: 800, triggerRatio: 0.1 };
+    expect(task.report!.usage.totalTokens).toBeGreaterThan(400);
+    expect(task.report!.decisions[0].tokens!.original).toBeLessThan(configuration.maxTokens);
+    expect(await prepareCheckpoint(execution, history, view, task.report!, configuration)).toBeUndefined();
+    expect(task.request.messages).toEqual(history);
+    for (const action of ['dropped', 'compressed'] as const) {
+        const pressure = { ...task.report!, decisions: task.report!.decisions.map((d, i) => i ? d : { ...d, action, reason: 'budget' as const }) };
+        expect((await prepareCheckpoint(execution, history, view, pressure, configuration))?.through).toBe(1);
+    }
+    const partial = { through: 0, text: 'First part retained.', partial: { end: 1, offset: 1 } };
+    expect((await prepareCheckpoint(execution, history, checkpointView(history, partial), {
+        ...task.report!, decisions: [],
+    }, { ...configuration, previous: partial }))?.through).toBe(1);
+    const unknown = { ...task.report!, decisions: task.report!.decisions.map(({ tokens: _tokens, ...d }) => d) };
+    expect((await prepareCheckpoint(execution, history, view, unknown, configuration))?.through).toBe(1);
+});
