@@ -1042,6 +1042,13 @@ describe('ToolRuntimeAdapter', () => {
 // ── CompositeToolRuntime ────────────────────────────────────────
 
 describe('CompositeToolRuntime', () => {
+    it('closes every owned runtime once even without tools or when cleanup throws', async () => {
+        let closed = 0;
+        const empty = { tools: () => [], call: async () => ({ ok: false, content: 'unused' }), close: async () => { closed++; } };
+        const failing = { ...empty, close: () => { throw new Error('cleanup failed'); } };
+        await expect(new CompositeToolRuntime([failing, empty, empty]).close()).rejects.toThrow('cleanup failed');
+        expect(closed).toBe(1);
+    });
     function makeRuntime(toolName: string, tier: 'trusted' | 'standard' | 'untrusted', returnValue: unknown) {
         return new ToolRuntimeAdapter([{
             name: toolName,

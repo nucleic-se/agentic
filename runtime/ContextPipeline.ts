@@ -29,6 +29,8 @@ export interface ContextTokenOptions {
     imageTokenEstimate?: number;
 }
 export interface ContextCompositionOptions extends ContextTokenOptions {
+    /** Render source IDs as model-visible data when tools require exact receipt references. */
+    includeToolCallIds?: boolean;
     minRecentGroups?: number;
     /** Retain the latest human user message through intervening tools and synthetic updates.
      * Messages without provenance are treated as human for compatibility. */
@@ -239,7 +241,12 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             systemSections.push({ id: section.id, stability: section.stability ?? 'retained', start, end });
         }
         const messages = candidates.filter((item): item is Candidate & { kind: 'messages' } => item.kind === 'messages' && item.action !== 'dropped' && (!protectedOnly || item.protected))
-            .flatMap(item => item.group.messages);
+            .flatMap(item => item.group.messages).map(message => {
+                if (!options.includeToolCallIds || message.role !== 'tool_result') return message;
+                const label = `${JSON.stringify({ toolCallId: message.toolCallId })}\n`;
+                return { ...message, content: label + message.content,
+                    ...(message.contentBlocks ? { contentBlocks: [{ type: 'text' as const, text: label }, ...message.contentBlocks] } : {}) };
+            });
         const usage = estimateContextTokens({ system: finalSystem, messages, tools, responseSchema, reservedOutputTokens: input.reservedOutputTokens }, tokenOptions);
         return { system: finalSystem, systemSections, messages, includedSections: rendered.included, usage };
     };

@@ -43,7 +43,7 @@ function compose<Roles extends object, Client extends HarnessClient>(
     for (const [key, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || (key === 'timeoutMs' && value > 2147483647)) return Promise.reject(new RangeError(`Invalid execution limit: ${key}`));
     return composeDriver<HarnessRoles, SessionClient>({ extensions: options.extensions, driver: {
         roles: REQUIRED,
-        dispose: { store: store => store.close() },
+        dispose: { store: store => store.close(), tools: tools => tools.close?.() },
         async start(roles, extensions) {
             const client = new HarnessSessionClient(roles, extensions, limits);
             try { await client.recover(); return client; }
@@ -387,7 +387,7 @@ class HarnessSessionClient implements SessionClient {
                     if (toolCount > this.limits.maxToolCalls) throw new Error('Run tool-call budget exceeded');
                     const operationIds = new Map<string, string>();
                     const { executions } = await this.execution.tools(calls, {
-                        tools: this.roles.tools, policy: this.roles.policy, signal, maxToolCallsPerTurn: this.limits.maxToolCallsPerBatch,
+                        tools: this.roles.tools, policy: this.roles.policy, signal, sessionId: id, maxToolCallsPerTurn: this.limits.maxToolCallsPerBatch,
                         confirmToolCall: async context => {
                             signal.throwIfAborted();
                             const approval: PendingApproval = { ...structuredClone(context), id: randomUUID(), runId, createdAt: Date.now() };

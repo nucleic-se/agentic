@@ -43,6 +43,8 @@ export interface ToolCallResult {
 // ── Options ───────────────────────────────────────────────────────────────────
 
 export interface ToolCallOptions {
+    /** Opaque host-owned durable session identity; never taken from model arguments. */
+    sessionId?: string
     /** Stable call identifier used in execution records and tool context. */
     callId?: string
     /** If supplied, validation must not change these already-authorized arguments. */
@@ -68,6 +70,8 @@ export type ToolCallValidation =
 // ── Runtime ───────────────────────────────────────────────────────────────────
 
 export interface IToolRuntime {
+    /** Release owned resources after admitted calls have drained. */
+    close?(): Promise<void>
     /**
      * List all tools available in this runtime, with their schemas.
      * Pass the result directly to TurnRequest.tools.

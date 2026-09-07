@@ -17,6 +17,20 @@ const counter: ITokenCounter = {
 };
 const tools: ToolDefinition[] = [{ name: 'inspect', description: 'Inspect a workspace', parameters: { type: 'object', properties: { path: { type: 'string' } } } }];
 
+it('renders copyable tool source identities within the budget without changing archived content', async () => {
+    const messages: import('../contracts/llm.js').Message[] = [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'opaque|provider-id', name: 'read', args: {} }] },
+        { role: 'tool_result', toolCallId: 'opaque|provider-id', content: 'evidence', contentBlocks: [{ type: 'text', text: 'evidence' }] },
+    ];
+    const plain = await composeAgentContext({ messages, tokenBudget: 1000 });
+    const result = await composeAgentContext({ messages, tokenBudget: 1000 }, { includeToolCallIds: true });
+    expect(result.messages[1].content).toBe('{"toolCallId":"opaque|provider-id"}\nevidence');
+    expect(result.usage.totalTokens).toBeGreaterThan(plain.usage.totalTokens);
+    expect(result.usage).toEqual(estimateContextTokens({ system: result.system, messages: result.messages }));
+    expect(messages[1].content).toBe('evidence');
+    expect((result.messages[1] as import('../contracts/llm.js').ToolResultMessage).contentBlocks?.[0]).toEqual({ type: 'text', text: '{"toolCallId":"opaque|provider-id"}\n' });
+});
+
 describe('composable context primitives', () => {
     it('preserves stable ordering independently of priority and reports exact Unicode ranges', async () => {
         const input = [section('state', 'budget 10', 100, { stability: 'transient' }),

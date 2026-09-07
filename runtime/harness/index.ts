@@ -18,3 +18,4 @@ export { checkpointView, checkpointBoundary, checkpointRequest, prepareCheckpoin
 export { toToolResultMessage, readArchivedToolResult } from '../ToolOutput.js';
 export { readProjectInstructions, projectInstructionText, type ProjectInstruction } from './instructions.js';
 export { validateOperationResolution } from './resolution.js';
+export { memoryToolRuntime, sessionNoteSource, type NoteStore, type NoteSource, type NoteSourceReader } from './memory.js';

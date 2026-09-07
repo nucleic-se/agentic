@@ -10,14 +10,15 @@ import { startTerminalUi } from '../../runtime/harness/ui/terminal.js';
 const args = process.argv.slice(2);
 const value = (name: string, fallback: string) => { const i = args.indexOf(name); if (i === -1) return fallback; if (!args[i+1] || args[i+1].startsWith('--')) throw new Error(`Missing value for ${name}`); return args[i+1]; };
 if (args.includes('--help')) {
-    console.log('Agentic reference agent\n\n--workspace PATH   Tool working directory (default cwd)\n--data PATH        Local database/token directory (default ~/.agentic)\n--model NAME       Codex subscription model (default gpt-6-astra)\n--web              Start browser UI\n--host ADDRESS     Bind address (default 127.0.0.1; use 0.0.0.0 for Wi-Fi)\n--port NUMBER      Web port (default 4317)\n--terminal         Attach terminal UI too\n--planning         Use planning loop\n\nBrowser login token is stored in DATA/web-token; subscription credentials stay server-side.');
+    console.log('Agentic reference agent\n\n--workspace PATH   Tool working directory (default cwd)\n--data PATH        Local database/token directory (default ~/.agentic)\n--model NAME       Codex subscription model (default gpt-6-astra)\n--web              Start browser UI\n--host ADDRESS     Bind address (default 127.0.0.1; use 0.0.0.0 for Wi-Fi)\n--port NUMBER      Web port (default 4317)\n--terminal         Attach terminal UI too\n--planning         Use planning loop\n--memory           Enable workspace notes and explicit recall\n\nBrowser login token is stored in DATA/web-token; subscription credentials stay server-side.');
     process.exit(0);
 }
 const workspace = resolve(value('--workspace', process.cwd()));
 const data = resolve(value('--data', join(homedir(), '.agentic')));
 await mkdir(data, { recursive: true, mode: 0o700 });
 const model = value('--model', process.env.AGENTIC_MODEL ?? 'gpt-6-astra');
-const client = await createDefaultAgent({ workspace, model, database: join(data, 'sessions.sqlite'), planning: args.includes('--planning') });
+const client = await createDefaultAgent({ workspace, model, database: join(data, 'sessions.sqlite'), planning: args.includes('--planning'),
+    memoryDatabase: args.includes('--memory') ? join(data, 'memory.sqlite') : undefined });
 const cleanups: Array<() => void | Promise<void>> = [];
 try {
     if (args.includes('--web')) {

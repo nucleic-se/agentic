@@ -198,7 +198,7 @@ export function codingToolRuntime(workingRoot: string, options: {
 
 export function defaultCodingPolicy(): IToolPolicy {
     return { async evaluate(context) {
-        return codingToolEffect(context.name) === 'read' ? { kind: 'allow' }
+        return codingToolEffect(context.name) === 'read' || ['memory_search', 'memory_read'].includes(context.name) ? { kind: 'allow' }
             : { kind: 'confirm', reason: `Approve ${context.name} with these exact arguments` };
     } };
 }

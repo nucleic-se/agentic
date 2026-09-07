@@ -21,11 +21,18 @@ interface IToolRuntimeWithMeta extends IToolRuntime {
 }
 
 export class CompositeToolRuntime implements IToolRuntimeWithMeta, IValidatedToolRuntime {
+    async close(): Promise<void> {
+        const results = await Promise.allSettled([...this.runtimes].map(async runtime => runtime.close?.()));
+        const errors = results.filter(result => result.status === 'rejected').map(result => result.reason);
+        if (errors.length) throw new AggregateError(errors, 'Tool runtime cleanup failed');
+    }
     private readonly map = new Map<string, IToolRuntime>();
     private readonly defs: ToolDefinition[] = [];
     private readonly mutating = new Set<string>();
+    private readonly runtimes: Set<IToolRuntime>;
 
     constructor(runtimes: IToolRuntime[]) {
+        this.runtimes = new Set(runtimes);
         for (const runtime of runtimes) {
             for (const definition of runtime.tools()) {
                 if (this.map.has(definition.name)) {

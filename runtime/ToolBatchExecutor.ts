@@ -29,6 +29,8 @@ export interface ToolBatchConfig {
 }
 
 export interface ToolBatchOptions extends ToolBatchConfig {
+    /** Forward the host-owned durable session identity to tools. */
+    sessionId?: string;
     signal?: AbortSignal;
     emit?: AgentEventSink;
     /** Correlates tool events with a caller-owned operation or turn. */
@@ -248,7 +250,7 @@ export async function executeToolBatchDetailed(
             let result: ToolCallResult;
             try {
                 result = await config.tools.call(item.plan.name, contextForCall.args, {
-                    callId: item.plan.callId, signal, authorizedArgs: structuredClone(contextForCall.args),
+                    callId: item.plan.callId, sessionId: config.sessionId, signal, authorizedArgs: structuredClone(contextForCall.args),
                 });
             } catch (error) {
                 result = {

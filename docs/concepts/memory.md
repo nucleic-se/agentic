@@ -181,6 +181,34 @@ composition must still account for source labels and other rendered metadata.
 SQLite uses Node's built-in driver when available, with optional `better-sqlite3`
 as a fallback on older supported Node versions.
 
+## Reference harness recall
+
+Start the demo with `--memory` to add `memory_search`, `memory_read` and
+`memory_save`. Embedded compositions can set `memoryDatabase` on the default
+agent options. Use a separate data directory per workspace; reopening a note
+database under another workspace is rejected. The default tool set stays small
+when this option is absent.
+
+Notes are explicit writes, subject to the host's mutation policy. The shared
+`memoryToolRuntime` requires a source reader and a versioned store. Tool execution
+passes an opaque, host-owned `sessionId` separately from model arguments. A write
+names a tool call in that session; the host resolves its durable receipt and
+captures an exact, bounded text excerpt. Missing or ambiguous references fail.
+The note retains source identity, capture time, error status, offset and original
+text length. Captured evidence survives restart even if the original file changes.
+The shared context renderer exposes receipt IDs as data when recall is enabled;
+their text participates in context budgeting. Stored receipts remain unchanged.
+
+Search returns at most five notes within 6000 characters. Reading a revision
+returns its historical note and captured excerpt. Corrections require the current
+version and new source evidence; older revisions remain inspectable. Notes are
+fallible historical observations, never project instructions or proof of current
+conditions. There is no automatic note injection or semantic retrieval.
+Only the captured excerpt is returned by `memory_read` today; the source identity
+also points to the host's original recorded operation. A note can contain an
+unsupported model inference even when the excerpt is authentic. Verify that the
+excerpt supports the claim, and use host inspection for source outside its range.
+
 ```ts
 import { InMemoryStore } from '@nucleic-se/agentic/runtime';
 import { CallbackGraphNode } from '@nucleic-se/agentic/runtime';

@@ -42,10 +42,15 @@ that a later task can find relevant prior work, distinguish outdated information
 and recover its source after restart. Compare task quality and overhead with recall
 disabled before considering more complex retrieval.
 
-Current progress: a bounded SQLite implementation of the memory contract preserves
-source-linked revisions across reopen and rejects stale updates. Storage checks
-pass; harness source resolution, shared recall tools and live recall comparisons
-remain required before this phase is accepted.
+Current progress: bounded SQLite notes preserve source-linked revisions and reject
+stale updates. Both compositions opt into the shared recall tools and resolve
+evidence from host-owned sessions. Integration tests capture a receipt, reopen both
+stores, and recall its evidence in another task. Live runs exposed hidden receipt
+identities, now rendered explicitly and included in budgeting. Both compositions
+then saved notes successfully. A small follow-up review comparison answered
+correctly with and without recall but did not show a token-efficiency benefit.
+Source access beyond captured excerpts and demonstrated useful reuse remain
+required before this phase is accepted.
 
 ## 4. Interface and extension usability
 
