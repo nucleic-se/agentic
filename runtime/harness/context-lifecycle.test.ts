@@ -3,6 +3,28 @@ import { checkpointContextLifecycle, referenceContextLifecycle, type ContextMain
 import { createHarnessExecution } from './execution.js';
 import { budgetedContext } from './defaults.js';
 import type { Message, TurnResponse } from '../../contracts/llm.js';
+import { archivedToolResultReference } from './archive.js';
+
+it('uses current task grants for maintenance presentation through the existing lifecycle contract', async () => {
+    const { history, request, execution } = fixture();
+    history.splice(1, 0,
+        { role: 'assistant', content: 'Verification remains unfinished.', toolCalls: [{ id: 'evidence', name: 'read', args: {} }] },
+        { role: 'tool_result', toolName: 'read', toolCallId: 'evidence', content: 'exact evidence '.repeat(300) });
+    const original = structuredClone(history);
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8,
+        presentation: { maxToolResultCharacters: 500, referenceToolResult: archivedToolResultReference } });
+    const tools = [{ name: 'read_tool_result', description: '', parameters: { type: 'object' as const } }];
+    const step = await lifecycle.prepare({ request: { ...request, tools } }, execution) as ContextMaintenance;
+    expect(step.kind).toBe('maintenance');
+    const evidence = JSON.parse(step.prepared.request.messages[0].content);
+    expect(evidence.sources.find((m: Message) => m.role === 'tool_result').content).toContain('exact saved text: read_tool_result');
+    expect(evidence.sources.find((m: Message) => m.role === 'assistant').content).toBe('Verification remains unfinished.');
+    expect(step.prepared.request.tools).toEqual([]);
+    const full = await lifecycle.prepare({ request }, execution) as ContextMaintenance;
+    const fullEvidence = JSON.parse(full.prepared.request.messages[0].content);
+    expect(fullEvidence.sources.find((m: Message) => m.role === 'tool_result').content).toBe(history[2].content);
+    expect(history).toEqual(original);
+});
 
 const response = (content: string): TurnResponse => ({ message: { role: 'assistant', content }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } });
 function fixture() {

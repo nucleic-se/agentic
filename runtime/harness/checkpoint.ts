@@ -1,5 +1,6 @@
 import { ContextBudgetExceededError } from '../PromptEngine.js';
-import type { Message, TurnResponse } from '../../contracts/llm.js';
+import type { Message, ToolDefinition, ToolResultMessage, TurnResponse } from '../../contracts/llm.js';
+import { projectToolOutput } from '../ToolOutput.js';
 import type { HarnessExecution, PreparedHarnessModel } from './execution.js';
 import type { ModelTurnOptions } from '../ModelExecutor.js';
 import type { ContextReport } from '../../contracts/IAgentContextAssembler.js';
@@ -14,6 +15,13 @@ export interface WorkingCheckpoint {
 }
 
 export const CHECKPOINT_TARGET_CHARACTERS = 8000;
+/** Optional presentation of recoverable evidence; original source messages remain unchanged. */
+export interface CheckpointEvidencePresentation {
+    maxToolResultCharacters: number;
+    /** Return null unless the current task can retrieve the exact original result.
+     * Must be deterministic for a given message, index and tool grant. */
+    referenceToolResult(message: ToolResultMessage, index: number, tools: readonly ToolDefinition[]): string | null;
+}
 function humanRequirements(history: readonly Message[]) {
     return history.flatMap((message, index) => message.role === 'user' && (message.provenance ?? 'human') === 'human'
         ? [{ index, content: message.content }] : []);
@@ -122,8 +130,19 @@ export function checkpointBoundary(view: CheckpointView, report: ContextReport, 
     return boundary > through ? boundary : undefined;
 }
 
-function indexedSources(history: readonly Message[], start: number, end: number) {
+function indexedSources(history: readonly Message[], start: number, end: number,
+    presentation?: CheckpointEvidencePresentation, tools: readonly ToolDefinition[] = []) {
+    if (presentation && (!Number.isSafeInteger(presentation.maxToolResultCharacters) || presentation.maxToolResultCharacters < 1))
+        throw new RangeError('maxToolResultCharacters must be a positive safe integer');
     return history.slice(start, end).map((message, offset) => {
+        if (presentation && message.role === 'tool_result' && !message.contentBlocks?.length && message.content.length > presentation.maxToolResultCharacters) {
+            const reference = presentation.referenceToolResult(structuredClone(message), start + offset, structuredClone(tools));
+            if (reference !== null) {
+                if (typeof reference !== 'string' || !reference.trim()) throw new TypeError('Tool result reference must be nonempty text or null');
+                const content = projectToolOutput(message.content, reference, presentation.maxToolResultCharacters);
+                if (content !== null) return { index: start + offset, ...message, content };
+            }
+        }
         if (message.role !== 'assistant') return { index: start + offset, ...message };
         // Replay annotations belong to the provider, not to the summarizer's evidence.
         const { continuation: _continuation, ...evidence } = message;
@@ -140,11 +159,12 @@ function evidenceRequest(history: readonly Message[], evidence: object, previous
     };
 }
 
-export function checkpointRequest(history: readonly Message[], through: number, previous?: WorkingCheckpoint, notes = '') {
+export function checkpointRequest(history: readonly Message[], through: number, previous?: WorkingCheckpoint, notes = '',
+    presentation?: CheckpointEvidencePresentation, tools: readonly ToolDefinition[] = []) {
     const start = sourceBoundary(history, previous);
     if (previous?.partial) throw new Error('Partial checkpoint requires source chunk continuation');
     if (!Number.isSafeInteger(through) || through <= start || through > history.length) throw new RangeError('Checkpoint must advance over existing source messages');
-    return evidenceRequest(history, { sources: indexedSources(history, start, through) }, previous, notes);
+    return evidenceRequest(history, { sources: indexedSources(history, start, through, presentation, tools) }, previous, notes);
 }
 
 /** Reclaim a complete source prefix, or advance a resumable chunk of an oversized group.
@@ -154,6 +174,7 @@ export async function prepareCheckpoint(
     execution: Pick<HarnessExecution, 'prepareModel'>,
     history: readonly Message[], view: CheckpointView, report: ContextReport,
     configuration: { previous?: WorkingCheckpoint; notes?: string; maxTokens: number; cacheScope?: string;
+        presentation?: CheckpointEvidencePresentation; tools?: readonly ToolDefinition[];
         /** Start before pressure at this fraction (0, 1] of the reported context ceiling.
          * Without a reported ceiling, only pressure and partial progress trigger maintenance. */
         triggerRatio?: number },
@@ -211,7 +232,7 @@ export async function prepareCheckpoint(
     const ends = [...new Set(boundaries.map(boundary => boundary.end).filter(end => end > start))].sort((a, b) => a - b);
     for (const through of ends) {
         try {
-            const prepared = await prepare(checkpointRequest(history, through, configuration.previous, configuration.notes));
+            const prepared = await prepare(checkpointRequest(history, through, configuration.previous, configuration.notes, configuration.presentation, configuration.tools));
             selected = { through, sourceRange: { start, end: through }, prepared };
         } catch (error) {
             if (!(error instanceof ContextBudgetExceededError)) throw error;

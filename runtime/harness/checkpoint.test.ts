@@ -2,6 +2,50 @@ import { expect, it } from 'vitest';
 import { checkpointView, checkpointBoundary, checkpointRequest } from './checkpoint.js';
 import { composeAgentContext } from '../ContextPipeline.js';
 import type { Message } from '../../contracts/llm.js';
+import { archivedToolResultReference } from './archive.js';
+import { readArchivedToolResult } from '../ToolOutput.js';
+
+it('presents recoverable maintenance evidence without rewriting requirements, decisions or original results', () => {
+    const evidence = 'head '.repeat(1000) + 'Critical middle evidence: verification failed.' + ' tail'.repeat(1000);
+    const history: Message[] = [
+        { role: 'user', content: 'Do not release until verification succeeds.' },
+        { role: 'assistant', content: 'Release remains blocked; verify the failure.', toolCalls: [{ id: 'check', name: 'verify', args: {} }] },
+        { role: 'tool_result', toolCallId: 'check', toolName: 'verify', content: evidence, isError: true },
+    ];
+    const original = structuredClone(history);
+    const presentation = { maxToolResultCharacters: 500, referenceToolResult: archivedToolResultReference };
+    const tools = [{ name: 'read_tool_result', description: 'Read original evidence', parameters: { type: 'object' as const } }];
+    const projected = JSON.parse(checkpointRequest(history, 3, undefined, 'Verification unfinished.', presentation, tools).messages[0].content);
+    expect(projected.requirements).toEqual([{ index: 0, content: history[0].content }]);
+    expect(projected.notes).toBe('Verification unfinished.');
+    expect(projected.sources.slice(0, 2)).toEqual(original.slice(0, 2).map((m, index) => ({ index, ...m })));
+    expect(projected.sources[2]).toMatchObject({ index: 2, role: 'tool_result', toolCallId: 'check', isError: true });
+    expect(projected.sources[2].content).toContain('read_tool_result({"callId":"check","offset":0})');
+    expect(projected.sources[2].content).not.toContain('Critical middle evidence');
+    let restored = '', offset = 0;
+    do {
+        const page = readArchivedToolResult(history, { callId: 'check', offset });
+        restored += page.content; offset = page.nextOffset;
+        if (page.eof) break;
+    } while (true);
+    expect(restored).toBe(evidence);
+    expect(history).toEqual(original);
+    expect(JSON.parse(checkpointRequest(history, 3, undefined, '', presentation).messages[0].content).sources[2].content).toBe(evidence);
+});
+
+it('keeps rich and retrieval evidence intact and isolates reference callbacks from sources', () => {
+    const history: Message[] = [
+        { role: 'tool_result', toolCallId: 'rich', content: 'rich '.repeat(100), contentBlocks: [{ type: 'text', text: 'rich evidence' }] },
+        { role: 'tool_result', toolCallId: 'page', toolName: 'read_tool_result', content: 'page '.repeat(100) },
+    ];
+    const presentation = { maxToolResultCharacters: 100, referenceToolResult: archivedToolResultReference };
+    const tools = [{ name: 'read_tool_result', parameters: { type: 'object' as const }, description: '' }];
+    expect(JSON.parse(checkpointRequest(history, 2, undefined, '', presentation, tools).messages[0].content).sources)
+        .toEqual(history.map((m, index) => ({ index, ...m })));
+    const original = structuredClone(history);
+    checkpointRequest(history, 2, undefined, '', { ...presentation, referenceToolResult(message) { message.content = 'changed'; return null; } }, tools);
+    expect(history).toEqual(original);
+});
 
 it('retains pinned instructions across repeated checkpoints without duplicating the latest instruction', () => {
     const history: Message[] = [
@@ -108,7 +152,11 @@ it('makes resumable progress through an oversized group without dropping or spli
         expect(view.messages.some(m => m.role === 'assistant' && m.toolCalls?.[0].id === 'large')).toBe(true);
         expect(view.messages.some(m => m.role === 'tool_result' && m.toolCallId === 'large')).toBe(true);
         const task = await execution.prepareModel({ messages: view.messages, maxTokens: 100 });
-        const selected = await prepareCheckpoint(execution, history, view, task.report!, { previous, maxTokens: 100 });
+        const selected = await prepareCheckpoint(execution, history, view, task.report!, { previous, maxTokens: 100,
+            // A partial source cursor always addresses original JSON, even if previews become available.
+            ...(chunks ? { presentation: { maxToolResultCharacters: 500, referenceToolResult: archivedToolResultReference },
+                tools: [{ name: 'read_tool_result', description: '', parameters: { type: 'object' as const } }] } : {}),
+        });
         expect(selected).toBeDefined();
         const chunk = JSON.parse(selected!.prepared.request.messages[0].content).sourceChunk;
         expect(chunk.offset).toBe(recovered.length);

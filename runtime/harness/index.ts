@@ -23,4 +23,5 @@ export { memoryToolRuntime, sessionNoteSource, type NoteStore, type NoteSource, 
 export { archiveToolRuntime, archivedToolResultReference } from './archive.js';
 
 export { checkpointContextLifecycle, referenceContextLifecycle } from './context-lifecycle.js';
+export type { CheckpointEvidencePresentation } from './checkpoint.js';
 export type { ContextLifecycle, ContextLifecycleInput, ContextPreparation, ContextStep, ContextMaintenance, ContextTransition, CheckpointContextState } from './context-lifecycle.js';

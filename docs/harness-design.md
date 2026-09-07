@@ -569,6 +569,33 @@ changing a policy extension does not require rewriting approval instructions.
 
 ### Source views and maintenance
 
+Maintenance can opt into recoverable tool-result previews through the shared
+lifecycle, without changing the host:
+
+```ts
+checkpointContextLifecycle({
+    maxTokens: 800,
+    triggerRatio: 0.8,
+    presentation: {
+        maxToolResultCharacters: 2000,
+        referenceToolResult: archivedToolResultReference,
+    },
+});
+```
+
+The reference callback receives the original message index and current task tool
+grants. It must return null when exact retrieval is unavailable. Previews retain
+source identity, error status and an explicit omission marker. Human requirements,
+assistant decisions, prior checkpoints, rich content and original history remain
+unchanged. The archive reference policy also preserves retrieval pages in full.
+Existing partial cursors always address original source JSON, even when a preview
+policy is configured. Include the presentation policy in the composition identity
+when configuring a custom lifecycle.
+
+This is opt-in; the default lifecycle still receives full source evidence. A smaller
+maintenance request does not prove better retention: critical omitted details may
+need retrieval, so evaluate task fidelity as well as payload size.
+
 `readArchivedToolResult(history, reference)` retrieves a text page by saved message
 index or tool-call ID. Each page returns both identifiers, the tool name, exact
 text and pagination offsets. The host supplies the authorized task archive; the

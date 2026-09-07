@@ -2,7 +2,7 @@ import { ContextBudgetExceededError } from '../PromptEngine.js';
 import type { Message, TurnRequest, TurnResponse } from '../../contracts/llm.js';
 import type { HarnessExecution, PreparedHarnessModel } from './execution.js';
 import { checkpointView, prepareCheckpoint, prepareCheckpointRepair, checkpointFromResponse, rejectedCheckpoint,
-    type WorkingCheckpoint, type RejectedCheckpoint, type CheckpointSourceRange } from './checkpoint.js';
+    type WorkingCheckpoint, type RejectedCheckpoint, type CheckpointSourceRange, type CheckpointEvidencePresentation } from './checkpoint.js';
 
 /** The driver supplies preparation only: strategies cannot dispatch or acquire budgets. */
 export type ContextPreparation = Pick<HarnessExecution, 'prepareModel'>;
@@ -62,8 +62,8 @@ function checkpointState(value: unknown): CheckpointContextState {
 }
 
 /** Checkpoint selection and repair are one replaceable policy; hosts persist its opaque state. */
-export function checkpointContextLifecycle(configuration: { maxTokens: number; triggerRatio?: number }): ContextLifecycle {
-    const config = { ...configuration };
+export function checkpointContextLifecycle(configuration: { maxTokens: number; triggerRatio?: number; presentation?: CheckpointEvidencePresentation }): ContextLifecycle {
+    const config = { ...configuration, ...(configuration.presentation ? { presentation: { ...configuration.presentation } } : {}) };
     if (!Number.isSafeInteger(config.maxTokens) || config.maxTokens < 1) throw new RangeError('Checkpoint output budget must be a positive safe integer');
     if (config.triggerRatio !== undefined && (!Number.isFinite(config.triggerRatio) || config.triggerRatio <= 0 || config.triggerRatio > 1))
         throw new RangeError('Checkpoint triggerRatio must be greater than zero and no greater than one');
@@ -96,7 +96,7 @@ export function checkpointContextLifecycle(configuration: { maxTokens: number; t
             prepared ??= await execution.prepareModel({ ...request, messages: view.messages });
             if (!prepared.report) throw new Error('Checkpoint strategy requires a context usage report');
             selected = await prepareCheckpoint(execution, request.messages, view, prepared.report, {
-                ...config, previous: state.checkpoint, notes, cacheScope,
+                ...config, previous: state.checkpoint, notes, cacheScope, tools: request.tools,
             });
             if (!selected) return { kind: 'task', prepared,
                 ...(validated ? { metadata: { checkpointAccepted: validated },
