@@ -529,6 +529,11 @@ remain available separately. `codingToolEffect` owns the pack's read/write
 classification. `codingToolRuntime(workspace, { readOnly: true })` restricts both the
 manifest and dispatch. The default agent continues to confirm mutation arguments.
 
+`fs_read` supports numbered line pages by default and exact UTF-8 byte pages with
+`mode: "bytes"`. Byte offsets are zero-based, with a 16,000-byte maximum page;
+partial UTF-8 characters are left for the next page. Both modes reject malformed
+text. Directory enumeration streams entries and stops at the shared 200-item cap.
+
 ### Project instructions
 
 The default agent loads the workspace-root `AGENTS.md` before composing its roles.

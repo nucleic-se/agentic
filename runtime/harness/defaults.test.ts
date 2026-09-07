@@ -8,6 +8,23 @@ import type { LoopServices, SessionClient, SessionRecord, SessionUpdate } from '
 import type { Message, TurnRequest, TurnResponse } from '../../contracts/llm.js';
 import { startTerminalUi } from './ui/terminal.js';
 
+it('pages long UTF-8 records exactly and rejects malformed text in either read mode', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'coding-byte-pages-'));
+    try {
+        writeFileSync(join(root, 'record'), 'abc😀tail');
+        const runtime = codingToolRuntime(root);
+        const first = JSON.parse((await runtime.call('fs_read', { path: 'record', mode: 'bytes', limit: 5 })).content);
+        expect(first).toMatchObject({ content: 'abc', nextOffset: 3, eof: false });
+        const next = JSON.parse((await runtime.call('fs_read', { path: 'record', mode: 'bytes', offset: first.nextOffset, limit: 4 })).content);
+        expect(next).toMatchObject({ content: '😀', nextOffset: 7 });
+        expect((await runtime.call('fs_read', { path: 'record', mode: 'bytes', offset: 3, limit: 1 })).ok).toBe(false);
+        for (const suffix of [[255], [226, 130], [192, 175]]) {
+            writeFileSync(join(root, 'record'), Buffer.from([97, ...suffix]));
+            for (const mode of ['lines', 'bytes']) expect((await runtime.call('fs_read', { path: 'record', mode })).ok).toBe(false);
+        }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 it('keeps the coding pack small and rejects excluded effects at dispatch', async () => {
     const root = mkdtempSync(join(tmpdir(), 'coding-manifest-'));
     try {

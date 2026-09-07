@@ -11,8 +11,7 @@
 
 import * as fs   from 'node:fs'
 import * as path from 'node:path'
-import { open } from 'node:fs/promises'
-import { StringDecoder } from 'node:string_decoder'
+import { open, opendir } from 'node:fs/promises'
 import type { ToolDefinition } from '../contracts/llm.js'
 import type { IToolRuntime, ToolCallResult, ToolCallOptions } from '../contracts/tool-runtime.js'
 
@@ -71,8 +70,9 @@ const DEFINITIONS: ToolDefinition[] = [
             properties: {
                 path:     { type: 'string', description: 'File path (relative to working root or absolute).' },
                 encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Encoding. Default: utf8.' },
-                offset:   { type: 'integer', description: 'Start reading from this line number (1-based). Default: 1.' },
-                limit:    { type: 'integer', description: 'Maximum number of lines to return. Default: 200; request a larger range explicitly when needed.' },
+                mode:     { type: 'string', enum: ['lines', 'bytes'], description: 'Default: lines. Bytes mode reads exact UTF-8 text with zero-based byte offset and a byte limit up to 16000; returns JSON with nextOffset/eof. Use for long records.' },
+                offset:   { type: 'integer', description: 'Lines mode: 1-based line number, default 1. Bytes mode: zero-based byte position, default 0.' },
+                limit:    { type: 'integer', description: 'Lines mode: maximum lines, default 200. Bytes mode: maximum bytes, default and maximum 16000.' },
             },
         },
     },
@@ -156,13 +156,16 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
     if (!filePath) return fail('path is required')
     const abs = resolve(root, filePath)
     if (!withinRoot(root, abs)) return fail(`Path escapes working root: ${filePath}`)
+    const mode = args.mode ?? 'lines'
+    if (mode !== 'lines' && mode !== 'bytes') return fail('mode must be lines or bytes')
     const hasLineRange = args.offset !== undefined || args.limit !== undefined
-    const offset = args.offset === undefined ? 1 : args.offset
-    const limit = args.limit === undefined ? 200 : args.limit
-    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 1 ||
+    const offset = args.offset === undefined ? (mode === 'bytes' ? 0 : 1) : args.offset
+    const limit = args.limit === undefined ? (mode === 'bytes' ? 16000 : 200) : args.limit
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < (mode === 'bytes' ? 0 : 1) ||
         typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1) return fail('offset and limit must be positive safe integers')
     const encoding = args.encoding ?? 'utf8'
     if (encoding !== 'utf8' && encoding !== 'base64') return fail('encoding must be utf8 or base64')
+    if (mode === 'bytes' && (encoding !== 'utf8' || limit > 16000)) return fail('Byte pages require UTF-8 and a limit no greater than 16000')
     if (hasLineRange && encoding !== 'utf8') return fail('Line ranges require utf8 encoding')
     let file: Awaited<ReturnType<typeof open>> | undefined
     try {
@@ -171,6 +174,17 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
         file = await open(abs, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW)
         const stat = await file.stat()
         if (!stat.isFile()) return fail('Not a regular file')
+        if (mode === 'bytes') {
+            const page = Buffer.alloc(limit)
+            const { bytesRead } = await file.read(page, 0, limit, offset)
+            options?.signal?.throwIfAborted()
+            const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+            const content = decoder.decode(page.subarray(0, bytesRead), { stream: offset + bytesRead < stat.size })
+            const consumed = Buffer.byteLength(content, 'utf8')
+            if (bytesRead > 0 && consumed === 0) return fail('Read limit cannot fit the next UTF-8 character; increase limit')
+            const nextOffset = offset + consumed
+            return ok(JSON.stringify({ bytes: stat.size, offset, bytesRead: consumed, nextOffset, eof: nextOffset >= stat.size, content }))
+        }
         const buffer = Buffer.alloc(8192)
         if (encoding === 'base64') {
             if (stat.size > MAX_READ_BYTES) return fail(`File too large: ${stat.size} bytes (max ${MAX_READ_BYTES}). Use offset/limit to read a line range.`)
@@ -188,7 +202,7 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
             if (Buffer.byteLength(content) > MAX_READ_BYTES) return fail('Encoded file exceeds output limit; use a UTF-8 line range')
             return ok(content, { path: abs, bytes: stat.size })
         }
-        const decoder = new StringDecoder('utf8')
+        const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
         const lines: string[] = []
         let lineNumber = 1, line = '', outputBytes = 0, eof = false, stopped = false
         const emitLine = () => {
@@ -202,14 +216,14 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
         while (!stopped) {
             options?.signal?.throwIfAborted()
             const { bytesRead } = await file.read(buffer, 0, buffer.length, null)
-            const text = bytesRead ? decoder.write(buffer.subarray(0, bytesRead)) : decoder.end()
+            const text = decoder.decode(buffer.subarray(0, bytesRead), { stream: bytesRead > 0 })
             let start = 0
             for (let i = 0; i <= text.length; i++) {
                 if (i < text.length && text[i] !== '\n') continue
                 if (lineNumber >= offset) {
                     line += text.slice(start, i)
                     if (Buffer.byteLength(line) + String(lineNumber).length + 2 > textPageBytes - 100)
-                        return fail(`Line ${lineNumber} exceeds the ${textPageBytes}-byte output limit`)
+                        return fail(`Line ${lineNumber} exceeds the ${textPageBytes}-byte output limit; use mode: "bytes" for exact byte pages`)
                 }
                 if (i < text.length) emitLine()
                 start = i + 1
@@ -255,7 +269,7 @@ function handleWrite(root: string, args: Record<string, unknown>): ToolCallResul
     }
 }
 
-function handleList(root: string, args: Record<string, unknown>): ToolCallResult {
+async function handleList(root: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
     const dirPath   = String(args['path'] ?? '.')
     const recursive = Boolean(args['recursive'] ?? false)
 
@@ -266,16 +280,17 @@ function handleList(root: string, args: Record<string, unknown>): ToolCallResult
 
     try {
         const entries: string[] = []
-        function collect(dir: string, prefix: string) {
+        async function collect(dir: string, prefix: string) {
             if (entries.length >= MAX_LIST_ITEMS) return
-            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            for await (const entry of await opendir(dir)) {
+                options?.signal?.throwIfAborted()
                 if (entries.length >= MAX_LIST_ITEMS) break
                 const rel = prefix ? `${prefix}/${entry.name}` : entry.name
                 entries.push(entry.isDirectory() ? `${rel}/` : rel)
-                if (recursive && entry.isDirectory()) collect(path.join(dir, entry.name), rel)
+                if (recursive && entry.isDirectory()) await collect(path.join(dir, entry.name), rel)
             }
         }
-        collect(abs, '')
+        await collect(abs, '')
         const truncated = entries.length >= MAX_LIST_ITEMS
         const text = entries.join('\n') + (truncated ? `\n(truncated at ${MAX_LIST_ITEMS})` : '')
         return ok(text, { path: abs, count: entries.length, truncated })
@@ -398,7 +413,7 @@ export class FsToolRuntime implements IToolRuntimeWithMeta {
             case 'fs_read':   return handleRead(this.root, args, this.textPageBytes, options)
             case 'fs_write':  return handleWrite(this.root, args)
             case 'fs_patch':  return handlePatch(this.root, args)
-            case 'fs_list':   return handleList(this.root, args)
+            case 'fs_list':   return handleList(this.root, args, options)
             case 'fs_delete': return handleDelete(this.root, args)
             case 'fs_move':   return handleMove(this.root, args)
             default:          return fail(`Unknown tool: ${name}`)

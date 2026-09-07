@@ -79,7 +79,8 @@ export function budgetedContext(system: string, tokenBudget: number, policy: Con
 const filePath = z.string().min(1);
 const schemas: Record<string, z.ZodType<Record<string, unknown>>> = {
     read_output: z.object({ id: z.string().uuid(), offset: z.number().int().nonnegative().optional() }).strict(),
-    fs_read: z.object({ path: filePath, encoding: z.enum(['utf8', 'base64']).optional(), offset: z.number().int().positive().optional(), limit: z.number().int().positive().optional() }).strict(),
+    fs_read: z.object({ path: filePath, encoding: z.enum(['utf8', 'base64']).optional(), mode: z.enum(['lines', 'bytes']).optional(), offset: z.number().int().nonnegative().optional(), limit: z.number().int().positive().optional() }).strict()
+        .refine(args => args.mode === 'bytes' ? (args.encoding ?? 'utf8') === 'utf8' && (args.limit ?? 16000) <= 16000 : (args.offset ?? 1) >= 1, 'Invalid read mode, offset or limit'),
     fs_write: z.object({ path: filePath, content: z.string().max(262144), append: z.boolean().optional() }).strict(),
     fs_list: z.object({ path: filePath, recursive: z.boolean().optional() }).strict(),
     fs_patch: z.object({ path: filePath, patches: z.array(z.object({ search: z.string().min(1), replace: z.string() }).strict()).min(1).max(100) }).strict(),
