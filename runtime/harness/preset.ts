@@ -19,6 +19,8 @@ export interface DefaultAgentOptions {
     memoryDatabase?: string;
     planning?: boolean;
     tokenBudget?: number;
+    /** Complete-line read page ceiling in bytes. Defaults to the coding pack's 4000. */
+    textPageBytes?: number;
     /** Reserved inside tokenBudget and sent as the provider output limit. Default: 4096. */
     outputTokens?: number;
     limits?: ExecutionLimits;
@@ -40,10 +42,10 @@ export async function defaultAgentExtensions(options: DefaultAgentOptions): Prom
             roles: { loop: () => options.planning ? planningLoop({ maxTokens: options.outputTokens ?? 4096, checkpoint: { maxTokens: 800, triggerRatio: 0.8 } }) : conversationalLoop({ maxTokens: options.outputTokens ?? 4096, checkpoint: { maxTokens: 800, triggerRatio: 0.8 } }) } },
         { id: 'context.budgeted', configuration: JSON.stringify({system, budget: options.tokenBudget ?? 24000, includeToolCallIds: true}), version: '5.0.0', apiVersion: 1, roles: { context: () => budgetedContext(system, options.tokenBudget ?? 24000, { includeToolCallIds: true }) } },
         { id: `provider.subscription.${model}`, version: '3.0.0', apiVersion: 1, roles: { provider: async () => new (await import('../../providers/subscription.js')).SubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort: 'low' }) } },
-        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null }), version: '11.0.0', apiVersion: 1,
+        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null, textPageBytes: options.textPageBytes ?? 4000 }), version: '11.0.0', apiVersion: 1,
             activate: async value => { client = value; },
             roles: { tools: async () => {
-                const coding = codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined });
+                const coding = codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined, textPageBytes: options.textPageBytes });
                 const archive = archiveToolRuntime(async (sessionId, signal) => {
                     signal?.throwIfAborted();
                     if (!client) throw new Error('Archive reader is not active');
