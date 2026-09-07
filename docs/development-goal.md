@@ -32,9 +32,10 @@ original evidence and retained an unfinished verification gate. Maintenance used
 most of that trial’s tokens; broader representative evidence remains required. This
 phase remains open: a broader recovery-code review failed in both compositions
 when a later checkpoint and its retry exceeded the size bound. Repeating source
-summarization with a rejection label is insufficient. Implement and verify explicit
-repair of the rejected candidate, preserving its selected sources and bounded
-admission, before expanding recall or interfaces. Align proven behavior across both compositions before
+summarization with a rejection label was insufficient. Shared explicit candidate
+repair now preserves the rejected text and its selected sources across restart,
+within the existing allowance. Verify it against the failed drafts and the broader
+review before expanding recall or interfaces. Align proven behavior across both compositions before
 expanding recall or interfaces.
 
 ## 2. A complete coding workflow

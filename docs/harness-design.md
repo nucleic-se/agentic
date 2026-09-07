@@ -643,8 +643,16 @@ custom projected requests retain their ordinary behavior unless explicitly opted
 The host persists `checkpoint` separately from the original transcript. Accepted
 maintenance advances this derived view atomically with its model receipt. Every
 maintenance call consumes the same run call allowance as ordinary task work.
-A structurally rejected complete draft is recorded and retried once; a second
-rejection fails without replacing the previous checkpoint or source history.
+A structurally rejected complete draft is recorded as pending derived state,
+including its exact text and selected source range. `prepareCheckpointRepair`
+prepares one bounded revision of that artifact rather than repeating source
+summarization. Repair targets 4,000 characters with an 8,000-character acceptance
+ceiling, allowing room for imperfect model length estimates. The repaired text
+keeps the same coverage boundary, including partial
+source progress. A second rejection fails without replacing the previous accepted
+checkpoint or original history. Restart preserves both the candidate and the used
+retry allowance. The pending draft is not included in ordinary task context; repair
+preparation must fit it exactly or fail before dispatch.
 Incomplete or ambiguous operations retain ordinary execution recovery semantics.
 Explicit transcript replacement or tool-result resolution invalidates old checkpoint
 references. Forks retain the unchanged source transcript and checkpoint together.

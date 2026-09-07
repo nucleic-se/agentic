@@ -1,6 +1,6 @@
 import { sessionSummary } from './session-summary.js';
 import { isDeepStrictEqual } from 'node:util';
-import { checkpointView, prepareCheckpoint, checkpointFromResponse } from './checkpoint.js';
+import { checkpointView, prepareCheckpoint, checkpointFromResponse, rejectedCheckpoint, prepareCheckpointRepair } from './checkpoint.js';
 import type { PreparedHarnessModel } from './execution.js';
 import { toToolResultMessage } from '../ToolOutput.js';
 import { validateOperationResolution } from './resolution.js';
@@ -156,7 +156,7 @@ class HarnessSessionClient implements SessionClient {
                                 data.checkpointDecision = { accepted: true };
                             } else {
                                 const attempt = record.checkpointRejection ? 2 : 1;
-                                record.checkpointRejection = draft.reason;
+                                record.checkpointRejection = rejectedCheckpoint(options.checkpoint, outcome.response, draft.reason);
                                 data.checkpointDecision = { accepted: false, reason: draft.reason, attempt };
                                 if (attempt === 2) {
                                     projectionFailed = true;
@@ -199,8 +199,12 @@ class HarnessSessionClient implements SessionClient {
             const prepared = await this.execution.prepareModel({ ...request, messages: view.messages,
                 tools: request.tools ?? this.roles.tools.tools(), cacheScope: request.cacheScope ?? `${this.fingerprint}:${id}` }, { signal });
             if (!prepared.report) throw new Error('Checkpointing requires a context usage report');
-            const checkpoint = await prepareCheckpoint(this.execution, record.messages, view, prepared.report, {
-                ...policy, previous: record.checkpoint, rejection: record.checkpointRejection,
+            const checkpoint = record.checkpointRejection
+                ? await prepareCheckpointRepair(this.execution, record.checkpointRejection, {
+                    maxTokens: policy.maxTokens, cacheScope: `${this.fingerprint}:${id}:checkpoint:repair`,
+                }, { signal })
+                : await prepareCheckpoint(this.execution, record.messages, view, prepared.report, {
+                ...policy, previous: record.checkpoint,
                 cacheScope: `${this.fingerprint}:${id}:checkpoint`,
             }, { signal });
             admit();

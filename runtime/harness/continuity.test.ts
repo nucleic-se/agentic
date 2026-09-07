@@ -11,7 +11,7 @@ async function setup(turn: (request: TurnRequest) => string, maxModelCalls = 20)
     const client = await createHarness().compose({ limits: { maxModelCalls }, extensions: [{ id: 'continuity.test', version: '1', apiVersion: 1, roles: {
         store: () => new MemorySessionStore(),
         loop: () => conversationalLoop({ maxTokens: 64, checkpoint: { maxTokens: 64, triggerRatio: 0.8 } }),
-        context: () => budgetedContext('Complete the audit.', 2000),
+        context: () => budgetedContext('Complete the audit.', 3000),
         provider: () => ({ turn: async request => ({ message: { role: 'assistant', content: turn(request) }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } }), structured: async () => { throw new Error('unused'); } }),
         tools: () => ({ tools: () => [], validate: (_name, args) => ({ ok: true, args }), call: async () => ({ ok: true, content: 'unused' }) }),
         policy: () => ({ evaluate: async () => ({ kind: 'allow' }) }),
@@ -28,11 +28,15 @@ async function setup(turn: (request: TurnRequest) => string, maxModelCalls = 20)
 it.each([false, true])('automatically maintains context without replacing sources (reject twice=%s)', async rejectTwice => {
     let drafts = 0;
     const { client, record } = await setup(request => {
-        if (request.system?.startsWith('Maintain a concise working checkpoint')) {
+        if (/^(Maintain a concise working checkpoint|Repair a rejected working checkpoint)/.test(request.system ?? '')) {
             const input = JSON.parse(request.messages[0].content);
             expect(input.output.maxCharacters).toBe(8000);
             drafts++;
-            if (drafts === 2) expect(input.rejectedDraft).toBe('too_large');
+            if (drafts === 2) {
+                expect(input.rejectedDraft).toBe('too_large');
+                expect(input.draft).toBe('x'.repeat(8591));
+                expect(input.sources).toBeUndefined();
+            }
             return drafts === 1 || rejectTwice ? 'x'.repeat(8591) : 'Inspections recorded. Security verification remains unfinished.';
         }
         expect(request.messages.some(m => m.content.startsWith('Working checkpoint'))).toBe(true);
@@ -91,7 +95,7 @@ it('composes automatic checkpoints and source recovery in the default agent acro
         const extensions = (await defaultAgentExtensions(options)).filter(extension => !extension.roles?.provider);
         return createHarness().compose({ extensions: [...extensions, { id: 'provider.test', version: '1', apiVersion: 1, roles: {
             provider: () => ({ structured: async () => { throw new Error('unused'); }, turn: async request => {
-                if (request.system?.startsWith('Maintain a concise working checkpoint')) {
+                if (/^(Maintain a concise working checkpoint|Repair a rejected working checkpoint)/.test(request.system ?? '')) {
                     drafts++;
                     return { message: { role: 'assistant', content: 'Inspections recorded. Security verification remains unfinished; original evidence is in callId source-call.' }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } };
                 }

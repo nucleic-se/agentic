@@ -1,4 +1,4 @@
-import type { WorkingCheckpoint, CheckpointRejection } from './checkpoint.js';
+import type { WorkingCheckpoint, RejectedCheckpoint } from './checkpoint.js';
 import type { Message, TurnRequest, TurnResponse, ILLMProvider, ToolCall, TokenUsage, ToolDefinition } from '../../contracts/llm.js';
 import type { ExecutionJournal } from '../ExecutionJournal.js';
 export type { ExecutionLimits } from '../ExecutionOptions.js';
@@ -40,7 +40,7 @@ export interface SessionRecord {
     status: SessionStatus;
     messages: Message[];
     checkpoint?: WorkingCheckpoint;
-    checkpointRejection?: CheckpointRejection;
+    checkpointRejection?: RejectedCheckpoint;
     operations: Operation[];
     approvals: PendingApproval[];
     commandIds: string[];
