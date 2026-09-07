@@ -48,10 +48,13 @@ at the intended context budget. Measure completion and evidence fidelity alongsi
 reading, retrieval, checkpoint and repair work. Do not infer task efficiency from
 page count alone.
 
-Context lifecycle ownership also needs an explicit acceptance check: selection,
-maintenance and repair policy must be replaceable as one strategy without editing
-either host. Hosts retain admission, receipt recording and atomic persistence.
-Prove this with a materially different second strategy, not only shared helper calls.
+Context lifecycle selection, maintenance and repair now belong to one replaceable
+strategy. Both hosts retain admission, receipt recording and atomic persistence.
+Integration tests swap the checkpoint lifecycle for direct source selection without
+host changes, and verify that reducer failure retains the completed receipt and
+usage. Restart tests retain rejected-candidate state and the used retry allowance.
+This establishes the replacement boundary; live task fidelity and maintenance cost
+for the alternative strategy still need measurement.
 
 ## 2. A complete coding workflow
 

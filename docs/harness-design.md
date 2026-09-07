@@ -503,8 +503,8 @@ deadlocking; cleanup acquired after closure is still attempted exactly once.
 Both hosts prepare a request, read its context report, and dispatch that same
 preparation. Preparation is local: it selects context and validates accounting,
 without calling the provider or committing an execution intent. The local host
-uses its session messages; Gears first derives a checkpoint view and may substitute
-a maintenance preparation when historical evidence needs summarizing.
+supplies its session messages; Gears also supplies transient task facts. The selected
+context lifecycle chooses a task or maintenance preparation in either host.
 
 Dispatch awaits the host's intent callback before contacting the provider. The
 local host journals the exact request and report. Gears additionally checks lease
@@ -635,14 +635,35 @@ policy explicitly before conversion and commit the resulting message with its
 receipt. Source retrieval may remain text-only; rich ordinary tool results are
 not silently flattened.
 
-Both reference compositions drive automatic checkpoints at 80% of the reported
-ceiling, with pressure as a fallback. The local reference loop opts in through
-`model.request(request, { checkpoint: { maxTokens: 800, triggerRatio: 0.8 } })`.
-Checkpointing requires the complete current conversation and a context report;
-custom projected requests retain their ordinary behavior unless explicitly opted in.
-The host persists `checkpoint` separately from the original transcript. Accepted
-maintenance advances this derived view atomically with its model receipt. Every
-maintenance call consumes the same run call allowance as ordinary task work.
+Context lifecycle is owned by the context extension, not by the loop or driver.
+`ContextStrategy.lifecycle` optionally supplies a `ContextLifecycle`; without it,
+the assembler prepares ordinary task context. Both reference compositions select
+`checkpointContextLifecycle({ maxTokens: 800, triggerRatio: 0.8 })` (Gears also
+caps maintenance output by its configured output budget). To choose direct source
+selection with no generated checkpoints, supply `referenceContextLifecycle()`
+instead. Configure the assembler's archive-reference policy separately from the
+lifecycle; the strategy uses the same budgeted preparation boundary.
+
+A lifecycle receives the original request, its opaque `contextState`, and optional
+host facts. Its only execution capability is local `prepareModel`. It returns a
+prepared task request or a maintenance request with a pure response reducer. Task
+requests may also reduce context state in their ordinary receipt transaction, so
+a stateful selector does not need an extra model call just to save its state. It
+cannot dispatch a provider call, reserve budgets, write storage, or schedule jobs.
+The driver admits and records the exact preparation, then atomically commits the
+response, usage, strategy decision and replacement derived state. Reducer failure
+stops the task while preserving its completed provider receipt and charge.
+Maintenance decisions appear as `contextDecision`; source-selection metadata is
+nested under `contextMetadata` in the intent. All maintenance calls consume the
+same allowance as ordinary task work.
+
+The checkpoint strategy owns source coverage, partial progress, rejected candidates
+and retry policy inside `contextState`. Hosts never interpret those fields. Gears
+progress notes remain host-owned and visible until updated by its tools; a context
+reducer cannot clear them as an incidental side effect. Checkpoint lifecycle use
+requires the complete current conversation and a context report. Explicit local
+requests with `projection: 'none'` bypass the conversation lifecycle.
+
 A structurally rejected complete draft is recorded as pending derived state,
 including its exact text and selected source range. `prepareCheckpointRepair`
 prepares one bounded revision of that artifact rather than repeating source
@@ -654,8 +675,11 @@ checkpoint or original history. Restart preserves both the candidate and the use
 retry allowance. The pending draft is not included in ordinary task context; repair
 preparation must fit it exactly or fail before dispatch.
 Incomplete or ambiguous operations retain ordinary execution recovery semantics.
-Explicit transcript replacement or tool-result resolution invalidates old checkpoint
-references. Forks retain the unchanged source transcript and checkpoint together.
+Explicit local transcript replacement or tool-result resolution invalidates derived
+context state. Forks retain the unchanged source transcript and derived state together.
+This alpha change replaces the old persisted checkpoint fields and loop-level
+checkpoint options; existing sessions require their original composition. No migration
+of old active state is provided.
 
 The default tool composition includes `read_tool_result`, backed by the shared
 archive reader independently of optional cross-task notes. The host supplies the

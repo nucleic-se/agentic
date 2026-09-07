@@ -21,3 +21,6 @@ export { validateOperationResolution } from './resolution.js';
 export { memoryToolRuntime, sessionNoteSource, type NoteStore, type NoteSource, type NoteSourceQuery, type NoteSourceReader } from './memory.js';
 
 export { archiveToolRuntime, archivedToolResultReference } from './archive.js';
+
+export { checkpointContextLifecycle, referenceContextLifecycle } from './context-lifecycle.js';
+export type { ContextLifecycle, ContextLifecycleInput, ContextPreparation, ContextStep, ContextMaintenance, ContextTransition, CheckpointContextState } from './context-lifecycle.js';

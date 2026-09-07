@@ -1,4 +1,4 @@
-import type { WorkingCheckpoint, RejectedCheckpoint } from './checkpoint.js';
+import type { ContextLifecycle } from './context-lifecycle.js';
 import type { Message, TurnRequest, TurnResponse, ILLMProvider, ToolCall, TokenUsage, ToolDefinition } from '../../contracts/llm.js';
 import type { ExecutionJournal } from '../ExecutionJournal.js';
 export type { ExecutionLimits } from '../ExecutionOptions.js';
@@ -39,8 +39,8 @@ export interface SessionRecord {
     updatedAt: number;
     status: SessionStatus;
     messages: Message[];
-    checkpoint?: WorkingCheckpoint;
-    checkpointRejection?: RejectedCheckpoint;
+    /** Opaque derived state owned by the configured context lifecycle. */
+    contextState?: unknown;
     operations: Operation[];
     approvals: PendingApproval[];
     commandIds: string[];
@@ -116,6 +116,7 @@ export interface SessionClient {
     close(): Promise<void>;
 }
 export interface ContextStrategy {
+    lifecycle?: ContextLifecycle;
     assemble(messages: Message[], signal: AbortSignal, options?: {
         tools?: ToolDefinition[];
         reservedOutputTokens?: number;
@@ -125,7 +126,7 @@ export interface ContextStrategy {
 }
 export interface LoopServices {
     readonly signal: AbortSignal;
-    readonly model: { request(request: TurnRequest, options?: { projection?: 'conversation' | 'none'; checkpoint?: { maxTokens: number; triggerRatio?: number } }): Promise<TurnResponse> };
+    readonly model: { request(request: TurnRequest, options?: { projection?: 'conversation' | 'none' }): Promise<TurnResponse> };
     readonly tools: { executeBatch(calls: ToolCall[]): Promise<ToolExecution[]> };
     /** Raw request snapshot. The model service applies the context strategy once, after request overrides. */
     context(): Promise<{ system?: string; messages: Message[] }>;

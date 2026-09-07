@@ -1,3 +1,4 @@
+import { checkpointContextLifecycle, referenceContextLifecycle, type ContextLifecycle, type CheckpointContextState } from './context-lifecycle.js';
 import { afterEach, expect, it } from 'vitest';
 import { createHarness } from './host.js';
 import { MemorySessionStore } from './stores.js';
@@ -7,11 +8,11 @@ import type { TurnRequest } from '../../contracts/llm.js';
 
 const clients: SessionClient[] = [];
 afterEach(async () => { for (const client of clients.splice(0)) await client.close(); });
-async function setup(turn: (request: TurnRequest) => string, maxModelCalls = 20) {
+async function setup(turn: (request: TurnRequest) => string, maxModelCalls = 20, lifecycle: ContextLifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 })) {
     const client = await createHarness().compose({ limits: { maxModelCalls }, extensions: [{ id: 'continuity.test', version: '1', apiVersion: 1, roles: {
         store: () => new MemorySessionStore(),
-        loop: () => conversationalLoop({ maxTokens: 64, checkpoint: { maxTokens: 64, triggerRatio: 0.8 } }),
-        context: () => budgetedContext('Complete the audit.', 3000),
+        loop: () => conversationalLoop({ maxTokens: 64 }),
+        context: () => ({ ...budgetedContext('Complete the audit.', 3000), lifecycle }),
         provider: () => ({ turn: async request => ({ message: { role: 'assistant', content: turn(request) }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } }), structured: async () => { throw new Error('unused'); } }),
         tools: () => ({ tools: () => [], validate: (_name, args) => ({ ok: true, args }), call: async () => ({ ok: true, content: 'unused' }) }),
         policy: () => ({ evaluate: async () => ({ kind: 'allow' }) }),
@@ -51,18 +52,18 @@ it.each([false, true])('automatically maintains context without replacing source
     expect(saved.messages.some(m => m.content === 'x'.repeat(8591))).toBe(false);
     expect(saved.usage.inputTokens).toBe(saved.operations.length * 100);
     const events = await client.events(record.id);
-    const decisions = events.map(event => (event.data as { checkpointDecision?: unknown } | undefined)?.checkpointDecision).filter(Boolean);
+    const decisions = events.map(event => (event.data as { contextDecision?: unknown } | undefined)?.contextDecision).filter(Boolean);
     expect(decisions[0]).toEqual({ accepted: false, reason: 'too_large', attempt: 1 });
     if (rejectTwice) {
         expect(drafts).toBe(2);
-        expect(saved.checkpoint).toBeUndefined();
+        expect((saved.contextState as CheckpointContextState).checkpoint).toBeUndefined();
         expect(saved.error).toContain('after two attempts');
     } else {
-        expect(saved.checkpoint?.through).toBeGreaterThan(0);
-        expect(saved.checkpointRejection).toBeUndefined();
+        expect((saved.contextState as CheckpointContextState).checkpoint?.through).toBeGreaterThan(0);
+        expect((saved.contextState as CheckpointContextState).rejected).toBeUndefined();
         expect(saved.messages.at(-1)?.content).toBe('done');
         const reset = await client.replaceMessages(saved.id, saved.revision, saved.messages);
-        expect(reset.checkpoint).toBeUndefined();
+        expect(reset.contextState).toBeUndefined();
     }
 });
 it('charges maintenance to the same run call budget as task execution', async () => {
@@ -77,7 +78,7 @@ it('charges maintenance to the same run call budget as task execution', async ()
     expect(calls).toBe(1);
     expect(saved.status).toBe('failed');
     expect(saved.error).toContain('model-call budget');
-    expect(saved.checkpoint?.through).toBeGreaterThan(0);
+    expect((saved.contextState as CheckpointContextState).checkpoint?.through).toBeGreaterThan(0);
     expect(saved.usage.inputTokens).toBe(100);
 });
 
@@ -123,10 +124,10 @@ it('composes automatic checkpoints and source recovery in the default agent acro
         expect(saved.status).toBe('idle');
         expect(drafts).toBeGreaterThan(0);
         expect(saved.messages.slice(0, record.messages.length)).toEqual(record.messages);
-        expect(saved.checkpoint?.through).toBeGreaterThan(2);
+        expect((saved.contextState as CheckpointContextState).checkpoint?.through).toBeGreaterThan(2);
         await active.close();
         active = await compose();
-        expect((await active.get(record.id)).checkpoint).toEqual(saved.checkpoint);
+        expect((await active.get(record.id)).contextState).toEqual(saved.contextState);
         await active.submit(record.id, 'Confirm the result', { commandId: 'second' });
         const reopened = await active.wait(record.id);
         expect(reopened.error).toBeUndefined();
@@ -134,4 +135,45 @@ it('composes automatic checkpoints and source recovery in the default agent acro
         expect(reopened.messages[2].content).toBe(source);
         expect(reopened.operations.filter(operation => operation.kind === 'tool' && operation.name === 'read_tool_result')).toHaveLength(2);
     } finally { await active?.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+
+it('replaces generated checkpoints with direct context selection without driver changes', async () => {
+    let calls = 0;
+    const { client, record } = await setup(request => {
+        calls++;
+        expect(request.system).toBe('Complete the audit.');
+        expect(request.messages.some(m => m.content.startsWith('Working checkpoint'))).toBe(false);
+        expect(request.messages.some(m => m.content.includes('security verification'))).toBe(true);
+        expect(request.messages.some(m => m.content.includes('Do not release'))).toBe(true);
+        return 'Verification remains unfinished.';
+    }, 20, { async prepare(input, execution) {
+        const step = await referenceContextLifecycle().prepare(input, execution);
+        return { ...step, reduce: () => ({ state: { observed: true }, decision: 'recorded with task receipt' }) };
+    } });
+    await client.submit(record.id, 'Continue', { commandId: 'direct' });
+    const saved = await client.wait(record.id);
+    expect(saved.status).toBe('idle');
+    expect(calls).toBe(1);
+    expect(saved.contextState).toEqual({ observed: true });
+    expect(saved.messages.slice(0, record.messages.length)).toEqual(record.messages);
+    expect((await client.events(record.id)).filter(e => e.type === 'model.intent')).toHaveLength(1);
+});
+
+it('commits provider usage and receipt even when a lifecycle reducer throws', async () => {
+    const { client, record } = await setup(() => 'complete derived response', 20, {
+        async prepare(input, execution) {
+            return { kind: 'maintenance', prepared: await execution.prepareModel({ messages: [], system: 'derive', maxTokens: 64 }),
+                metadata: { purpose: 'test' }, reduce() { throw new Error('Reducer failed'); } };
+        },
+    });
+    await client.submit(record.id, 'Continue', { commandId: 'bad-reducer' });
+    const saved = await client.wait(record.id);
+    expect(saved.status).toBe('failed');
+    expect(saved.error).toBe('Reducer failed');
+    expect(saved.usage.inputTokens).toBe(100);
+    expect(saved.operations.at(-1)?.status).toBe('completed');
+    expect(saved.contextState).toBeUndefined();
+    expect(saved.messages.slice(0, record.messages.length)).toEqual(record.messages);
+    expect((await client.events(record.id)).some(e => e.type === 'model.completed')).toBe(true);
 });
