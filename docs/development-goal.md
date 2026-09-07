@@ -35,8 +35,18 @@ when a later checkpoint and its retry exceeded the size bound. Repeating source
 summarization with a rejection label was insufficient. Shared explicit candidate
 repair now preserves the rejected text and its selected sources across restart,
 within the existing allowance. Verify it against the failed drafts and the broader
-review before expanding recall or interfaces. Align proven behavior across both compositions before
-expanding recall or interfaces.
+review before expanding recall or interfaces.
+
+Source retrieval and context presentation must be composed together. Both reference
+compositions now use the same archived-result reference policy: oversized recent
+tool results can be presented with an exact retrieval reference while preserving
+their original receipts. Installing a retrieval tool alone does not establish this
+behavior. The default-composition regression exercises the policy under pressure.
+Read-page size is configurable and participates in composition identity; larger
+pages remain experimental until their reading savings outweigh maintenance costs
+at the intended context budget. Measure completion and evidence fidelity alongside
+reading, retrieval, checkpoint and repair work. Do not infer task efficiency from
+page count alone.
 
 Context lifecycle ownership also needs an explicit acceptance check: selection,
 maintenance and repair policy must be replaceable as one strategy without editing
