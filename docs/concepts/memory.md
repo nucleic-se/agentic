@@ -142,7 +142,7 @@ class StrictValidator implements IMemoryWriteValidator {
 
 ---
 
-## Pattern: agent with working memory
+## Durable memory
 
 `InMemoryStore` lasts for the life of this process. `SqliteMemoryStore` implements
 the same contract for notes that must survive restarts:
@@ -204,10 +204,23 @@ returns its historical note and captured excerpt. Corrections require the curren
 version and new source evidence; older revisions remain inspectable. Notes are
 fallible historical observations, never project instructions or proof of current
 conditions. There is no automatic note injection or semantic retrieval.
-Only the captured excerpt is returned by `memory_read` today; the source identity
-also points to the host's original recorded operation. A note can contain an
-unsupported model inference even when the excerpt is authentic. Verify that the
-excerpt supports the claim, and use host inspection for source outside its range.
+To inspect beyond the excerpt, call `memory_read` with the note's `id`, `version`
+and `sourceOffset: 0`. Continue with `nextOffset` until `eof` is true. Each page
+contains at most 4000 UTF-16 code units from the original tool receipt. The host
+loads that receipt from its archive; it never reruns the tool. The shared runtime
+checks its reference and SHA-256 fingerprint, including the error status, against
+the saved note before returning source text. This recovers a recorded tool result,
+which may itself have been only one page of a file.
+
+Source paging requires the original host archive. If it is missing or changed,
+the tool reports the problem; the captured excerpt remains readable without
+`sourceOffset`. Earlier notes without a fingerprint also retain their excerpts.
+A note can contain an unsupported model inference even when its source is
+authentic. Inspect the supporting text rather than treating note authorship as
+proof. Embedded source readers accept either a host session/call query for capture
+or an opaque stored reference for subsequent retrieval.
+
+## Pattern: agent with working memory
 
 ```ts
 import { InMemoryStore } from '@nucleic-se/agentic/runtime';

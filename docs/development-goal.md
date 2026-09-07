@@ -16,9 +16,12 @@ Hold the model, prompt and budgets fixed when comparing policies.
 Current evidence: pinned instruction retention and archive identity recovery are
 implemented and tested. Isolated host trials exercised repeated automatic
 checkpoints, exact source recovery and reopen. Two trials with explicit
-verification semantics retained the required unfinished work through five and
-six checkpoints. Summary interpretation and maintenance overhead remain measured
-limitations; this supports proceeding to phase 2, not a general reliability claim.
+verification semantics retained unfinished work through five and six checkpoints.
+This phase remains open: the default composition can discard the original task
+requirement when a later "Continue" becomes the protected current message, and
+Gears currently fails a task when a generated checkpoint exceeds its character
+limit. Align objective retention and recoverable maintenance behavior across the
+two compositions before expanding recall or interface features.
 
 ## 2. A complete coding workflow
 
@@ -32,7 +35,8 @@ Current evidence: both compositions use the shared coding pack and startup
 instruction discovery, including nested directory rules. Live disposable coding
 tasks changed source, preserved tests and ran verification. An actual process-kill
 scenario exercised inspection, explicit tool resolution, paused continuation and
-no replay of the completed effect. Phase 3 can proceed; richer recovery UI remains
+no replay of the completed effect. This evidence remains valid; dependable long
+coding tasks still require the context work in phase 1. Richer recovery UI remains
 part of phase 4.
 
 ## 3. Cross-task recall
@@ -49,8 +53,10 @@ stores, and recall its evidence in another task. Live runs exposed hidden receip
 identities, now rendered explicitly and included in budgeting. Both compositions
 then saved notes successfully. A small follow-up review comparison answered
 correctly with and without recall but did not show a token-efficiency benefit.
-Source access beyond captured excerpts and demonstrated useful reuse remain
-required before this phase is accepted.
+Source access beyond captured excerpts now uses paged archive retrieval with a
+saved fingerprint. Restart tests reconstruct the original receipt in a new task
+and reject changed sources. Demonstrated useful reuse remains required before
+this phase is accepted.
 
 ## 4. Interface and extension usability
 
@@ -61,6 +67,12 @@ exercise a shared extension in both compositions. Favor coherent daily use over
 the number of bundled integrations.
 
 ## Completion evidence
+
+Current work order: close the context-continuity and checkpoint-recovery gaps,
+reduce active-state/list payload growth while retaining exact traces, then resume
+the recall usefulness gate and interface work. Keep optional recall bounded while
+its benefit remains unproven. Passing storage or tool tests alone cannot close an
+end-to-end task requirement.
 
 Each phase requires appropriate automated checks, isolated live dogfooding,
 inspectable requests and outcomes, and documented limitations. Keep run artifacts

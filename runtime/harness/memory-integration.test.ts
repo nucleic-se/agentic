@@ -13,8 +13,8 @@ it('captures a real receipt and recalls it in a new session after both stores re
     const provider: ILLMProvider = { structured: async () => { throw new Error('unused'); }, turn: async request => {
         const results = request.messages.filter(message => message.role === 'tool_result');
         if (request.messages[0].content === 'learn') return results.length ? reply() : reply([
-            { id: 'source', name: 'fs_read', args: { path: 'build.txt' } },
-            { id: 'save', name: 'memory_save', args: { key: 'build', note: 'Use npm run verify', callId: 'source' } },
+            { id: 'source', name: 'fs_read', args: { path: 'build.txt', mode: 'bytes', limit: 16000 } },
+            { id: 'save', name: 'memory_save', args: { key: 'build', note: 'Use npm run verify', callId: 'source', limit: 100 } },
         ]);
         if (!results.length) return reply([{ id: 'search', name: 'memory_search', args: { text: 'build' } }]);
         if (results.length === 1) {
@@ -22,7 +22,10 @@ it('captures a real receipt and recalls it in a new session after both stores re
             const [hit] = JSON.parse(results[0].content.slice(results[0].content.indexOf('\n') + 1));
             return reply([{ id: 'read', name: 'memory_read', args: { id: hit.id, version: hit.version } }]);
         }
-        return reply();
+        const value = JSON.parse(results.at(-1)!.content.slice(results.at(-1)!.content.indexOf('\n') + 1));
+        if (value.eof === true) return reply();
+        const [hit] = JSON.parse(results[0].content.slice(results[0].content.indexOf('\n') + 1));
+        return reply([{ id: `page-${results.length}`, name: 'memory_read', args: { id: hit.id, version: hit.version, sourceOffset: value.nextOffset ?? 0 } }]);
     } };
     const open = async () => {
         const extensions = await defaultAgentExtensions({ workspace: root, database: join(root, 'sessions.sqlite'), memoryDatabase: join(root, 'notes.sqlite') });
@@ -31,7 +34,7 @@ it('captures a real receipt and recalls it in a new session after both stores re
     };
     let client: Awaited<ReturnType<typeof open>> | undefined;
     try {
-        await writeFile(join(root, 'build.txt'), 'Use npm run verify\n');
+        await writeFile(join(root, 'build.txt'), 'Use npm run verify\n' + 'x'.repeat(8500) + '\noriginal tail');
         client = await open();
         const first = await client.create();
         await client.submit(first.id, 'learn', { commandId: 'learn' });
@@ -49,5 +52,10 @@ it('captures a real receipt and recalls it in a new session after both stores re
         expect(note.value.evidence.content).toContain('Use npm run verify');
         expect(note.source).toContain(`session/${first.id}/operation/`);
         expect(note.value.evidence.isError).toBe(false);
+        const pages = recalled.messages.filter(message => message.role === 'tool_result' && message.toolName === 'memory_read')
+            .slice(1).map(message => JSON.parse(message.content));
+        const original = (learned.operations.find(operation => operation.callId === 'source')!.output as { result: { content: string } }).result.content;
+        expect(pages.map(page => page.content).join('')).toBe(original);
+        expect(pages.at(-1).eof).toBe(true);
     } finally { await client?.close(); await rm(root, { recursive: true, force: true }); }
 });

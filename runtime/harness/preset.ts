@@ -39,16 +39,16 @@ export async function defaultAgentExtensions(options: DefaultAgentOptions): Prom
             roles: { loop: () => options.planning ? planningLoop({ maxTokens: options.outputTokens ?? 4096 }) : conversationalLoop({ maxTokens: options.outputTokens ?? 4096 }) } },
         { id: 'context.budgeted', configuration: JSON.stringify({system, budget: options.tokenBudget ?? 24000, includeToolCallIds: Boolean(options.memoryDatabase)}), version: '3.0.0', apiVersion: 1, roles: { context: () => budgetedContext(system, options.tokenBudget ?? 24000, { includeToolCallIds: Boolean(options.memoryDatabase) }) } },
         { id: `provider.subscription.${model}`, version: '3.0.0', apiVersion: 1, roles: { provider: async () => new (await import('../../providers/subscription.js')).SubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort: 'low' }) } },
-        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null }), version: '9.0.0', apiVersion: 1,
+        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null }), version: '10.0.0', apiVersion: 1,
             activate: async value => { client = value; },
             roles: { tools: async () => {
                 const coding = codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined });
                 if (!options.memoryDatabase) return coding;
                 const store = await SqliteMemoryStore.open(options.memoryDatabase, realpathSync(options.workspace));
                 try {
-                    const memory = memoryToolRuntime(store, (sessionId, callId, signal) => {
+                    const memory = memoryToolRuntime(store, (query, signal) => {
                         if (!client) throw new Error('Memory source reader is not active');
-                        return sessionNoteSource(client)(sessionId, callId, signal);
+                        return sessionNoteSource(client)(query, signal);
                     });
                     memory.close = () => store.close();
                     return new CompositeToolRuntime([coding, memory]);
