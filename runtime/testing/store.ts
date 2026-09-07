@@ -28,7 +28,9 @@ export async function assertSessionStoreConformance(create: SessionStoreFactory)
         const loaded = (await store.get('session'))!;
         assert.equal(loaded.messages[0].content, 'original');
         loaded.messages[0].content = 'read mutation';
-        const listed = await store.list(); listed[0].messages[0].content = 'list mutation';
+        const listed = await store.list(); listed[0].title = 'list mutation';
+        assert.equal('messages' in listed[0], false);
+        assert.equal((await store.get('session'))!.title, loaded.title);
         assert.equal((await store.get('session'))!.messages[0].content, 'original');
         await assert.rejects(store.create(record('session')));
         checks.push('create/get/list copy isolation and duplicate rejection');

@@ -49,6 +49,7 @@ export interface SessionRecord {
     parent?: { sessionId: string; revision: number };
     error?: string;
 }
+export type SessionSummary = Pick<SessionRecord, 'id' | 'title' | 'revision' | 'createdAt' | 'updatedAt' | 'status'>;
 export interface SessionEvent {
     schemaVersion: 1;
     id: string;
@@ -72,7 +73,7 @@ export interface SessionPage { limit: number; offset?: number }
 /** A commit atomically persists state and event, rejecting stale revisions. */
 export interface SessionStore extends ExecutionJournal<SessionRecord, SessionEvent> {
     create(record: SessionRecord): Promise<void>;
-    list(page?: SessionPage): Promise<SessionRecord[]>;
+    list(page?: SessionPage): Promise<SessionSummary[]>;
     events(id: string, afterSequence?: number, limit?: number): Promise<SessionEvent[]>;
     close(): Promise<void>;
 }
@@ -93,7 +94,7 @@ export interface OperationResolution {
 /** Shared by terminal, web and embedded consumers. UI attachment never owns a run. */
 export interface SessionClient {
     create(title?: string): Promise<SessionRecord>;
-    list(page?: SessionPage): Promise<SessionRecord[]>;
+    list(page?: SessionPage): Promise<SessionSummary[]>;
     get(id: string): Promise<SessionRecord>;
     events(id: string, afterSequence?: number, limit?: number): Promise<SessionEvent[]>;
     submit(id: string, content: string, options: SubmitOptions): Promise<void>;

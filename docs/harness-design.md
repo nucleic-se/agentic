@@ -664,3 +664,9 @@ real model calls and can exhaust a task budget. Checkpoints remain lossy model
 summaries, not proof of fidelity; source ranges, original records and receipts are
 necessary for inspection. JSON chunking preserves serialized source text but does not claim
 native vision understanding of image data encoded in checkpoint source JSON.
+
+Session list reads return `SessionSummary`: ID, title, status, revision and creation/
+update timestamps. Both stores project these fields; SQLite does so before returning
+rows to JavaScript. Use `get(id)` for a full session and paged events for its trace.
+This keeps list payloads independent of transcript size. Full-session state still
+retains operations and messages; compacting that active state is separate work.

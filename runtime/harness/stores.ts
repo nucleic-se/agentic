@@ -1,9 +1,10 @@
+import { sessionSummary } from './session-summary.js';
 import { openSqlite, type SqliteDatabase as Database } from '../sqlite.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import type { SessionEvent, SessionRecord, SessionStore, SessionPage } from './types.js';
+import type { SessionEvent, SessionRecord, SessionStore, SessionPage, SessionSummary } from './types.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
 function bounds(page?: SessionPage): { limit: number; offset: number } {
@@ -37,7 +38,7 @@ export class MemorySessionStore implements SessionStore {
         this.records.set(record.id, copy(record)); this.journal.set(record.id, []);
     }
     async get(id: string): Promise<SessionRecord | undefined> { this.check(); return copy(this.records.get(id)); }
-    async list(page?: SessionPage): Promise<SessionRecord[]> { this.check(); const { limit, offset } = bounds(page); return copy([...this.records.values()].sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(offset, limit < 0 ? undefined : offset + limit)); }
+    async list(page?: SessionPage): Promise<SessionSummary[]> { this.check(); const { limit, offset } = bounds(page); return copy([...this.records.values()].sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(offset, limit < 0 ? undefined : offset + limit).map(sessionSummary)); }
     async commit(id: string, expected: number, record: SessionRecord, event: SessionEvent): Promise<void> {
         this.check(); validateCommit(id, expected, record, event);
         if (this.records.get(id)?.revision !== expected) throw new Error('Session revision conflict');
@@ -123,7 +124,7 @@ export async function createSqliteSessionStore(path: string): Promise<SessionSto
             },
             async list(page) {
                 check(); const { limit, offset } = bounds(page);
-                return database.prepare("SELECT record FROM sessions ORDER BY json_extract(record, '$.updatedAt') DESC, id ASC LIMIT ? OFFSET ?").all(limit, offset).map(row => JSON.parse(String(row.record)) as SessionRecord);
+                return database.prepare("SELECT json_object('id', id, 'revision', revision, 'title', json_extract(record, '$.title'), 'createdAt', json_extract(record, '$.createdAt'), 'updatedAt', json_extract(record, '$.updatedAt'), 'status', json_extract(record, '$.status')) AS summary FROM sessions ORDER BY json_extract(record, '$.updatedAt') DESC, id ASC LIMIT ? OFFSET ?").all(limit, offset).map(row => JSON.parse(String(row.summary)) as SessionSummary);
             },
             async commit(id, expected, record, event) {
                 check(); validateCommit(id, expected, record, event);

@@ -1,3 +1,4 @@
+import { sessionSummary } from './session-summary.js';
 import { isDeepStrictEqual } from 'node:util';
 import { checkpointView, prepareCheckpoint, checkpointFromResponse } from './checkpoint.js';
 import type { PreparedHarnessModel } from './execution.js';
@@ -101,7 +102,7 @@ class HarnessSessionClient implements SessionClient {
         return next;
     }
     async get(id: string) { this.assertOpen(); assertId(id); const record = await this.roles.store.get(id); if (!record) throw new Error('Session not found'); return record; }
-    async list(page?: SessionPage) { this.assertOpen(); return this.roles.store.list(page); }
+    async list(page?: SessionPage) { this.assertOpen(); return (await this.roles.store.list(page)).map(sessionSummary); }
     async events(id: string, afterSequence = 0, limit?: number) { await this.get(id); return this.roles.store.events(id, afterSequence, limit); }
     private async change(id: string, type: string, update: (record: SessionRecord) => void, data?: unknown) {
         return this.locked(id, async () => {

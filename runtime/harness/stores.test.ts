@@ -20,6 +20,17 @@ function event(sequence: number): SessionEvent { return { schemaVersion: 1, id: 
 for (const backend of ['memory', 'sqlite']) {
     describe(`${backend} session store conformance`, () => {
         async function open() { const store = backend === 'memory' ? new MemorySessionStore() : await createSqliteSessionStore(await path()); stores.push(store); return store; }
+        it('projects small session lists independently of transcript and receipt size', async () => {
+            const store = await open(), initial = record();
+            const payload = 'private source '.repeat(100000);
+            initial.messages = [{ role: 'user', content: payload }];
+            initial.operations = [{ id: 'model-1', runId: 'run-1', kind: 'model', status: 'completed', input: { messages: initial.messages }, output: payload, createdAt: 1 }];
+            await store.create(initial);
+            const list = await store.list();
+            expect(list).toEqual([{ id: 'session', title: 'test', revision: 0, createdAt: 1, updatedAt: 1, status: 'idle' }]);
+            expect(Buffer.byteLength(JSON.stringify(list))).toBeLessThan(200);
+            expect((await store.get(initial.id))?.messages[0].content).toBe(payload);
+        });
         it('persists opaque continuation with its assistant message', async () => {
             const store = await open(), initial = record();
             initial.messages.push({ role: 'assistant', content: 'Done', continuation: {
