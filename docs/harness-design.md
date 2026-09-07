@@ -520,6 +520,21 @@ before continuation; reopening storage is not permission to replay it. Request
 snapshots explain what was sent, while receipts and host state explain what was
 committed. These are separate facts when a process stops between dispatch and commit.
 
+### Project instructions
+
+The default agent loads the workspace-root `AGENTS.md` before composing its roles.
+`defaultAgentExtensions` is now asynchronous. Additional `instructionDirectories`
+load each selected directory's ancestors in outer-to-inner scope order. The shared
+`readProjectInstructions` loader returns exact UTF-8 content with source paths and
+directory scopes; `projectInstructionText` renders that snapshot for the context.
+The combined source limit is 64 KiB and overflow fails explicitly. Missing files
+are allowed; paths and resolved sources must stay within the workspace.
+
+Instructions participate in context budgeting and composition identity. Changes
+take effect on the next composition; active sessions retain their original
+snapshot. This does not yet automatically discover new nested scopes as the model
+explores files. Filesystem checks are confinement checks, not an OS sandbox.
+
 ### Source views and maintenance
 
 `readArchivedToolResult(history, reference)` retrieves a text page by saved message

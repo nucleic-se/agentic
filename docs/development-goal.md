@@ -13,6 +13,13 @@ instructions independently of generated summaries. Record maintenance and task
 usage, retrievals, completion and incorrect conclusions in isolated live runs.
 Hold the model, prompt and budgets fixed when comparing policies.
 
+Current evidence: pinned instruction retention and archive identity recovery are
+implemented and tested. Isolated host trials exercised repeated automatic
+checkpoints, exact source recovery and reopen. Two trials with explicit
+verification semantics retained the required unfinished work through five and
+six checkpoints. Summary interpretation and maintenance overhead remain measured
+limitations; this supports proceeding to phase 2, not a general reliability claim.
+
 ## 2. A complete coding workflow
 
 Use shared project-instruction discovery and a small read/edit/execute tool pack

@@ -1,0 +1,59 @@
+import { open, realpath } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+
+export interface ProjectInstruction {
+    /** Workspace-relative source file and the directory it governs. */
+    path: string;
+    directory: string;
+    content: string;
+}
+
+/** Load applicable instructions in outer-to-inner scope order, without scanning a repository. */
+export async function readProjectInstructions(workspace: string, directories: readonly string[] = ['.'], signal?: AbortSignal): Promise<ProjectInstruction[]> {
+    const root = await realpath(workspace);
+    const withinRoot = (path: string) => {
+        const rel = relative(root, path);
+        if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+            throw new Error('Instruction scope escapes the workspace');
+        return rel;
+    };
+    const scopes = new Set<string>([root]);
+    for (const directory of directories) {
+        let current = resolve(root, directory);
+        withinRoot(current);
+        while (current !== root) { scopes.add(current); current = dirname(current); }
+    }
+    const instructions: ProjectInstruction[] = [];
+    let remaining = 65536;
+    for (const directory of [...scopes].sort((a, b) => a.length - b.length || a.localeCompare(b))) {
+        signal?.throwIfAborted();
+        const path = join(directory, 'AGENTS.md');
+        let source: string;
+        try { source = await realpath(path); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error; }
+        withinRoot(source);
+        const file = await open(source, 'r');
+        try {
+            if (!(await file.stat()).isFile()) throw new Error(`Project instructions must be a regular file: ${path}`);
+            const buffer = Buffer.alloc(remaining + 1);
+            let size = 0;
+            while (size < buffer.length) {
+                signal?.throwIfAborted();
+                const { bytesRead } = await file.read(buffer, size, buffer.length - size, null);
+                if (!bytesRead) break;
+                size += bytesRead;
+            }
+            if (size > remaining) throw new Error('Project instructions exceed the 64 KiB combined limit');
+            remaining -= size;
+            const content = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, size));
+            instructions.push({ path: relative(root, path), directory: relative(root, directory) || '.', content });
+        } finally { await file.close(); }
+    }
+    return instructions;
+}
+
+export function projectInstructionText(instructions: readonly ProjectInstruction[]): string {
+    if (!instructions.length) return '';
+    return '\n\nProject instructions apply within their stated directories; deeper scopes refine outer scopes.\n' +
+        instructions.map(instruction => `\nSource: ${instruction.path}\nScope: ${instruction.directory}\n${instruction.content}`).join('\n');
+}

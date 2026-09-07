@@ -99,7 +99,7 @@ before factories run. Replace `MemorySessionStore` with
 `createSqliteSessionStore(path)` from `@nucleic-se/agentic/harness/sqlite` for
 durability. `createDefaultAgent({ workspace, database })` supplies the reference
 composition; omit `database` for ephemeral sessions. To replace a preset role,
-edit the extension list returned by `defaultAgentExtensions()` rather than adding
+edit the extension list returned by `await defaultAgentExtensions()` rather than adding
 a conflicting owner.
 
 The host journals model/tool effects and commits their transcript projections;
