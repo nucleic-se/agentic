@@ -43,7 +43,11 @@ export function checkpointView(history: readonly Message[], checkpoint?: Working
         history.forEach((message, index) => {
             if (message.role === 'user' && (message.provenance ?? 'human') === 'human') current = index;
         });
-        if (current >= 0 && current < through) { messages.push(structuredClone(history[current])); sourceIndexes.push(current); }
+        history.slice(0, through).forEach((message, index) => {
+            if (index === current || (message.role === 'user' && message.sticky === true)) {
+                messages.push(structuredClone(message)); sourceIndexes.push(index);
+            }
+        });
     }
     history.slice(through).forEach((message, offset) => { messages.push(structuredClone(message)); sourceIndexes.push(through + offset); });
     for (const message of transient) { messages.push(structuredClone(message)); sourceIndexes.push(null); }

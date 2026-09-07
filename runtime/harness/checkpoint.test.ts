@@ -3,6 +3,26 @@ import { checkpointView, checkpointBoundary, checkpointRequest } from './checkpo
 import { composeAgentContext } from '../ContextPipeline.js';
 import type { Message } from '../../contracts/llm.js';
 
+it('retains pinned instructions across repeated checkpoints without duplicating the latest instruction', () => {
+    const history: Message[] = [
+        { role: 'user', content: 'Keep the source data unchanged', sticky: true },
+        { role: 'assistant', content: 'Inspected the data' },
+        { role: 'user', content: 'Report uncertainty explicitly', sticky: true, provenance: 'deterministic' },
+        { role: 'assistant', content: 'Found conflicting records' },
+        { role: 'user', content: 'Use the corrected date', sticky: true },
+        { role: 'assistant', content: 'Verification remains unfinished' },
+    ];
+    const original = structuredClone(history);
+    for (const through of [2, 4, 6]) {
+        const view = checkpointView(history, { through, text: 'An intentionally incomplete summary' });
+        const expected = history.map((_, index) => index).filter(index => index >= through || [0, 2, 4].includes(index));
+        expect(view.sourceIndexes).toEqual([null, ...expected]);
+        expect(view.messages.slice(1)).toEqual(expected.map(index => history[index]));
+        view.messages[1].content = 'mutated inspection';
+        expect(history).toEqual(original);
+    }
+});
+
 it('keeps original history and the current instruction when its source is checkpointed', () => {
     const history: Message[] = [{ role: 'user', content: 'corrected task', provenance: 'human' }, { role: 'assistant', content: 'completed step' }, { role: 'user', content: 'wake', provenance: 'deterministic' }];
     const original = structuredClone(history);

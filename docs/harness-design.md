@@ -526,7 +526,10 @@ committed. These are separate facts when a process stops between dispatch and co
 and its source map together. Original messages remain in the host's append-only
 archive. Transient host state has no archive index. The latest human message stays
 verbatim even when its source is covered by a checkpoint; model and deterministic
-messages do not replace that protected instruction.
+messages do not replace that protected instruction. User-role messages explicitly
+marked `sticky` also remain verbatim, in source order and without duplication.
+Pinned instructions still consume context budget; summaries cannot silently remove
+them to make a request fit.
 
 `WorkingCheckpoint` stores `through` (exclusive end of complete source groups) and
 `text`. An oversized group adds `partial: { end, offset }`: progress into the
