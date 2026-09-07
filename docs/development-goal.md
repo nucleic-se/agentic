@@ -38,6 +38,11 @@ within the existing allowance. Verify it against the failed drafts and the broad
 review before expanding recall or interfaces. Align proven behavior across both compositions before
 expanding recall or interfaces.
 
+Context lifecycle ownership also needs an explicit acceptance check: selection,
+maintenance and repair policy must be replaceable as one strategy without editing
+either host. Hosts retain admission, receipt recording and atomic persistence.
+Prove this with a materially different second strategy, not only shared helper calls.
+
 ## 2. A complete coding workflow
 
 Use shared project-instruction discovery and a small read/edit/execute tool pack
