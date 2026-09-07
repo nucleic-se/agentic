@@ -37,3 +37,4 @@ export * from './ContextPipeline.js';
 export { executeToolBatch, executeToolBatchDetailed } from './ToolBatchExecutor.js';
 export type { BeforeToolCallResult, ToolBatchConfig, ToolBatchOptions, ToolBatchExecutionOptions, ToolBatchExecutionResult } from './ToolBatchExecutor.js';
 export * from './ExecutionOptions.js';
+export { SqliteMemoryStore } from './SqliteMemoryStore.js';

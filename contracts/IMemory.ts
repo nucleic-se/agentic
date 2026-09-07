@@ -70,6 +70,8 @@ export interface MemoryQuery {
     tokenBudget?: number;
 }
 
+export type MemoryPatch = Partial<Pick<MemoryItem, 'value' | 'confidence' | 'tags' | 'ttlDays' | 'source'>>;
+
 // ── Store ──────────────────────────────────────────────────────
 
 export interface IMemoryStore {
@@ -82,8 +84,8 @@ export interface IMemoryStore {
     /** Write a new memory item. Returns the committed item with ID and timestamps. */
     write(item: Omit<MemoryItem, 'id' | 'createdAt' | 'updatedAt' | 'version'>): Promise<MemoryItem>;
 
-    /** Update an existing memory item. Returns the updated item with bumped version. */
-    update(id: string, patch: Partial<Pick<MemoryItem, 'value' | 'confidence' | 'tags' | 'ttlDays'>>): Promise<MemoryItem>;
+    /** Update an unexpired item. An expectedVersion mismatch rejects without mutation. */
+    update(id: string, patch: MemoryPatch, expectedVersion?: number): Promise<MemoryItem>;
 
     /** Delete a memory item by ID. */
     delete(id: string): Promise<void>;

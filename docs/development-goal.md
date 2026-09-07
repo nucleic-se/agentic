@@ -42,6 +42,11 @@ that a later task can find relevant prior work, distinguish outdated information
 and recover its source after restart. Compare task quality and overhead with recall
 disabled before considering more complex retrieval.
 
+Current progress: a bounded SQLite implementation of the memory contract preserves
+source-linked revisions across reopen and rejects stale updates. Storage checks
+pass; harness source resolution, shared recall tools and live recall comparisons
+remain required before this phase is accepted.
+
 ## 4. Interface and extension usability
 
 Make the terminal and phone-sized web interface useful for starting, steering,

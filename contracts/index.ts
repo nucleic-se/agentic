@@ -80,6 +80,7 @@ export type {
     MemoryType,
     MemoryItem,
     MemoryQuery,
+    MemoryPatch,
     IMemoryStore,
     IMemoryWriteValidator,
     MemorySlot,

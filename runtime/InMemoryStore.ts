@@ -7,7 +7,7 @@
  * @module runtime
  */
 
-import type { IMemoryStore, MemoryItem, MemoryQuery } from '../contracts/IMemory.js';
+import type { IMemoryStore, MemoryItem, MemoryQuery, MemoryPatch } from '../contracts/IMemory.js';
 import { randomUUID } from 'node:crypto';
 import { estimateTokens } from '../utils.js';
 
@@ -96,12 +96,15 @@ export class InMemoryStore implements IMemoryStore {
 
     async update(
         id: string,
-        patch: Partial<Pick<MemoryItem, 'value' | 'confidence' | 'tags' | 'ttlDays'>>,
+        patch: MemoryPatch,
+        expectedVersion?: number,
     ): Promise<MemoryItem> {
+        if (Object.keys(patch).some(key => !['value', 'confidence', 'tags', 'ttlDays', 'source'].includes(key))) throw new Error('Invalid memory patch field');
         const existing = this.items.get(id);
-        if (!existing) {
+        if (!existing || this.isExpired(existing, Date.now())) {
             throw new Error(`InMemoryStore: Item '${id}' not found.`);
         }
+        if (expectedVersion !== undefined && existing.version !== expectedVersion) throw new Error('Memory version conflict');
 
         const updated: MemoryItem = {
             ...existing,

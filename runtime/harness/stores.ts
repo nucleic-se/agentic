@@ -1,3 +1,4 @@
+import { openSqlite, type SqliteDatabase as Database } from '../sqlite.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
@@ -48,13 +49,6 @@ export class MemorySessionStore implements SessionStore {
     async events(id: string, afterSequence = 0, limit?: number): Promise<SessionEvent[]> { this.check(); const count = eventLimit(afterSequence, limit); return copy((this.journal.get(id) ?? []).filter(event => event.sequence > afterSequence).slice(0, count < 0 ? undefined : count)); }
     async close(): Promise<void> { this.closed = true; }
 }
-
-interface Statement {
-    run(...args: unknown[]): { changes: number | bigint };
-    get(...args: unknown[]): Record<string, unknown> | undefined;
-    all(...args: unknown[]): Array<Record<string, unknown>>;
-}
-interface Database { exec(sql: string): void; prepare(sql: string): Statement; close(): void }
 
 /** Local-machine exclusive ownership. Ambiguous or foreign owners fail closed. */
 async function acquire(path: string): Promise<() => Promise<void>> {
@@ -110,18 +104,7 @@ export async function createSqliteSessionStore(path: string): Promise<SessionSto
     const release = await acquire(canonical);
     let db: Database | undefined;
     try {
-        let Driver: new (path: string) => Database;
-        try {
-            const moduleName = 'node:sqlite';
-            Driver = (await import(moduleName)).DatabaseSync;
-        } catch (error) {
-            const code = (error as NodeJS.ErrnoException).code;
-            if (code !== 'ERR_UNKNOWN_BUILTIN_MODULE' && code !== 'ERR_MODULE_NOT_FOUND') throw error;
-            const moduleName = 'better-sqlite3';
-            try { Driver = (await import(moduleName)).default; }
-            catch { throw new Error('SQLite storage requires node:sqlite or optional better-sqlite3'); }
-        }
-        db = new Driver(canonical);
+        db = await openSqlite(canonical);
         db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;');
         const version = Number(db.prepare('PRAGMA user_version').get()?.user_version);
         if (version !== 0 && version !== 1) throw new Error(`Unsupported session store schema version ${version}`);

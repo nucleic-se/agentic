@@ -144,8 +144,42 @@ class StrictValidator implements IMemoryWriteValidator {
 
 ## Pattern: agent with working memory
 
-`InMemoryStore` lasts for the life of this process. Supply a durable `IMemoryStore`
-adapter when memory must survive restarts.
+`InMemoryStore` lasts for the life of this process. `SqliteMemoryStore` implements
+the same contract for notes that must survive restarts:
+
+```ts
+import { SqliteMemoryStore } from '@nucleic-se/agentic/runtime';
+
+const memory = await SqliteMemoryStore.open('.data/memory.sqlite', workspaceId);
+const note = await memory.write({
+  type: 'procedural', key: 'verification', value: 'Run npm test',
+  source: 'session:example/message:4', confidence: 1, tags: ['build'],
+});
+await memory.update(note.id, { value: 'Run npm run check' }, note.version);
+const original = await memory.getVersion(note.id, 1);
+await memory.close();
+```
+
+The host supplies a stable workspace identity and authentic source references.
+The store checks identity on reopen; it does not resolve or authenticate source
+strings. It is a persistence primitive, not automatic harness recall.
+
+SQLite notes use the same all-term lexical matching and value-token budget as
+`InMemoryStore`. Values must round-trip through JSON without loss and contain at
+most 8000 serialized characters. Defaults cap active rows at 1000 and retained
+revisions at 10000; `maxItems` and `maxVersions` configure these limits. Capacity
+errors reject the entire write, including its revision. Updates can supply an
+expected version to reject stale writes atomically across connections.
+
+Expired notes are excluded from reads and search. `evictExpired()` removes their
+active rows and frees item capacity, while `getVersion()` preserves access to
+their recorded evidence. Explicit `delete()` removes both the item and its
+history, freeing revision capacity. The host must manage retention; history is
+never silently discarded. Token budgets cover candidate values only, so context
+composition must still account for source labels and other rendered metadata.
+
+SQLite uses Node's built-in driver when available, with optional `better-sqlite3`
+as a fallback on older supported Node versions.
 
 ```ts
 import { InMemoryStore } from '@nucleic-se/agentic/runtime';
