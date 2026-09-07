@@ -30,8 +30,11 @@ reference composition, source retrieval, reopen and shared call admission. A bou
 live continuity diagnostic completed three checkpoints, retrieved the
 original evidence and retained an unfinished verification gate. Maintenance used
 most of that trial’s tokens; broader representative evidence remains required. This
-phase remains open pending representative live continuity evidence and measured
-maintenance overhead. Align proven behavior across both compositions before
+phase remains open: a broader recovery-code review failed in both compositions
+when a later checkpoint and its retry exceeded the size bound. Repeating source
+summarization with a rejection label is insufficient. Implement and verify explicit
+repair of the rejected candidate, preserving its selected sources and bounded
+admission, before expanding recall or interfaces. Align proven behavior across both compositions before
 expanding recall or interfaces.
 
 ## 2. A complete coding workflow
