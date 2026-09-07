@@ -53,7 +53,7 @@ export function checkpointView(history: readonly Message[], checkpoint?: Working
 /** Resolve report ranges once, keeping transient messages out of archive boundaries. */
 function sourceBoundaries(view: CheckpointView, report: ContextReport) {
     if (view.messages.length !== view.sourceIndexes.length) throw new Error('Checkpoint view has an inconsistent source map');
-    const boundaries: Array<{ end: number; dropped: boolean }> = [];
+    const boundaries: Array<{ end: number; reclaim: boolean }> = [];
     for (const decision of report.decisions) {
         if (decision.kind !== 'messages') continue;
         const range = decision.messageRange;
@@ -64,16 +64,17 @@ function sourceBoundaries(view: CheckpointView, report: ContextReport) {
         for (const source of view.sourceIndexes.slice(range.start, range.end)) {
             if (source !== null) end = Math.max(end, source + 1);
         }
-        if (end) boundaries.push({ end, dropped: decision.action === 'dropped' });
+        if (end && !decision.protected) boundaries.push({ end,
+            reclaim: decision.action === 'dropped' || (decision.reason === 'budget' && decision.action === 'compressed') });
     }
     return boundaries;
 }
 
-/** Select a source prefix ending at a complete conversation group, before it is dropped. */
+/** Select a complete source prefix when budget pressure shortens or drops older history. */
 export function checkpointBoundary(view: CheckpointView, report: ContextReport, through = 0): number | undefined {
     let boundary = through;
     for (const source of sourceBoundaries(view, report)) {
-        if (source.dropped) boundary = Math.max(boundary, source.end);
+        if (source.reclaim) boundary = Math.max(boundary, source.end);
     }
     return boundary > through ? boundary : undefined;
 }
@@ -110,7 +111,7 @@ export async function prepareCheckpoint(
     const start = sourceBoundary(history, configuration.previous);
     const boundaries = sourceBoundaries(view, report);
     const partial = configuration.previous?.partial;
-    if (!partial && !boundaries.some(boundary => boundary.dropped && boundary.end > start)) return undefined;
+    if (!partial && !boundaries.some(boundary => boundary.reclaim && boundary.end > start)) return undefined;
     type Selection = { through: number; partial?: WorkingCheckpoint['partial']; sourceRange: CheckpointSourceRange; prepared: PreparedHarnessModel };
     const prepare = (request: ReturnType<typeof evidenceRequest>) => execution.prepareModel({
         ...request, maxTokens: configuration.maxTokens, cacheScope: configuration.cacheScope,

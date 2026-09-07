@@ -113,6 +113,8 @@ export interface ContextDecision {
     messageRange?: { start: number; end: number };
     id: string;
     action: 'kept' | 'compressed' | 'dropped';
+    /** Why this group or section was changed; omitted when kept. */
+    reason?: 'budget' | 'presentation';
     score: number;
     protected: boolean;
     references?: Array<{ messageIndex: number; reference: string; originalCharacters: number; retainedCharacters: number }>;

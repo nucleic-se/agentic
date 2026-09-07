@@ -103,3 +103,68 @@ it('distinguishes protected-input overflow without silently weakening retention'
     await expect(composeAgentContext({ messages: [{ role: 'user', content: 'instruction '.repeat(1000), sticky: true }], tokenBudget: 100 }))
         .rejects.toMatchObject({ reason: 'protected', budget: 100 });
 });
+
+it('checkpoints pressure-compressed history without waiting for eviction, retaining the recent tail', async () => {
+    const { createHarnessExecution } = await import('./execution.js');
+    const { budgetedContext } = await import('./defaults.js');
+    const { prepareCheckpoint } = await import('./checkpoint.js');
+    const history: Message[] = [
+        { role: 'user', content: 'Find the discrepancy' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'read', args: {} }] },
+        { role: 'tool_result', toolCallId: 'read', content: 'original evidence '.repeat(500) },
+        { role: 'assistant', content: 'Recent observation' },
+    ];
+    const original = structuredClone(history);
+    const execution = createHarnessExecution({ context: budgetedContext('', 2000, {
+        minRecentGroups: 1, referenceToolResult: () => 'read saved source',
+    }), provider: { turn: async () => { throw new Error('No dispatch while fitting'); }, structured: async () => { throw new Error('unused'); } } });
+    const view = checkpointView(history);
+    const task = await execution.prepareModel({ messages: view.messages, maxTokens: 100 });
+    expect(task.report!.decisions.some(d => d.reason === 'budget' && d.action === 'compressed')).toBe(true);
+    expect(task.report!.decisions.some(d => d.action === 'dropped')).toBe(false);
+    expect(checkpointBoundary(view, task.report!)).toBe(3);
+    const selected = await prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100 });
+    expect(selected).toBeDefined();
+    // The source may require chunks, but never includes the protected recent group.
+    expect(selected!.sourceRange.end).toBeLessThanOrEqual(3);
+    expect(selected!.prepared.request.messages[0].content).toContain('original evidence');
+    expect(history).toEqual(original);
+});
+
+it('does not checkpoint fitting presentation caps or protected-only shortening', async () => {
+    const { createHarnessExecution } = await import('./execution.js');
+    const { prepareCheckpoint } = await import('./checkpoint.js');
+    const history: Message[] = [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'read', args: {} }] },
+        { role: 'tool_result', toolCallId: 'read', content: 'evidence '.repeat(1000) },
+        { role: 'assistant', content: 'Recent observation' },
+    ];
+    const view = checkpointView(history);
+    const execution = createHarnessExecution({ provider: {
+        turn: async () => { throw new Error('unexpected dispatch'); }, structured: async () => { throw new Error('unused'); },
+    } });
+    for (const policy of [{ minRecentGroups: 1, maxToolResultCharacters: 1000 }, { minRecentGroups: 2 }]) {
+        const report = await composeAgentContext({ messages: view.messages, tokenBudget: 1500 }, {
+            ...policy, referenceToolResult: () => 'read saved source',
+        });
+        expect(report.decisions.find(d => d.action === 'compressed')?.reason).toBe(policy.maxToolResultCharacters === undefined ? 'budget' : 'presentation');
+        expect(report.decisions.some(d => d.action === 'compressed')).toBe(true);
+        expect(checkpointBoundary(view, report)).toBeUndefined();
+        expect(await prepareCheckpoint(execution, history, view, report, { maxTokens: 100 })).toBeUndefined();
+    }
+});
+
+it('does not mistake a presentation cap for history pressure when a section needs compression', async () => {
+    const history: Message[] = [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'read', args: {} }] },
+        { role: 'tool_result', toolCallId: 'read', content: 'evidence '.repeat(1000) },
+        { role: 'assistant', content: 'Recent observation' },
+    ];
+    const view = checkpointView(history);
+    const report = await composeAgentContext({ messages: view.messages, tokenBudget: 1500,
+        sections: [{ id: 'background', priority: -1, text: () => 'background '.repeat(1000) }],
+    }, { minRecentGroups: 1, maxToolResultCharacters: 1000, referenceToolResult: () => 'read saved source', compressSection: () => 'short background' });
+    expect(report.decisions.find(d => d.kind === 'section')).toMatchObject({ action: 'compressed', reason: 'budget' });
+    expect(report.decisions.find(d => d.kind === 'messages' && d.action === 'compressed')).toMatchObject({ reason: 'presentation' });
+    expect(checkpointBoundary(view, report)).toBeUndefined();
+});

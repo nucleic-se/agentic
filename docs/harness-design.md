@@ -536,7 +536,15 @@ characters. A group stays intact in the active view until its last chunk commits
 no partial tool-call group is presented as completed history. Each new summary is
 a self-contained replacement, including any previous partial summary.
 
-`prepareCheckpoint` first fits whole source groups, then uses bounded chunks if
+Context decisions record whether a change was caused by `budget` pressure or an
+optional `presentation` cap.
+`prepareCheckpoint` starts when older, unprotected history is shortened under
+that pressure or dropped. It does not wait for eviction after recoverable tool
+previews have already made the request fit. Fitting contexts and shortening
+confined to protected recent groups do not start maintenance.
+
+`prepareCheckpoint` first fits whole source groups, retaining the protected recent
+tail, then uses bounded chunks if
 the first outstanding group cannot fit. Fitting makes no model calls. The host
 commits the returned cursor and summary only after a complete response, atomically
 with its receipt and usage. Failed or partial model responses leave the old cursor

@@ -206,7 +206,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     });
     const sourceText = messageGroups.flatMap(group => group.messages.map(message => message.content));
     type Item = { kind: 'messages'; group: Group; } | { kind: 'section'; section: PromptSection; };
-    type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; references?: ContextDecision['references']; order: number };
+    type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; reason?: ContextDecision['reason']; references?: ContextDecision['references']; order: number };
     const candidates: Candidate[] = sections.map((section, index) => ({ kind: 'section', section, id: section.id,
         score: sectionPriority(section),
         protected: sectionProtected(section), action: 'kept', order: index }));
@@ -260,6 +260,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
                 item.group.messages[offset] = { ...message, content };
                 if (render().usage.totalTokens >= before) { item.group.messages[offset] = message; continue; }
                 item.action = 'compressed';
+                item.reason = 'presentation';
                 (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
             }
         }
@@ -282,6 +283,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             if (trial.usage.totalTokens >= result.usage.totalTokens) { item.group.messages[offset] = message; continue; }
             result = trial;
             item.action = 'compressed';
+            item.reason = 'budget';
             if (existing) existing.retainedCharacters = content.length;
             else (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
         }
@@ -314,7 +316,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             const before = item.group.messages;
             item.group.messages = compressed;
             const trial = render();
-            if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; }
+            if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; item.reason = 'budget'; }
             else item.group.messages = before;
         } else if (options.compressSection) {
             const compressed = await options.compressSection(snapshotSection(item.section));
@@ -324,7 +326,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
                 const before = item.section;
                 item.section = { ...before, text: () => compressed, estimatedTokens: count(counter.countTokens(compressed)) };
                 const trial = render();
-                if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; }
+                if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; item.reason = 'budget'; }
                 else item.section = before;
             }
         }
@@ -332,6 +334,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     for (const item of removable) {
         if (result.usage.totalTokens <= budget) break;
         item.action = 'dropped';
+        item.reason = 'budget';
         result = render();
     }
     if (result.usage.totalTokens > budget) throw new ContextBudgetExceededError(budget, result.usage.totalTokens);
@@ -343,6 +346,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     return { ...result, messages: structuredClone(result.messages),
         excludedSections: candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action === 'dropped').map(item => item.section),
         decisions: candidates.map(item => ({ kind: item.kind, id: item.id, score: item.score, protected: item.protected, action: item.action,
+            ...(item.reason ? { reason: item.reason } : {}),
             ...(item.kind === 'messages' ? { messageRange: { start: item.group.firstIndex, end: item.group.firstIndex + item.group.messages.length } } : {}),
             ...(item.references ? { references: item.references } : {}) })) };
 }
