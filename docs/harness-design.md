@@ -664,6 +664,13 @@ reducer cannot clear them as an incidental side effect. Checkpoint lifecycle use
 requires the complete current conversation and a context report. Explicit local
 requests with `projection: 'none'` bypass the conversation lifecycle.
 
+Every checkpoint and repair input includes the exact original human requests and
+corrections, with their source indexes, independently of the selected source chunk.
+Task intent therefore remains available even after the checkpoint covers those
+messages. Model-derived and deterministic messages are not promoted into human
+requirements. These requirements participate in preparation and cannot be silently
+truncated to fit; a prior summary is never their sole replacement.
+
 A structurally rejected complete draft is recorded as pending derived state,
 including its exact text and selected source range. `prepareCheckpointRepair`
 prepares one bounded revision of that artifact rather than repeating source

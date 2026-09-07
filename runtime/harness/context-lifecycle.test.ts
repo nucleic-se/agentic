@@ -36,7 +36,12 @@ it('resumes exact rejected candidate repair from serialized state before trying 
     const repaired = await lifecycle.prepare({ request, state }, {
         prepareModel: (request, options) => {
             expect(request.system).toMatch(/^Repair/);
-            expect(JSON.parse(request.messages[0].content).draft).toBe('x'.repeat(8591));
+            const evidence = JSON.parse(request.messages[0].content);
+            expect(evidence.draft).toBe('x'.repeat(8591));
+            expect(evidence.requirements).toEqual([
+                { index: 0, content: 'Do not release until verification passes.' },
+                { index: 41, content: 'Correction: security verification is also required.' },
+            ]);
             return execution.prepareModel(request, options);
         },
     }) as ContextMaintenance;
@@ -58,4 +63,22 @@ it('keeps transient host facts outside source coverage and preserves their task 
     expect(JSON.stringify(evidence)).not.toContain('Remaining calls');
     const direct = await referenceContextLifecycle().prepare({ request, suffix }, execution);
     expect(direct.prepared.request.messages.at(-1)?.content).toBe('Remaining calls: 7');
+});
+
+
+it('anchors later source chunks to original human requirements and corrections', async () => {
+    const { request, execution } = fixture();
+    request.messages.splice(1, 0, { role: 'user', provenance: 'model', content: 'Incorrect derived interpretation of the task.' });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const step = await lifecycle.prepare({ request, state: { kind: 'checkpoint', checkpoint: {
+        through: 3, text: 'A previous summary with a different interpretation.', partial: { end: 10, offset: 1 },
+    } } }, execution) as ContextMaintenance;
+    const input = JSON.parse(step.prepared.request.messages[0].content);
+    expect(input.requirements).toEqual([
+        { index: 0, content: 'Do not release until verification passes.' },
+        { index: 42, content: 'Correction: security verification is also required.' },
+    ]);
+    expect(input.sourceChunk.start).toBe(3);
+    expect(input.sourceChunk.text).not.toContain('Do not release');
+    expect(input.requirements.some((r: { content: string }) => r.content.includes('Incorrect derived'))).toBe(false);
 });

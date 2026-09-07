@@ -69,7 +69,7 @@ export function checkpointContextLifecycle(configuration: { maxTokens: number; t
         const state = checkpointState(input.state);
         const cacheScope = request.cacheScope === undefined ? undefined : `${request.cacheScope}:checkpoint`;
         // A rejected candidate already identifies its exact source. Repair does not depend on fitting the task again.
-        let selected = state.rejected ? await prepareCheckpointRepair(execution, state.rejected, {
+        let selected = state.rejected ? await prepareCheckpointRepair(execution, request.messages, state.rejected, {
             maxTokens: config.maxTokens, cacheScope: cacheScope === undefined ? undefined : `${cacheScope}:repair`,
         }) : undefined;
         if (!selected) {

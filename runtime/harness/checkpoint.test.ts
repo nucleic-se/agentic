@@ -282,7 +282,7 @@ it('repairs the saved draft without changing its source coverage or truncating i
     const candidate = rejectedCheckpoint({ through: 12, partial: { end: 14, offset: 30 }, sourceRange: { start: 12, end: 14, offset: 10, endOffset: 30, totalCharacters: 100 } },
         { message: { role: 'assistant', content: 'x'.repeat(9000) }, stopReason: 'end_turn' }, 'too_large');
     const execution = createHarnessExecution({ context: budgetedContext('', 4000), provider: { turn: async () => { throw new Error('Preparation must not dispatch'); }, structured: async () => { throw new Error('unused'); } } });
-    const prepared = await prepareCheckpointRepair(execution, candidate, { maxTokens: 100 });
+    const prepared = await prepareCheckpointRepair(execution, [], candidate, { maxTokens: 100 });
     const evidence = JSON.parse(prepared.prepared.request.messages[0].content);
     expect(evidence.draft).toBe(candidate.text);
     expect(evidence.output).toEqual({ targetCharacters: 4000, maxCharacters: 8000 });
@@ -292,5 +292,5 @@ it('repairs the saved draft without changing its source coverage or truncating i
     prepared.sourceRange.end = 99;
     expect(candidate.sourceRange.end).toBe(14);
     const tooSmall = createHarnessExecution({ context: budgetedContext('', 500), provider: { turn: async () => { throw new Error('unused'); }, structured: async () => { throw new Error('unused'); } } });
-    await expect(prepareCheckpointRepair(tooSmall, candidate, { maxTokens: 100 })).rejects.toThrow();
+    await expect(prepareCheckpointRepair(tooSmall, [], candidate, { maxTokens: 100 })).rejects.toThrow();
 });
