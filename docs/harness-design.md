@@ -537,7 +537,10 @@ writing, patching, command execution and saved-output retrieval. Dedicated move
 and delete tools are no longer part of this pack; lower-level filesystem tools
 remain available separately. `codingToolEffect` owns the pack's read/write
 classification. `codingToolRuntime(workspace, { readOnly: true })` restricts both the
-manifest and dispatch. The default agent continues to confirm mutation arguments.
+manifest and dispatch. `defaultAgentExtensions({ workspace, readOnly: true })`
+uses that restriction while keeping archived tool results available. This setting
+is part of the composition identity. Without it, the default agent continues to
+confirm mutation arguments.
 
 `fs_read` supports numbered line pages by default and exact UTF-8 byte pages with
 `mode: "bytes"`. Byte offsets are zero-based, with a 16,000-byte maximum page;
