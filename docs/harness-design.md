@@ -520,6 +520,15 @@ before continuation; reopening storage is not permission to replay it. Request
 snapshots explain what was sent, while receipts and host state explain what was
 committed. These are separate facts when a process stops between dispatch and commit.
 
+### Shared coding tools
+
+The shared coding pack exposes eight tools for reading, listing, searching,
+writing, patching, command execution and saved-output retrieval. Dedicated move
+and delete tools are no longer part of this pack; lower-level filesystem tools
+remain available separately. `codingToolEffect` owns the pack's read/write
+classification. `codingToolRuntime(workspace, { readOnly: true })` restricts both the
+manifest and dispatch. The default agent continues to confirm mutation arguments.
+
 ### Project instructions
 
 The default agent loads the workspace-root `AGENTS.md` before composing its roles.
