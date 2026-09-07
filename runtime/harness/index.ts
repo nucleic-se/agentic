@@ -13,7 +13,7 @@ export type { HarnessExecution, HarnessExecutionRoles, HarnessModelOptions, Harn
 export { inspectHarness } from './inspection.js';
 export type { HarnessSnapshot } from './inspection.js';
 
-export { checkpointView, checkpointBoundary, checkpointRequest, prepareCheckpoint, type WorkingCheckpoint, type CheckpointSourceRange } from './checkpoint.js';
+export { checkpointFromResponse, CHECKPOINT_MAX_CHARACTERS, type CheckpointRejection, checkpointView, checkpointBoundary, checkpointRequest, prepareCheckpoint, type WorkingCheckpoint, type CheckpointSourceRange } from './checkpoint.js';
 
 export { toToolResultMessage, readArchivedToolResult } from '../ToolOutput.js';
 export { readProjectInstructions, projectInstructionText, type ProjectInstruction } from './instructions.js';

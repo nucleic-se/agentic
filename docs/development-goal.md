@@ -17,11 +17,16 @@ Current evidence: pinned instruction retention and archive identity recovery are
 implemented and tested. Isolated host trials exercised repeated automatic
 checkpoints, exact source recovery and reopen. Two trials with explicit
 verification semantics retained unfinished work through five and six checkpoints.
-This phase remains open: the default composition can discard the original task
-requirement when a later "Continue" becomes the protected current message, and
-Gears currently fails a task when a generated checkpoint exceeds its character
-limit. Align objective retention and recoverable maintenance behavior across the
-two compositions before expanding recall or interface features.
+Both reference context views now retain human objectives and corrections through
+pressure and checkpoint boundaries. Protected instructions that exceed the budget
+fail explicitly. Shared checkpoint validation states the character limit in the
+producer request; Gears records and retries one rejected complete draft while
+preserving original history and the last valid checkpoint. Repeated rejection
+stops within ordinary call/token budgets. Incomplete or ambiguous model operations
+retain their existing failure/recovery semantics.
+This phase remains open: the default composition still needs automatic checkpoint
+and source-recovery integration, and the maintenance changes require live evidence.
+Align continuity across both compositions before expanding recall or interfaces.
 
 ## 2. A complete coding workflow
 

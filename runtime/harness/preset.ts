@@ -37,7 +37,7 @@ export async function defaultAgentExtensions(options: DefaultAgentOptions): Prom
         { id: options.planning ? 'loop.planning' : 'loop.conversational', version: '2.0.0', apiVersion: 1,
             configuration: JSON.stringify({ outputTokens: options.outputTokens ?? 4096 }),
             roles: { loop: () => options.planning ? planningLoop({ maxTokens: options.outputTokens ?? 4096 }) : conversationalLoop({ maxTokens: options.outputTokens ?? 4096 }) } },
-        { id: 'context.budgeted', configuration: JSON.stringify({system, budget: options.tokenBudget ?? 24000, includeToolCallIds: Boolean(options.memoryDatabase)}), version: '3.0.0', apiVersion: 1, roles: { context: () => budgetedContext(system, options.tokenBudget ?? 24000, { includeToolCallIds: Boolean(options.memoryDatabase) }) } },
+        { id: 'context.budgeted', configuration: JSON.stringify({system, budget: options.tokenBudget ?? 24000, includeToolCallIds: Boolean(options.memoryDatabase)}), version: '4.0.0', apiVersion: 1, roles: { context: () => budgetedContext(system, options.tokenBudget ?? 24000, { includeToolCallIds: Boolean(options.memoryDatabase) }) } },
         { id: `provider.subscription.${model}`, version: '3.0.0', apiVersion: 1, roles: { provider: async () => new (await import('../../providers/subscription.js')).SubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort: 'low' }) } },
         { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null }), version: '10.0.0', apiVersion: 1,
             activate: async value => { client = value; },

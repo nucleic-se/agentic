@@ -32,9 +32,10 @@ export interface ContextCompositionOptions extends ContextTokenOptions {
     /** Render source IDs as model-visible data when tools require exact receipt references. */
     includeToolCallIds?: boolean;
     minRecentGroups?: number;
-    /** Retain the latest human user message through intervening tools and synthetic updates.
-     * Messages without provenance are treated as human for compatibility. */
-    protectCurrentUserMessage?: boolean;
+    /** Retain human instructions through tools and synthetic updates. `all` preserves
+     * objectives and later corrections; `latest` supports explicitly disposable history.
+     * Messages without provenance are treated as human. */
+    protectUserMessages?: 'latest' | 'all';
     /** Opt-in model-facing cap for recoverable text tool results, including recent errors.
      * Requires referenceToolResult; originals and call identity remain intact. */
     maxToolResultCharacters?: number;
@@ -186,6 +187,7 @@ const snapshotSection = snapshotPromptSection;
 
 /** Contribute first, select/compress complete units, then render; history is never mutated. */
 export async function composeAgentContext(input: ContextCompositionInput, options: ContextCompositionOptions = {}): Promise<ContextCompositionResult> {
+    if (options.protectUserMessages !== undefined && !['latest', 'all'].includes(options.protectUserMessages)) throw new TypeError('Invalid human-message retention policy');
     const budget = integer(input.tokenBudget, 'tokenBudget', 1);
     const recent = integer(options.minRecentGroups ?? 2, 'minRecentGroups');
     input.signal?.throwIfAborted();
@@ -204,7 +206,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     }
     const messageGroups = groups(input.messages);
     let currentUserIndex = -1;
-    if (options.protectCurrentUserMessage) input.messages.forEach((message, index) => {
+    if (options.protectUserMessages === 'latest') input.messages.forEach((message, index) => {
         if (message.role === 'user' && (message.provenance ?? 'human') === 'human') currentUserIndex = index;
     });
     const sourceText = messageGroups.flatMap(group => group.messages.map(message => message.content));
@@ -218,6 +220,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         if ((!Number.isFinite(score) && score !== Infinity)) throw new RangeError('Message group score must be finite or positive Infinity');
         const sticky = group.messages.some((message, offset) =>
             group.firstIndex + offset === currentUserIndex ||
+            (options.protectUserMessages === 'all' && message.role === 'user' && (message.provenance ?? 'human') === 'human') ||
             (message.role === 'user' && message.sticky === true) ||
             options.protectMessage?.(structuredClone(message), group.firstIndex + offset));
         candidates.push({ kind: 'messages', group, id: `messages:${group.firstIndex}`, score,

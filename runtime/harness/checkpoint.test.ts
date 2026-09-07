@@ -34,6 +34,22 @@ it('keeps original history and the current instruction when its source is checkp
     expect(history).toEqual(original);
     expect(() => checkpointView(history, { through: 4, text: 'invalid' })).toThrow('boundary');
 });
+
+it('retains unpinned human objectives and corrections across every checkpoint boundary', () => {
+    const history: Message[] = [
+        { role: 'user', content: 'Release after integration passes' },
+        { role: 'assistant', content: 'Investigating' },
+        { role: 'user', provenance: 'human', content: 'Correction: security verification must also pass' },
+        { role: 'user', provenance: 'model', content: 'A speculative conclusion' },
+        { role: 'user', content: 'Continue' },
+    ];
+    for (const through of [2, 4, 5]) {
+        const view = checkpointView(history, { through, text: 'Incomplete working summary' });
+        expect(view.messages.filter(message => message.role === 'user' && (message.provenance ?? 'human') === 'human'))
+            .toEqual([history[0], history[2], history[4]]);
+        expect(new Set(view.sourceIndexes.filter(index => index !== null)).size).toBe(view.sourceIndexes.length - 1);
+    }
+});
 it('checkpoints a whole tool-call group and supplies original source evidence', async () => {
     const history: Message[] = [{ role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }] }, { role: 'tool_result', toolCallId: 'a', content: 'evidence '.repeat(1000) }, { role: 'user', content: 'finish', provenance: 'human' }];
     const view = checkpointView(history);
@@ -241,4 +257,20 @@ it('can checkpoint before compression using the context-owned ceiling, preservin
     expect(await prepareCheckpoint(execution, history, view, protectedReport, { maxTokens: 100, triggerRatio: 0.65 })).toBeUndefined();
     for (const triggerRatio of [0, -1, NaN, Infinity, 1.01])
         await expect(prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100, triggerRatio })).rejects.toThrow('triggerRatio');
+});
+
+it('accepts only complete bounded checkpoint text and persists only checkpoint fields', async () => {
+    const { checkpointFromResponse, CHECKPOINT_MAX_CHARACTERS } = await import('./checkpoint.js');
+    const response = { message: { role: 'assistant' as const, content: 'x'.repeat(CHECKPOINT_MAX_CHARACTERS) }, stopReason: 'end_turn' as const };
+    const selection = { through: 3, prepared: { private: true }, partial: { end: 5, offset: 20 } };
+    const accepted = checkpointFromResponse(selection, response);
+    expect(accepted).toEqual({ ok: true, checkpoint: { through: 3, partial: selection.partial, text: response.message.content } });
+    if (accepted.ok) accepted.checkpoint.partial!.offset = 99;
+    expect(selection.partial.offset).toBe(20);
+    expect(checkpointFromResponse(selection, { ...response, stopReason: 'max_tokens' })).toEqual({ ok: false, reason: 'incomplete' });
+    expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, content: ' ' } })).toEqual({ ok: false, reason: 'empty' });
+    expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, content: response.message.content + 'x' } })).toEqual({ ok: false, reason: 'too_large' });
+    expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, toolCalls: [{ id: 'a', name: 'write', args: {} }] } })).toEqual({ ok: false, reason: 'tool_calls' });
+    const request = checkpointRequest([{ role: 'assistant', content: 'evidence' }], 1);
+    expect(JSON.parse(request.messages[0].content).output.maxCharacters).toBe(CHECKPOINT_MAX_CHARACTERS);
 });

@@ -300,7 +300,7 @@ it.each([undefined, 'human'] as const)('retains the current user instruction acr
         { role: 'user', provenance: 'deterministic', content: 'scheduled wake '.repeat(100) },
     ];
     const original = structuredClone(messages);
-    const policy = { tokenCounter: counter, minRecentGroups: 0, protectCurrentUserMessage: true };
+    const policy = { tokenCounter: counter, minRecentGroups: 0, protectUserMessages: 'latest' as const };
     const result = await composeAgentContext({ messages, tokenBudget: 30 }, policy);
     expect(result.messages).toEqual([messages[1]]);
     expect(result.decisions.find(d => d.id === 'messages:1')).toMatchObject({ protected: true, action: 'kept' });

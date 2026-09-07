@@ -119,9 +119,25 @@ describe('default harness strategies', () => {
     it('budget strategy preserves the original transcript', async () => {
         const messages: Message[] = [{ role: 'user', content: 'old '.repeat(2000) }, { role: 'assistant', content: 'old answer' }, { role: 'user', content: 'new task' }];
         const before = structuredClone(messages);
-        const assembled = await budgetedContext('system', 500).assemble(messages, new AbortController().signal);
+        await expect(budgetedContext('system', 500).assemble(messages, new AbortController().signal)).rejects.toThrow('protected content cannot be dropped');
+        const assembled = await budgetedContext('system', 500, { protectUserMessages: 'latest' }).assemble(messages, new AbortController().signal);
         expect(messages).toEqual(before);
         expect(assembled.messages.length).toBeLessThan(messages.length);
+    });
+    it('retains the objective and its correction when a later Continue fills a normal context window', async () => {
+        const messages: Message[] = [{ role: 'user', content: 'Release remains blocked until integration passes' }];
+        for (let index = 0; index < 200; index++) {
+            if (index === 100) messages.push({ role: 'user', provenance: 'human', content: 'Correction: security verification must also pass' });
+            messages.push({ role: 'assistant', content: '', toolCalls: [{ id: `read-${index}`, name: 'read', args: {} }] },
+                { role: 'tool_result', toolCallId: `read-${index}`, content: 'Observed source content. '.repeat(100) });
+        }
+        messages.push({ role: 'user', content: 'Continue' });
+        const before = structuredClone(messages);
+        const result = await budgetedContext('system', 24000).assemble(messages, new AbortController().signal, { reservedOutputTokens: 4096 });
+        expect(result.messages.filter(message => message.role === 'user')).toEqual(messages.filter(message => message.role === 'user'));
+        expect(result.messages.length).toBeLessThan(messages.length);
+        expect(result.report!.usage.totalTokens).toBeLessThanOrEqual(24000);
+        expect(messages).toEqual(before);
     });
 });
 
