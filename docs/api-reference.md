@@ -757,6 +757,10 @@ at their exact indices and return `null` when the current tool grants cannot
 retrieve them. Presentation also covers recent error results; identity, error
 flags, tool pairing and raw input remain unchanged. Native content blocks are
 excluded. Context reports record original/retained sizes and retrieval references.
+Without an eager presentation cap, fitting text stays intact. If protected text
+alone exceeds capacity, recoverable tool results may receive a bounded head/tail
+preview while their groups stay present. Results without a retrieval grant and
+native content blocks remain protected; an impossible budget still fails.
 Older successful previews may shrink further under existing priority-driven
 pressure. The final complete-request budget still applies; this is a per-result
 presentation cap, not an assurance that arbitrary batches fit.

@@ -240,6 +240,30 @@ it('projects recent error output only with a recoverable source and preserves ex
     await expect(composeAgentContext(input, { maxToolResultCharacters: 1200 })).rejects.toThrow('requires referenceToolResult');
 });
 
+it('references protected evidence only when its full text cannot fit', async () => {
+    const messages: Message[] = [
+        { role: 'user', content: 'inspect the evidence', sticky: true },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'read_file', args: {} }] },
+        { role: 'tool_result', toolCallId: 'read', toolName: 'read_file', isError: true,
+            content: 'Evidence starts here\n' + 'x'.repeat(37000) + '\nFailure detail at the end' },
+    ];
+    const original = structuredClone(messages);
+    const referenceToolResult = vi.fn(() => 'read_tool_result({"callId":"read"})');
+    const fitting = await composeAgentContext({ messages, tokenBudget: 100000 }, { referenceToolResult });
+    expect(fitting.messages).toEqual(original);
+    expect(referenceToolResult).not.toHaveBeenCalled();
+    const bounded = await composeAgentContext({ messages, tokenBudget: 2000 }, { referenceToolResult });
+    expect(bounded.usage.totalTokens).toBeLessThanOrEqual(2000);
+    expect(bounded.messages).toHaveLength(3);
+    expect(bounded.messages[2]).toMatchObject({ toolCallId: 'read', isError: true });
+    expect(bounded.messages[2].content).toContain('Evidence starts here');
+    expect(bounded.messages[2].content).toContain('Failure detail at the end');
+    expect(bounded.decisions.find(d => d.references?.length)).toMatchObject({ protected: true, action: 'compressed' });
+    expect(messages).toEqual(original);
+    await expect(composeAgentContext({ messages, tokenBudget: 2000 }, { referenceToolResult: () => null }))
+        .rejects.toBeInstanceOf(ContextBudgetExceededError);
+});
+
 it('bounds output presentation including its reference and avoids splitting surrogate pairs', async () => {
     const { projectToolOutput } = await import('./ToolOutput.js');
     const text = '😀'.repeat(2000);
