@@ -694,6 +694,27 @@ reducer cannot clear them as an incidental side effect. Checkpoint lifecycle use
 requires the complete current conversation and a context report. Explicit local
 requests with `projection: 'none'` bypass the conversation lifecycle.
 
+`checkpointContextLifecycle({ maxTokens: 800, format })` can replace the default
+`textCheckpointFormat`. A `CheckpointFormat` supplies response instructions,
+optional schema tool definitions, and a pure `decode(response)` function returning
+`{ ok: true, text }` or `{ ok: false, reason: 'invalid_format' }`. The decoder owns
+schema validation and can render structured state with `JSON.stringify`. Schema
+tool calls are maintenance responses: they are never dispatched to the task tool
+runtime or inserted into the ordinary tool conversation.
+
+Selection, source cursors, accounting, candidate admission and the one-repair
+allowance remain shared. Generation and repair use the same format. Invalid
+structured responses retain their arguments for repair, while the complete original
+provider receipt remains inspectable. Incomplete responses cannot be accepted by a
+custom decoder. Decoders receive a copy; rendered state must be nonempty text and
+fit the actual task context. The lifecycle snapshots format instructions and tool
+definitions at composition time. Include the format in a custom composition's
+identity so persisted state reopens with its original decoder.
+
+The lower-level request API uses named options:
+`checkpointRequest(history, through, { previous, notes, presentation, tools, format })`.
+This replaces its earlier positional optional arguments during alpha development.
+
 Every checkpoint and repair input includes the exact original human requests and
 corrections, with their source indexes, independently of the selected source chunk.
 Task intent therefore remains available even after the checkpoint covers those

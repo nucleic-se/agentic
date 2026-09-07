@@ -15,7 +15,7 @@ it('presents recoverable maintenance evidence without rewriting requirements, de
     const original = structuredClone(history);
     const presentation = { maxToolResultCharacters: 500, referenceToolResult: archivedToolResultReference };
     const tools = [{ name: 'read_tool_result', description: 'Read original evidence', parameters: { type: 'object' as const } }];
-    const projected = JSON.parse(checkpointRequest(history, 3, undefined, 'Verification unfinished.', presentation, tools).messages[0].content);
+    const projected = JSON.parse(checkpointRequest(history, 3, { notes: 'Verification unfinished.', presentation, tools }).messages[0].content);
     expect(projected.requirements).toEqual([{ index: 0, content: history[0].content }]);
     expect(projected.notes).toBe('Verification unfinished.');
     expect(projected.sources.slice(0, 2)).toEqual(original.slice(0, 2).map((m, index) => ({ index, ...m })));
@@ -30,7 +30,7 @@ it('presents recoverable maintenance evidence without rewriting requirements, de
     } while (true);
     expect(restored).toBe(evidence);
     expect(history).toEqual(original);
-    expect(JSON.parse(checkpointRequest(history, 3, undefined, '', presentation).messages[0].content).sources[2].content).toBe(evidence);
+    expect(JSON.parse(checkpointRequest(history, 3, { presentation }).messages[0].content).sources[2].content).toBe(evidence);
 });
 
 it('keeps rich and retrieval evidence intact and isolates reference callbacks from sources', () => {
@@ -40,10 +40,10 @@ it('keeps rich and retrieval evidence intact and isolates reference callbacks fr
     ];
     const presentation = { maxToolResultCharacters: 100, referenceToolResult: archivedToolResultReference };
     const tools = [{ name: 'read_tool_result', parameters: { type: 'object' as const }, description: '' }];
-    expect(JSON.parse(checkpointRequest(history, 2, undefined, '', presentation, tools).messages[0].content).sources)
+    expect(JSON.parse(checkpointRequest(history, 2, { presentation, tools }).messages[0].content).sources)
         .toEqual(history.map((m, index) => ({ index, ...m })));
     const original = structuredClone(history);
-    checkpointRequest(history, 2, undefined, '', { ...presentation, referenceToolResult(message) { message.content = 'changed'; return null; } }, tools);
+    checkpointRequest(history, 2, { presentation: { ...presentation, referenceToolResult(message) { message.content = 'changed'; return null; } }, tools });
     expect(history).toEqual(original);
 });
 
@@ -103,9 +103,9 @@ it('checkpoints a whole tool-call group and supplies original source evidence', 
     const request = checkpointRequest(history, boundary!);
     expect(JSON.parse(request.messages[0].content).sources[1].content).toBe(history[1].content);
     expect(checkpointView(history, { through: boundary!, text: 'read completed' }).sourceIndexes).toEqual([null, 2]);
-    expect(() => checkpointRequest(history, 2, { through: 2, text: 'already included' })).toThrow('advance');
-    expect(() => checkpointRequest(history, 2, { through: -1, text: 'invalid' })).toThrow('boundary');
-    expect(() => checkpointRequest(history, 2, { through: 0, text: '  ' })).toThrow('empty');
+    expect(() => checkpointRequest(history, 2, { previous: { through: 2, text: 'already included' } })).toThrow('advance');
+    expect(() => checkpointRequest(history, 2, { previous: { through: -1, text: 'invalid' } })).toThrow('boundary');
+    expect(() => checkpointRequest(history, 2, { previous: { through: 0, text: '  ' } })).toThrow('empty');
 });
 
 it('prepares the largest whole prefix that fits without dispatching maintenance probes', async () => {

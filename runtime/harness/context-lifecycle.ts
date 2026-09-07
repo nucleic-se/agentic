@@ -2,7 +2,7 @@ import { ContextBudgetExceededError } from '../PromptEngine.js';
 import type { Message, TurnRequest, TurnResponse } from '../../contracts/llm.js';
 import type { HarnessExecution, PreparedHarnessModel } from './execution.js';
 import { checkpointView, prepareCheckpoint, prepareCheckpointRepair, checkpointFromResponse, rejectedCheckpoint,
-    type WorkingCheckpoint, type RejectedCheckpoint, type CheckpointSourceRange, type CheckpointEvidencePresentation } from './checkpoint.js';
+    type WorkingCheckpoint, type RejectedCheckpoint, type CheckpointSourceRange, type CheckpointEvidencePresentation, type CheckpointFormat } from './checkpoint.js';
 
 /** The driver supplies preparation only: strategies cannot dispatch or acquire budgets. */
 export type ContextPreparation = Pick<HarnessExecution, 'prepareModel'>;
@@ -62,8 +62,13 @@ function checkpointState(value: unknown): CheckpointContextState {
 }
 
 /** Checkpoint selection and repair are one replaceable policy; hosts persist its opaque state. */
-export function checkpointContextLifecycle(configuration: { maxTokens: number; triggerRatio?: number; presentation?: CheckpointEvidencePresentation }): ContextLifecycle {
-    const config = { ...configuration, ...(configuration.presentation ? { presentation: { ...configuration.presentation } } : {}) };
+export function checkpointContextLifecycle(configuration: { maxTokens: number; triggerRatio?: number; presentation?: CheckpointEvidencePresentation; format?: CheckpointFormat }): ContextLifecycle {
+    const config = { ...configuration,
+        ...(configuration.presentation ? { presentation: { ...configuration.presentation } } : {}),
+        ...(configuration.format ? { format: { ...configuration.format, tools: structuredClone(configuration.format.tools ?? []) } } : {}),
+    };
+    if (config.format && (!config.format.instructions.trim() || typeof config.format.decode !== 'function'))
+        throw new TypeError('Checkpoint format requires instructions and a decoder');
     if (!Number.isSafeInteger(config.maxTokens) || config.maxTokens < 1) throw new RangeError('Checkpoint output budget must be a positive safe integer');
     if (config.triggerRatio !== undefined && (!Number.isFinite(config.triggerRatio) || config.triggerRatio <= 0 || config.triggerRatio > 1))
         throw new RangeError('Checkpoint triggerRatio must be greater than zero and no greater than one');
@@ -89,7 +94,7 @@ export function checkpointContextLifecycle(configuration: { maxTokens: number; t
         if (state.rejected?.attempt === 2) throw new Error(`Checkpoint rejected after two attempts: ${state.rejected.reason}`);
         // Invalid responses and candidates that cannot fit share the same one-repair allowance.
         let selected = state.rejected ? await prepareCheckpointRepair(execution, request.messages, state.rejected, {
-            maxTokens: config.maxTokens, cacheScope: cacheScope === undefined ? undefined : `${cacheScope}:repair`,
+            maxTokens: config.maxTokens, cacheScope: cacheScope === undefined ? undefined : `${cacheScope}:repair`, format: config.format,
         }) : undefined;
         if (!selected) {
             const view = checkpointView(request.messages, state.checkpoint, suffix);
@@ -108,7 +113,7 @@ export function checkpointContextLifecycle(configuration: { maxTokens: number; t
                 ...(validated ? { checkpointAccepted: validated } : {}),
                 ...(state.rejected ? { rejection: state.rejected.reason } : {}) },
             reduce(response) {
-                const draft = checkpointFromResponse(selection, response);
+                const draft = checkpointFromResponse(selection, response, config.format);
                 const attempt = state.rejected ? 2 : 1;
                 if (draft.ok) return { state: { kind: 'checkpoint', checkpoint: state.checkpoint,
                     candidate: { ...draft.checkpoint, sourceRange: structuredClone(selection.sourceRange), attempt } },

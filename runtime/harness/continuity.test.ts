@@ -4,16 +4,16 @@ import { createHarness } from './host.js';
 import { MemorySessionStore } from './stores.js';
 import { budgetedContext, conversationalLoop } from './defaults.js';
 import type { SessionClient } from './types.js';
-import type { TurnRequest } from '../../contracts/llm.js';
+import type { TurnRequest, TurnResponse } from '../../contracts/llm.js';
 
 const clients: SessionClient[] = [];
 afterEach(async () => { for (const client of clients.splice(0)) await client.close(); });
-async function setup(turn: (request: TurnRequest) => string, maxModelCalls = 20, lifecycle: ContextLifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 }), system = 'Complete the audit.') {
+async function setup(turn: (request: TurnRequest) => string | TurnResponse, maxModelCalls = 20, lifecycle: ContextLifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 }), system = 'Complete the audit.') {
     const client = await createHarness().compose({ limits: { maxModelCalls }, extensions: [{ id: 'continuity.test', version: '1', apiVersion: 1, roles: {
         store: () => new MemorySessionStore(),
         loop: () => conversationalLoop({ maxTokens: 64 }),
         context: () => ({ ...budgetedContext(system, 3000), lifecycle }),
-        provider: () => ({ turn: async request => ({ message: { role: 'assistant', content: turn(request) }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } }), structured: async () => { throw new Error('unused'); } }),
+        provider: () => ({ turn: async request => { const result = turn(request); return typeof result === 'string' ? { message: { role: 'assistant', content: result }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } } : result; }, structured: async () => { throw new Error('unused'); } }),
         tools: () => ({ tools: () => [], validate: (_name, args) => ({ ok: true, args }), call: async () => ({ ok: true, content: 'unused' }) }),
         policy: () => ({ evaluate: async () => ({ kind: 'allow' }) }),
     } }] });
@@ -200,4 +200,35 @@ it('uses fitting checkpoints above the character target without repair through t
     const events = await client.events(record.id);
     const task = events.find(e => e.type === 'model.intent' && (e.data as { purpose?: string }).purpose === 'task')!;
     expect(task.data).toHaveProperty('contextMetadata.checkpointAccepted');
+});
+
+
+it('persists structured maintenance as state without dispatching its schema call', async () => {
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8, format: {
+        instructions: 'Return checkpoint_state with remaining work.',
+        tools: [{ name: 'checkpoint_state', description: '', parameters: { type: 'object', properties: { remaining: { type: 'string' } }, required: ['remaining'], additionalProperties: false } }],
+        decode(response) {
+            const calls = response.message.toolCalls ?? [];
+            return calls.length === 1 && calls[0].name === 'checkpoint_state' && typeof calls[0].args.remaining === 'string'
+                ? { ok: true, text: JSON.stringify(calls[0].args) } : { ok: false, reason: 'invalid_format' };
+        },
+    } });
+    const { client, record } = await setup(request => {
+        if (request.tools?.some(tool => tool.name === 'checkpoint_state')) return {
+            message: { role: 'assistant', content: '', toolCalls: [{ id: 'state', name: 'checkpoint_state', args: { remaining: 'Security verification.' } }] },
+            stopReason: 'tool_use', usage: { inputTokens: 100, outputTokens: 20 },
+        };
+        expect(request.messages.some(message => message.content.includes('"remaining":"Security verification."'))).toBe(true);
+        return 'Security verification remains unfinished.';
+    }, 20, lifecycle);
+    await client.submit(record.id, 'Continue', { commandId: 'structured' });
+    const saved = await client.wait(record.id);
+    expect(saved.status, saved.error).toBe('idle');
+    expect(JSON.parse((saved.contextState as CheckpointContextState).checkpoint!.text)).toEqual({ remaining: 'Security verification.' });
+    expect(saved.messages.slice(0, record.messages.length)).toEqual(record.messages);
+    expect(saved.messages.some(message => message.role === 'assistant' && message.toolCalls?.some(call => call.name === 'checkpoint_state'))).toBe(false);
+    const events = await client.events(record.id);
+    expect(events.some(event => event.type === 'tool.intent')).toBe(false);
+    expect(events.filter(event => event.type === 'model.completed')).toHaveLength(2);
+    expect(saved.usage.inputTokens).toBe(200);
 });
