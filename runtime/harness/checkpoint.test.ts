@@ -57,7 +57,8 @@ it('makes resumable progress through an oversized group without dropping or spli
     const { prepareCheckpoint } = await import('./checkpoint.js');
     const history: Message[] = [
         { role: 'assistant', content: 'Earlier work' },
-        { role: 'assistant', content: '', toolCalls: [{ id: 'large', name: 'read', args: {} }] },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'large', name: 'read', args: {} }],
+            continuation: { format: 'test/v1', identity: 'backend', contentHash: 'binding', data: 'opaque-protocol'.repeat(1000) } },
         { role: 'tool_result', toolCallId: 'large', content: 'evidence🙂'.repeat(13000) },
         { role: 'user', content: 'Finish the task' },
     ];
@@ -84,7 +85,31 @@ it('makes resumable progress through an oversized group without dropping or spli
     }
     expect(chunks).toBeGreaterThan(1);
     expect(previous.partial).toBeUndefined();
-    expect(recovered).toBe(JSON.stringify(history.slice(1, 3).map((message, offset) => ({ index: offset + 1, ...message }))));
+    expect(JSON.parse(recovered)).toEqual([
+        { index: 1, role: 'assistant', content: '', toolCalls: [{ id: 'large', name: 'read', args: {} }] },
+        { index: 2, ...history[2] },
+    ]);
+    expect(history).toEqual(original);
+});
+
+it('summarizes visible evidence while retaining native continuation in the archive and active view', () => {
+    const history: Message[] = [
+        { role: 'user', content: 'Check this evidence', provenance: 'human', sticky: true },
+        { role: 'assistant', content: 'Observed a discrepancy', provenance: 'model',
+            toolCalls: [{ id: 'read', name: 'read', args: { continuation: 'ordinary tool argument' } }],
+            continuation: { format: 'test/v1', identity: 'backend', contentHash: 'binding', data: 'opaque protocol state' } },
+        { role: 'tool_result', toolCallId: 'read', toolName: 'read', content: 'Exact source text', isError: true,
+            contentBlocks: [{ type: 'text', text: 'Exact source text' }, { type: 'image', mimeType: 'image/png', data: 'aGVsbG8=' }] },
+    ];
+    const original = structuredClone(history);
+    const request = checkpointRequest(history, history.length);
+    expect(JSON.parse(request.messages[0].content).sources).toEqual([
+        { index: 0, ...history[0] },
+        { index: 1, role: 'assistant', content: 'Observed a discrepancy', provenance: 'model',
+            toolCalls: [{ id: 'read', name: 'read', args: { continuation: 'ordinary tool argument' } }] },
+        { index: 2, ...history[2] },
+    ]);
+    expect(checkpointView(history).messages).toEqual(original);
     expect(history).toEqual(original);
 });
 

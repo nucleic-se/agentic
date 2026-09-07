@@ -530,11 +530,18 @@ messages do not replace that protected instruction.
 
 `WorkingCheckpoint` stores `through` (exclusive end of complete source groups) and
 `text`. An oversized group adds `partial: { end, offset }`: progress into the
-UTF-16 JSON representation of indexed messages `[through, end)`. Each maintenance
+UTF-16 JSON representation of indexed evidence `[through, end)`. Each maintenance
 request records its exact source range and, for chunks, offset/endOffset/total
 characters. A group stays intact in the active view until its last chunk commits;
 no partial tool-call group is presented as completed history. Each new summary is
 a self-contained replacement, including any previous partial summary.
+
+Summary evidence preserves visible messages, tool calls, results and provenance,
+but excludes assistant `continuation` annotations. Those opaque annotations belong
+to provider replay, remain in the archive and active conversation, and are not
+useful text for a summarizer. Whole-prefix requests and source chunks use the same
+projection. Partial offsets refer to that projected JSON; hosts must change their
+composition identity when upgrading from offsets into unprojected messages.
 
 Context decisions record whether a change was caused by `budget` pressure or an
 optional `presentation` cap.
@@ -561,7 +568,7 @@ then prepare again for a new admitted operation after recovery.
 Checkpoint preparation requests `preserveMessages: true`. Custom context strategies
 must retain the supplied source messages exactly or preparation fails before
 admission. They still control accounting and the context ceiling. This separates
-lossless maintenance input from ordinary selective context assembly.
+exact projected evidence from ordinary selective context assembly.
 
 `toToolResultMessage` is shared by local and durable hosts. It preserves native
 content blocks and copies mutable content-block objects; hosts apply their presentation

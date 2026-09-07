@@ -9,13 +9,13 @@ export interface WorkingCheckpoint {
     /** Complete source groups covered by this checkpoint. The archive remains append-only. */
     through: number;
     text: string;
-    /** Progress within the JSON representation of one oversized group [through, end). */
+    /** Progress within the evidence JSON of one oversized group [through, end). */
     partial?: { end: number; offset: number };
 }
 export interface CheckpointSourceRange {
     start: number;
     end: number;
-    /** UTF-16 offsets into JSON.stringify of the indexed source messages, when chunked. */
+    /** UTF-16 offsets into indexed evidence JSON (excluding provider continuation), when chunked. */
     offset?: number;
     endOffset?: number;
     totalCharacters?: number;
@@ -80,7 +80,12 @@ export function checkpointBoundary(view: CheckpointView, report: ContextReport, 
 }
 
 function indexedSources(history: readonly Message[], start: number, end: number) {
-    return history.slice(start, end).map((message, offset) => ({ index: start + offset, ...message }));
+    return history.slice(start, end).map((message, offset) => {
+        if (message.role !== 'assistant') return { index: start + offset, ...message };
+        // Replay annotations belong to the provider, not to the summarizer's evidence.
+        const { continuation: _continuation, ...evidence } = message;
+        return { index: start + offset, ...evidence };
+    });
 }
 
 function evidenceRequest(evidence: object, previous?: WorkingCheckpoint, notes = '') {
