@@ -209,8 +209,15 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     if (options.protectUserMessages === 'latest') input.messages.forEach((message, index) => {
         if (message.role === 'user' && (message.provenance ?? 'human') === 'human') currentUserIndex = index;
     });
+    const presentMessages = (messages: readonly Message[]): Message[] => messages.map(message => {
+        if (!options.includeToolCallIds || message.role !== 'tool_result') return message;
+        const label = `${JSON.stringify({ toolCallId: message.toolCallId })}\n`;
+        return { ...message, content: label + message.content,
+            ...(message.contentBlocks ? { contentBlocks: [{ type: 'text' as const, text: label }, ...message.contentBlocks] } : {}) };
+    });
+    const groupTokens = (messages: readonly Message[]) => estimateContextTokens({ messages: presentMessages(messages) }, tokenOptions).messageTokens;
     const sourceText = messageGroups.flatMap(group => group.messages.map(message => message.content));
-    type Item = { kind: 'messages'; group: Group; } | { kind: 'section'; section: PromptSection; };
+    type Item = { kind: 'messages'; group: Group; originalTokens: number; } | { kind: 'section'; section: PromptSection; };
     type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; reason?: ContextDecision['reason']; references?: ContextDecision['references']; order: number };
     const candidates: Candidate[] = sections.map((section, index) => ({ kind: 'section', section, id: section.id,
         score: sectionPriority(section),
@@ -223,7 +230,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             (options.protectUserMessages === 'all' && message.role === 'user' && (message.provenance ?? 'human') === 'human') ||
             (message.role === 'user' && message.sticky === true) ||
             options.protectMessage?.(structuredClone(message), group.firstIndex + offset));
-        candidates.push({ kind: 'messages', group, id: `messages:${group.firstIndex}`, score,
+        candidates.push({ kind: 'messages', group, originalTokens: groupTokens(group.messages), id: `messages:${group.firstIndex}`, score,
             protected: group.unbound || sticky || score === Infinity || index >= messageGroups.length - recent,
             action: 'kept', order: sections.length + index });
     });
@@ -244,12 +251,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             systemSections.push({ id: section.id, stability: section.stability ?? 'retained', start, end });
         }
         const messages = candidates.filter((item): item is Candidate & { kind: 'messages' } => item.kind === 'messages' && item.action !== 'dropped' && (!protectedOnly || item.protected))
-            .flatMap(item => item.group.messages).map(message => {
-                if (!options.includeToolCallIds || message.role !== 'tool_result') return message;
-                const label = `${JSON.stringify({ toolCallId: message.toolCallId })}\n`;
-                return { ...message, content: label + message.content,
-                    ...(message.contentBlocks ? { contentBlocks: [{ type: 'text' as const, text: label }, ...message.contentBlocks] } : {}) };
-            });
+            .flatMap(item => presentMessages(item.group.messages));
         const usage = estimateContextTokens({ system: finalSystem, messages, tools, responseSchema, reservedOutputTokens: input.reservedOutputTokens }, tokenOptions);
         return { system: finalSystem, systemSections, messages, includedSections: rendered.included, usage };
     };
@@ -358,6 +360,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         excludedSections: candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action === 'dropped').map(item => item.section),
         decisions: candidates.map(item => ({ kind: item.kind, id: item.id, score: item.score, protected: item.protected, action: item.action,
             ...(item.reason ? { reason: item.reason } : {}),
-            ...(item.kind === 'messages' ? { messageRange: { start: item.group.firstIndex, end: item.group.firstIndex + item.group.messages.length } } : {}),
+            ...(item.kind === 'messages' ? { messageRange: { start: item.group.firstIndex, end: item.group.firstIndex + item.group.messages.length },
+                tokens: { original: item.originalTokens, retained: item.action === 'dropped' ? 0 : groupTokens(item.group.messages) } } : {}),
             ...(item.references ? { references: item.references } : {}) })) };
 }

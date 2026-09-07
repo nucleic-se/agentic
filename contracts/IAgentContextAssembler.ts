@@ -117,6 +117,10 @@ export interface ContextDecision {
     reason?: 'budget' | 'presentation';
     score: number;
     protected: boolean;
+    /** Message-group estimates using the same counter and presentation as the full request.
+     * Original is before compression/selection; retained is zero when dropped.
+     * Retained group estimates sum to report.usage.messageTokens. Omitted for sections. */
+    tokens?: { original: number; retained: number };
     references?: Array<{ messageIndex: number; reference: string; originalCharacters: number; retainedCharacters: number }>;
 }
 

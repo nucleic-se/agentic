@@ -29,6 +29,17 @@ function validateReport(report: ContextReport | undefined, outputTokens: number)
         [...parts, 'totalTokens' as const].some(key => !Number.isSafeInteger(report.usage[key]) || report.usage[key] < 0) ||
         report.usage.totalTokens !== parts.reduce((total, key) => total + report.usage[key], 0) ||
         report.usage.reservedOutputTokens < outputTokens) throw new Error('Context strategy returned inconsistent token accounting');
+    const groups = report.decisions.filter(decision => decision.kind === 'messages');
+    for (const group of groups) {
+        if (group.tokens === undefined) continue;
+        if (!group.tokens || !Number.isSafeInteger(group.tokens.original) || group.tokens.original < 0 ||
+            !Number.isSafeInteger(group.tokens.retained) || group.tokens.retained < 0 ||
+            (group.action === 'dropped' && group.tokens.retained !== 0))
+            throw new Error('Context strategy returned inconsistent group token accounting');
+    }
+    if (groups.length && groups.every(group => group.tokens !== undefined) &&
+        groups.reduce((sum, group) => sum + group.tokens!.retained, 0) !== report.usage.messageTokens)
+        throw new Error('Context strategy returned inconsistent group token accounting');
 }
 
 /** The same request boundary for interactive and durable drivers. No scheduling or storage. */

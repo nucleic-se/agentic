@@ -723,3 +723,13 @@ or invoking the provider. The web inspector loads these requests on demand and
 includes loaded operations in its exported snapshot. Event history must remain
 available while operations reference it; this change does not introduce pruning.
 Whole-record writes and retained outcomes still grow with task history.
+
+Message-group decisions include `tokens.original` and `tokens.retained`, measured
+with the same configured counter, media estimate and visible tool-call labels as
+the complete request. Original cost is captured before selection or compression;
+dropped groups retain zero tokens. Retained group estimates sum to
+`contextReport.usage.messageTokens`. System sections and tool schemas remain in
+their separate accounting fields. These are counter estimates, not provider usage
+receipts. Alternative assemblers may omit group accounting; consumers must treat
+that as unknown rather than zero. The shared execution boundary rejects invalid
+estimates or inconsistent totals when a complete group breakdown is supplied.

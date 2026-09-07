@@ -307,3 +307,43 @@ it.each([undefined, 'human'] as const)('retains the current user instruction acr
     expect(messages).toEqual(original);
     await expect(composeAgentContext({ messages, tokenBudget: 10 }, policy)).rejects.toBeInstanceOf(ContextBudgetExceededError);
 });
+
+it('accounts original and retained message groups with the request counter across compression and eviction', async () => {
+    const messages: Message[] = [
+        { role: 'assistant', content: 'Discardable old discussion. '.repeat(50) },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'read-1', name: 'read', args: { path: 'source.ts' } }] },
+        { role: 'tool_result', toolCallId: 'read-1', toolName: 'read', content: 'Source detail. '.repeat(200) },
+        { role: 'user', provenance: 'human', content: 'Preserve the task intent.' },
+    ];
+    const original = structuredClone(messages);
+    const options = { tokenCounter: counter, minRecentGroups: 0, protectUserMessages: 'all' as const,
+        includeToolCallIds: true, compressMessage: (message: Message) => message.role === 'tool_result' ? { ...message, content: 'Exact source remains in archive.' } : null };
+    const large = await composeAgentContext({ messages, tokenBudget: 10000 }, options);
+    const small = await composeAgentContext({ messages, tokenBudget: 500 }, options);
+    expect(small.decisions.map(d => d.action)).toEqual(['dropped', 'compressed', 'kept']);
+    expect(small.decisions.map(d => d.tokens!.original)).toEqual(large.decisions.map(d => d.tokens!.original));
+    expect(small.decisions[0].tokens!.retained).toBe(0);
+    expect(small.decisions[1].tokens!.retained).toBeLessThan(small.decisions[1].tokens!.original);
+    expect(small.decisions[2].tokens!.retained).toBe(small.decisions[2].tokens!.original);
+    for (const result of [large, small]) {
+        expect(result.decisions.reduce((sum, d) => sum + d.tokens!.retained, 0)).toBe(result.usage.messageTokens);
+        expect(result.usage).toEqual(estimateContextTokens({ system: result.system, messages: result.messages }, { tokenCounter: counter }));
+    }
+    expect(messages).toEqual(original);
+});
+
+it('includes rich tool output, image estimates and visible call identities in group accounting', async () => {
+    const messages: Message[] = [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'image-1', name: 'read', args: {} }] },
+        { role: 'tool_result', toolCallId: 'image-1', content: 'image evidence', contentBlocks: [
+            { type: 'text', text: 'image evidence' }, { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+        ] },
+    ];
+    const options = { tokenCounter: counter, imageTokenEstimate: 17, includeToolCallIds: true };
+    const result = await composeAgentContext({ messages, tokenBudget: 1000 }, options);
+    expect(result.decisions).toHaveLength(1);
+    expect(result.decisions[0].tokens).toEqual({ original: result.usage.messageTokens, retained: result.usage.messageTokens });
+    expect(result.usage).toEqual(estimateContextTokens({ system: result.system, messages: result.messages }, options));
+    const unlabelled = await composeAgentContext({ messages, tokenBudget: 1000 }, { ...options, includeToolCallIds: false });
+    expect(result.decisions[0].tokens!.original).toBeGreaterThan(unlabelled.decisions[0].tokens!.original);
+});

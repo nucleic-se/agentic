@@ -62,3 +62,29 @@ it('requires lossless source preparation when requested', async () => {
     await expect(execution.prepareModel({ messages: [{ role: 'user', content: 'source' }] }, { preserveMessages: true })).rejects.toThrow('protected source');
     expect(turn).not.toHaveBeenCalled();
 });
+
+it.each([
+    { original: -1, retained: 3 },
+    { original: 3, retained: NaN },
+    { original: 3, retained: 2 },
+])('rejects inconsistent group accounting before dispatch (%j)', async tokens => {
+    const { turn } = fixture();
+    const execution = createHarnessExecution({ provider: { turn, structured: async () => { throw new Error('unused'); } },
+        context: { assemble: async messages => ({ messages, report: { decisions: [
+            { kind: 'messages', id: 'group', protected: true, score: 0, action: 'kept', tokens },
+        ], usage: { systemTokens: 0, messageTokens: 3, toolTokens: 0, schemaTokens: 0, reservedOutputTokens: 0, totalTokens: 3 } } }) } });
+    await expect(execution.model({ messages: [{ role: 'user', content: 'task' }] })).rejects.toThrow('group token accounting');
+    expect(turn).not.toHaveBeenCalled();
+});
+
+it('allows alternative strategies to omit group estimates without inventing zero cost', async () => {
+    const { turn } = fixture();
+    const execution = createHarnessExecution({ provider: { turn, structured: async () => { throw new Error('unused'); } },
+        context: { assemble: async messages => ({ messages, report: { decisions: [
+            { kind: 'messages', id: 'group', protected: true, score: 0, action: 'kept' },
+        ], usage: { systemTokens: 0, messageTokens: 3, toolTokens: 0, schemaTokens: 0, reservedOutputTokens: 0, totalTokens: 3 } } }) } });
+    const prepared = await execution.prepareModel({ messages: [{ role: 'user', content: 'task' }] });
+    expect(prepared.report!.decisions[0].tokens).toBeUndefined();
+    await execution.dispatchModel(prepared);
+    expect(turn).toHaveBeenCalledTimes(1);
+});
