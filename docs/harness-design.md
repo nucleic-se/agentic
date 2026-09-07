@@ -687,6 +687,32 @@ Maintenance decisions appear as `contextDecision`; source-selection metadata is
 nested under `contextMetadata` in the intent. All maintenance calls consume the
 same allowance as ordinary task work.
 
+Evidence selection can be composed with checkpoint maintenance through `suffix`.
+The lifecycle input still contains the original history, so a selector can choose
+an already-covered exchange and supply it as task-only context:
+
+```ts
+const maintenance = checkpointContextLifecycle({ maxTokens: 800 });
+const lifecycle: ContextLifecycle = {
+    prepare(input, execution) {
+        const evidence = selectEvidence(input.request.messages, input.state);
+        return maintenance.prepare({
+            ...input,
+            suffix: [...structuredClone(evidence), ...(input.suffix ?? [])],
+        }, execution);
+    },
+};
+```
+
+Here `selectEvidence` is a composition-supplied policy returning `Message[]`.
+It must preserve complete assistant/tool exchanges, avoid duplicate call IDs in
+the projected view, and handle provider continuation metadata explicitly. The
+supplement is budgeted with the task request; it is not automatically protected
+from selection. It does not advance checkpoint source coverage or become new
+canonical history. Maintenance still reads the original source range and uses
+its existing candidate admission and repair reducer. This composition changes
+evidence availability; it does not guarantee fewer retrievals or model calls.
+
 The checkpoint strategy owns source coverage, partial progress, rejected candidates
 and retry policy inside `contextState`. Hosts never interpret those fields. Gears
 progress notes remain host-owned and visible until updated by its tools; a context
