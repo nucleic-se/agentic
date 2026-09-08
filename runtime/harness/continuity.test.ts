@@ -31,7 +31,7 @@ it.each([false, true])('automatically maintains context without replacing source
     const { client, record } = await setup(request => {
         if (/^(Maintain a concise working checkpoint|Repair a rejected working checkpoint)/.test(request.system ?? '')) {
             const input = JSON.parse(request.messages[0].content);
-            expect(input.output.targetCharacters).toBe(drafts ? 4000 : 8000);
+            expect(input.output.targetTokens).toBe(drafts ? 32 : 64);
             drafts++;
             if (drafts === 2) {
                 expect(input.rejectedDraft).toBe('too_large');

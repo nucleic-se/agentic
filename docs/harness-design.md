@@ -743,6 +743,15 @@ schema validation and can render structured state with `JSON.stringify`. Schema
 tool calls are maintenance responses: they are never dispatched to the task tool
 runtime or inserted into the ordinary tool conversation.
 
+Checkpoint requests use the configured `maxTokens` as their model-visible
+`targetTokens`, including source chunks. Repair targets half that size while
+keeping the original output reservation. `checkpointRequest` also accepts
+`maxTokens` and defaults to 800. The earlier fixed character target and its
+`CHECKPOINT_TARGET_CHARACTERS` export have been removed. This is a requested size,
+not a guarantee that every provider enforces an output limit; complete candidates
+still undergo context admission without silent truncation. The reference context
+extension is version 11; existing sessions require their original composition.
+
 Selection, source cursors, accounting, candidate admission and the one-repair
 allowance remain shared. Generation and repair use the same format. Invalid
 structured responses retain their arguments for repair, while the complete original

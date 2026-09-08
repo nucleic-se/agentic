@@ -158,7 +158,10 @@ it('makes resumable progress through an oversized group without dropping or spli
                 tools: [{ name: 'read_tool_result', description: '', parameters: { type: 'object' as const } }] } : {}),
         });
         expect(selected).toBeDefined();
-        const chunk = JSON.parse(selected!.prepared.request.messages[0].content).sourceChunk;
+        const body = JSON.parse(selected!.prepared.request.messages[0].content);
+        expect(body.output).toEqual({ targetTokens: 100 });
+        expect(selected!.prepared.request.maxTokens).toBe(100);
+        const chunk = body.sourceChunk;
         expect(chunk.offset).toBe(recovered.length);
         expect(chunk.endOffset).toBeGreaterThan(chunk.offset);
         recovered += chunk.text;
@@ -308,8 +311,8 @@ it('can checkpoint before compression using the context-owned ceiling, preservin
 });
 
 it('accepts only complete checkpoint text independently of its context fit and persists only checkpoint fields', async () => {
-    const { checkpointFromResponse, CHECKPOINT_TARGET_CHARACTERS } = await import('./checkpoint.js');
-    const response = { message: { role: 'assistant' as const, content: 'x'.repeat(CHECKPOINT_TARGET_CHARACTERS) }, stopReason: 'end_turn' as const };
+    const { checkpointFromResponse } = await import('./checkpoint.js');
+    const response = { message: { role: 'assistant' as const, content: 'x'.repeat(8000) }, stopReason: 'end_turn' as const };
     const selection = { through: 3, prepared: { private: true }, partial: { end: 5, offset: 20 } };
     const accepted = checkpointFromResponse(selection, response);
     expect(accepted).toEqual({ ok: true, checkpoint: { through: 3, partial: selection.partial, text: response.message.content } });
@@ -320,7 +323,13 @@ it('accepts only complete checkpoint text independently of its context fit and p
     expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, content: response.message.content + 'x' } })).toMatchObject({ ok: true });
     expect(checkpointFromResponse(selection, { ...response, message: { ...response.message, toolCalls: [{ id: 'a', name: 'write', args: {} }] } })).toEqual({ ok: false, reason: 'tool_calls' });
     const request = checkpointRequest([{ role: 'assistant', content: 'evidence' }], 1);
-    expect(JSON.parse(request.messages[0].content).output.targetCharacters).toBe(CHECKPOINT_TARGET_CHARACTERS);
+    expect(request.maxTokens).toBe(800);
+    expect(JSON.parse(request.messages[0].content).output).toEqual({ targetTokens: 800 });
+    const smaller = checkpointRequest([{ role: 'assistant', content: 'evidence' }], 1, { maxTokens: 100 });
+    expect(smaller.maxTokens).toBe(100);
+    expect(JSON.parse(smaller.messages[0].content).output).toEqual({ targetTokens: 100 });
+    for (const maxTokens of [0, -1, 1.5, NaN, Infinity])
+        expect(() => checkpointRequest([{ role: 'assistant', content: 'evidence' }], 1, { maxTokens })).toThrow('output budget');
 });
 
 it('repairs the saved draft without changing its source coverage or truncating its input', async () => {
@@ -333,7 +342,8 @@ it('repairs the saved draft without changing its source coverage or truncating i
     const prepared = await prepareCheckpointRepair(execution, [], candidate, { maxTokens: 100 });
     const evidence = JSON.parse(prepared.prepared.request.messages[0].content);
     expect(evidence.draft).toBe(candidate.text);
-    expect(evidence.output).toEqual({ targetCharacters: 4000 });
+    expect(evidence.output).toEqual({ targetTokens: 50 });
+    expect(prepared.prepared.request.maxTokens).toBe(100);
     expect(prepared.through).toBe(12);
     expect(prepared.partial).toEqual(candidate.partial);
     expect(prepared.sourceRange).toEqual(candidate.sourceRange);
