@@ -63,6 +63,37 @@ the same database.
 
 ### Assemble your own agent
 
+For a read-only agent without a UI, use the reference preset directly:
+
+```ts
+import { randomUUID } from 'node:crypto';
+import { createDefaultAgent } from '@nucleic-se/agentic/harness';
+
+const client = await createDefaultAgent({
+  workspace: process.cwd(),
+  database: './sessions.sqlite',
+  model: 'gpt-5.6-sol',
+  reasoningEffort: 'medium',
+  readOnly: true,
+});
+try {
+  const session = await client.create();
+  await client.submit(session.id, 'Explain this project’s entry point.', {
+    commandId: randomUUID(),
+  });
+  const result = await client.wait(session.id);
+  if (result.status !== 'idle') throw new Error(result.error ?? result.status);
+  console.log(result.messages.findLast(message => message.role === 'assistant')?.content ?? '');
+} finally {
+  await client.close();
+}
+```
+
+`readOnly` excludes edits and shell execution from the toolset. Reasoning effort
+defaults to `low`; selecting another effort changes the composition identity,
+so use that same configuration when continuing its saved sessions. See the
+subscription and SQLite requirements above and below.
+
 For the subscription backend below, install `@earendil-works/pi-ai@0.85.1`
 and use Node >=22.19. The core remains independent of this optional backend.
 
