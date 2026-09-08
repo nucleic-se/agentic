@@ -720,3 +720,10 @@ describe('OpenAICompatibleProvider retry', () => {
         expect(retryCallback).toHaveBeenCalledWith(1, 1000, 429)
     })
 })
+
+it('keeps failed tool output distinguishable without modifying the source message', async () => {
+    const { toOpenAIMessages } = await import('./openai-compatible.js');
+    const source = { role: 'tool_result' as const, toolCallId: 'call', content: 'partial result', isError: true };
+    expect(toOpenAIMessages('', [source])).toEqual([{ role: 'tool', tool_call_id: 'call', content: '[Tool failed]\npartial result' }]);
+    expect(source.content).toBe('partial result');
+});

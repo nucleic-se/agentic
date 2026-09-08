@@ -1,6 +1,7 @@
+import type { Message } from '../../contracts/llm.js';
 import { open, opendir, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep, normalize } from 'node:path';
 
 export interface ProjectInstruction {
     /** Workspace-relative source file and the directory it governs. */
@@ -67,8 +68,22 @@ export async function readProjectInstructions(workspace: string, directories?: r
     return instructions;
 }
 
-export function projectInstructionText(instructions: readonly ProjectInstruction[]): string {
+/** Only paths the task has actually used select nested scope bodies. */
+export function projectInstructionTargets(messages: readonly Message[], workspace?: string): string[] {
+    return messages.flatMap(message => message.role === 'assistant' ? (message.toolCalls ?? []).flatMap(call =>
+        ['path', 'cwd'].flatMap(key => {
+            const value = call.args[key];
+            if (typeof value !== 'string') return [];
+            return [normalize(workspace && isAbsolute(value) ? relative(workspace, value) : value).split(sep).join('/')];
+        })) : []);
+}
+
+export function projectInstructionText(instructions: readonly ProjectInstruction[], targets: readonly string[] = []): string {
     if (!instructions.length) return '';
-    return '\n\nProject instructions apply within their stated directories; deeper scopes refine outer scopes.\n' +
-        instructions.map(instruction => `\nSource: ${instruction.path}\nScope: ${instruction.directory}\n${instruction.content}`).join('\n');
+    const selected = instructions.filter(instruction => instruction.directory === '.' || targets.some(target =>
+        target === instruction.directory || target.startsWith(instruction.directory + '/')));
+    const remaining = instructions.filter(instruction => !selected.includes(instruction));
+    return '\n\nProject instructions govern their directories; deeper scopes refine outer scopes. Read applicable AGENTS.md before editing.\n' +
+        selected.map(instruction => `\nSource: ${instruction.path}\nScope: ${instruction.directory}\n${instruction.content}`).join('\n') +
+        (remaining.length ? '\nOther instruction scopes (read with fs_read when working there):\n' + remaining.map(instruction => instruction.path).join('\n') : '');
 }

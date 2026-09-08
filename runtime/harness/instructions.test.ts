@@ -11,7 +11,7 @@ const roots: string[] = [];
 async function workspace() { const root = await mkdtemp(join(tmpdir(), 'agentic-instructions-')); roots.push(root); return root; }
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
-it('includes discovered instructions in the default context budget and composition identity', async () => {
+it('refreshes root instructions without changing the configured workspace identity', async () => {
     const root = await workspace();
     await writeFile(join(root, 'AGENTS.md'), 'Run node --test before reporting completion.');
     const extensions = await defaultAgentExtensions({ workspace: root });
@@ -21,7 +21,9 @@ it('includes discovered instructions in the default context budget and compositi
     expect(request.system).toContain('Run node --test before reporting completion.');
     expect(request.report!.usage.totalTokens).toBeGreaterThan(0);
     await writeFile(join(root, 'AGENTS.md'), 'Run npm test before reporting completion.');
-    expect(compositionFingerprint(await defaultAgentExtensions({ workspace: root }))).not.toBe(compositionFingerprint(extensions));
+    expect(compositionFingerprint(await defaultAgentExtensions({ workspace: root }))).toBe(compositionFingerprint(extensions));
+    expect((await context.assemble([], new AbortController().signal)).system).toContain('Run npm test');
+    expect(compositionFingerprint(await defaultAgentExtensions({ workspace: root, instructionDirectories: ['.'] }))).not.toBe(compositionFingerprint(extensions));
 });
 
 it('loads applicable scopes once and preserves exact text and source paths', async () => {
@@ -53,7 +55,13 @@ it('discovers nested scopes while excluding dependency, state and linked directo
     expect((await readProjectInstructions(root, ['node_modules/package'])).map(instruction => instruction.path)).toEqual(['AGENTS.md', 'node_modules/package/AGENTS.md']);
     const extensions = await defaultAgentExtensions({ workspace: root });
     const context = await extensions.find(extension => extension.roles?.context)!.roles!.context!();
-    expect((await context.assemble([], new AbortController().signal)).system).toContain('Scope: src/deep');
+    const initial = (await context.assemble([], new AbortController().signal)).system;
+    expect(initial).toContain('src/deep/AGENTS.md');
+    expect(initial).not.toContain('Scope: src/deep');
+    const touched = [{ role: 'assistant' as const, content: '', toolCalls: [{ id: 'read', name: 'fs_read', args: { path: 'src/deep/file.ts' } }] }];
+    expect((await context.assemble(touched, new AbortController().signal)).system).toContain('Scope: src/deep');
+    await writeFile(join(root, 'src/deep/AGENTS.md'), 'CURRENT_SCOPE');
+    expect((await context.assemble(touched, new AbortController().signal)).system).toContain('CURRENT_SCOPE');
 });
 
 it('rejects escaping scopes and sources, excessive instructions and cancellation', async () => {

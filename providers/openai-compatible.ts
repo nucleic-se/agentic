@@ -1,3 +1,4 @@
+import { presentToolResult } from '../runtime/ToolOutput.js';
 import { LLMProtocolError } from '../contracts/llm.js'
 import { sseData } from './sse.js'
 /**
@@ -204,10 +205,11 @@ export function toOpenAIMessages(system: string | undefined, messages: Message[]
             continue
         }
 
+        const presented = presentToolResult(msg);
         out.push({
             role:         'tool',
             tool_call_id: msg.toolCallId,
-            content:      msg.contentBlocks?.length ? msg.contentBlocks.filter(block => block.type === 'text').map(block => block.text).join('\n') : msg.content,
+            content:      presented.contentBlocks?.length ? presented.contentBlocks.filter(block => block.type === 'text').map(block => block.text).join('\n') : presented.content,
         })
         for (const block of msg.contentBlocks ?? []) if (block.type === 'image') {
             images.push({ type: 'text', text: `Image returned by tool ${msg.toolName ?? msg.toolCallId}:` },

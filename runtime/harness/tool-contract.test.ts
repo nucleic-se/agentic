@@ -20,7 +20,8 @@ it('advertises coding limits and byte/line modes from the validation schemas', a
             expect(runtime.validate('search_grep', { pattern: 'x', [key]: maximum + 1 }).ok).toBe(false);
         }
         const read = runtime.tools().find(t => t.name === 'fs_read')!.parameters;
-        expect(read.anyOf).toHaveLength(2);
+        expect(read.anyOf).toHaveLength(3);
+        expect(runtime.validate('fs_read', { path: 'source', encoding: 'base64', offset: 1 }).ok).toBe(false);
         expect(runtime.validate('fs_read', { path: 'x', offset: 0 }).ok).toBe(false);
         expect(runtime.validate('fs_read', { path: 'x', mode: 'bytes', offset: 0, limit: 16000 }).ok).toBe(true);
         expect(runtime.validate('fs_read', { path: 'x', mode: 'bytes', limit: 16001 }).ok).toBe(false);

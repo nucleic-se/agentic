@@ -15,12 +15,12 @@ export type { HarnessSnapshot } from './inspection.js';
 
 export { rejectedCheckpoint, prepareCheckpointRepair, type RejectedCheckpoint, checkpointFromResponse, type CheckpointRejection, checkpointView, checkpointBoundary, checkpointRequest, prepareCheckpoint, type WorkingCheckpoint, type CheckpointSourceRange } from './checkpoint.js';
 
-export { toToolResultMessage, readArchivedToolResult } from '../ToolOutput.js';
-export { readProjectInstructions, projectInstructionText, type ProjectInstruction } from './instructions.js';
+export { toToolResultMessage, readArchivedToolResult, readTextPage } from '../ToolOutput.js';
+export { readProjectInstructions, projectInstructionText, projectInstructionTargets, type ProjectInstruction } from './instructions.js';
 export { validateOperationResolution } from './resolution.js';
 export { memoryToolRuntime, sessionNoteSource, type NoteStore, type NoteSource, type NoteSourceQuery, type NoteSourceReader } from './memory.js';
 
-export { archiveToolRuntime, archivedToolResultReference } from './archive.js';
+export { archiveToolRuntime, archivedToolResultReference, archivedToolResultDefinition, validateArchivedToolResult } from './archive.js';
 
 export { checkpointContextLifecycle, referenceContextLifecycle } from './context-lifecycle.js';
 export { textCheckpointFormat, type CheckpointFormat, type CheckpointRequestOptions, type CheckpointEvidencePresentation } from './checkpoint.js';

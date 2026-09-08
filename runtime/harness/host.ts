@@ -299,7 +299,7 @@ class HarnessSessionClient implements SessionClient {
             if (!callId) throw new Error('Legacy operation lacks a tool call identity; start a new session');
             op.status = input.result.ok ? 'completed' : 'failed';
             op.resolution = input;
-            const message = toToolResultMessage({ id: callId, name: op.name }, { ...input.result, content: input.result.content.length > 16000 ? input.result.content.slice(0,16000) + '\n[truncated]' : input.result.content });
+            const message = toToolResultMessage({ id: callId, name: op.name }, { ...input.result, content: input.result.content });
             let index = record.messages.length - 1;
             while (index >= 0) { const item = record.messages[index]; if (item.role === 'tool_result' && item.toolCallId === callId) break; index--; }
             delete record.contextState;
@@ -459,7 +459,7 @@ class HarnessSessionClient implements SessionClient {
                                     }
                                     const execution = event.execution;
                                     const content = execution.result?.content ?? execution.error ?? `Tool call ${execution.status}`;
-                                    record.messages.push(toToolResultMessage({ id: execution.callId, name: execution.plan.name }, { ...execution.result, ok: execution.status === 'success', content: content.length > 16000 ? content.slice(0,16000) + '\n[truncated]' : content }));
+                                    record.messages.push(toToolResultMessage({ id: execution.callId, name: execution.plan.name }, { ...execution.result, ok: execution.status === 'success', content: content }));
                                 }, event.execution);
                                 if (operationId && event.execution.dispatched !== false && (['unknown', 'timeout', 'cancelled'].includes(event.execution.status))) {
                                     throw new Error('Tool outcome is unknown after timeout or cancellation; reconcile before continuing');

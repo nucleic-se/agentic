@@ -1,3 +1,4 @@
+import { presentToolResult } from '../runtime/ToolOutput.js';
 import { createHash } from 'node:crypto';
 import { zstdDecompressSync } from 'node:zlib';
 import { stream } from '@earendil-works/pi-ai/api/openai-codex-responses';
@@ -101,10 +102,13 @@ export class SubscriptionProvider implements ILLMProvider {
             ? (message.toolCalls ?? []).map(call => [call.id, call.name] as const) : []));
         return { systemPrompt: request.system, tools: request.tools as Context['tools'], messages: request.messages.map(message => {
             if (message.role === 'user') return { role: 'user', content: message.content, timestamp: 0 };
-            if (message.role === 'tool_result') return { role: 'toolResult', toolCallId: message.toolCallId,
+            if (message.role === 'tool_result') {
+                message = presentToolResult(message);
+                return { role: 'toolResult', toolCallId: message.toolCallId,
                 toolName: message.toolName ?? names.get(message.toolCallId) ?? '',
                 content: message.contentBlocks?.length ? message.contentBlocks : [{ type: 'text', text: message.content }],
                 isError: message.isError ?? false, timestamp: 0 };
+            }
             const saved = readContinuation(message, format, this.#identity);
             const content: NativeMessage['content'] = saved === undefined
                 ? [...(message.content ? [{ type: 'text' as const, text: message.content }] : []),

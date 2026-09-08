@@ -46,13 +46,16 @@ describe('filesystem boundaries and patch atomicity', () => {
         expect(fs.readFileSync(path.join(outside, 'file'), 'utf8')).toBe('original');
         expect(fs.existsSync(path.join(outside, 'new'))).toBe(false);
     });
-    it('blocks protected directory deletion, moves, and root removal', async () => {
-        const { root, runtime } = fixture(); fs.mkdirSync(path.join(root, 'agents/a'), { recursive: true }); fs.writeFileSync(path.join(root, 'agents/a/state.md'), 'state');
-        for (const target of ['.', 'agents', 'agents/a', 'agents/a/state.md']) expect((await runtime.call('fs_delete', { path: target })).ok).toBe(false);
-        expect((await runtime.call('fs_move', { from: 'agents/a', to: 'other' })).ok).toBe(false);
-        fs.mkdirSync(path.join(root, 'other'));
-        expect((await runtime.call('fs_move', { from: 'other', to: 'agents/b' })).ok).toBe(false);
+    it('protects the workspace root while leaving application path rules to policy', async () => {
+        const { root, runtime } = fixture();
+        fs.mkdirSync(path.join(root, 'agents/a'), { recursive: true });
+        expect((await runtime.call('fs_write', { path: 'agents/a/state.md', content: 'state' })).ok).toBe(true);
+        expect((await runtime.call('fs_delete', { path: '.' })).ok).toBe(false);
+        expect((await runtime.call('fs_move', { from: '.', to: 'moved' })).ok).toBe(false);
+        expect((await runtime.call('fs_move', { from: 'agents/a', to: '.' })).ok).toBe(false);
         expect(fs.readFileSync(path.join(root, 'agents/a/state.md'), 'utf8')).toBe('state');
+        expect((await runtime.call('fs_move', { from: 'agents/a', to: 'other' })).ok).toBe(true);
+        expect((await runtime.call('fs_delete', { path: 'other' })).ok).toBe(true);
     });
     it('treats replacement dollar sequences literally', async () => {
         const { root, runtime } = fixture(); fs.writeFileSync(path.join(root, 'file'), 'abc');

@@ -1,3 +1,5 @@
+import { fsReadSchema, fsWriteSchema } from './fs-schema.js';
+import { z } from 'zod';
 /**
  * Filesystem tools — read, write, list, delete, move.
  *
@@ -47,15 +49,6 @@ function withinRoot(root: string, abs: string): boolean {
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false }
     }
     return true
-}
-
-function normalizeRel(root: string, abs: string): string {
-    return path.relative(path.resolve(root), abs).replace(/\\/g, '/')
-}
-
-function isProtectedSystemWrite(root: string, abs: string): boolean {
-    const rel = normalizeRel(root, abs)
-    return rel === '' || rel === 'agents' || /^agents\/[^/]+(?:\/state\.md)?$/.test(rel)
 }
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
@@ -152,6 +145,9 @@ const DEFINITIONS: ToolDefinition[] = [
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 async function handleRead(root: string, args: Record<string, unknown>, textPageBytes: number, options?: ToolCallOptions): Promise<ToolCallResult> {
+    const checked = fsReadSchema.safeParse(args)
+    if (!checked.success) return fail(checked.error.message)
+    args = checked.data
     const filePath = String(args['path'] ?? '')
     if (!filePath) return fail('path is required')
     const abs = resolve(root, filePath)
@@ -245,6 +241,9 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
 }
 
 function handleWrite(root: string, args: Record<string, unknown>): ToolCallResult {
+    const checked = fsWriteSchema.safeParse(args)
+    if (!checked.success) return fail(checked.error.message)
+    args = checked.data
     const filePath = String(args['path'] ?? '')
     const content  = String(args['content'] ?? '')
     const append   = Boolean(args['append'] ?? false)
@@ -252,9 +251,6 @@ function handleWrite(root: string, args: Record<string, unknown>): ToolCallResul
 
     const abs = resolve(root, filePath)
     if (!withinRoot(root, abs)) return fail(`Path escapes working root: ${filePath}`)
-    if (isProtectedSystemWrite(root, abs)) {
-        return fail(`Direct writes to ${filePath} are protected. Use skill_run(update-agent-state) instead.`)
-    }
     if (Buffer.byteLength(content, 'utf8') > MAX_WRITE_BYTES) {
         return fail(`Content too large (max ${MAX_WRITE_BYTES} bytes)`)
     }
@@ -304,10 +300,8 @@ function handleDelete(root: string, args: Record<string, unknown>): ToolCallResu
     if (!filePath) return fail('path is required')
 
     const abs = resolve(root, filePath)
+    if (abs === path.resolve(root)) return fail('Workspace root cannot be deleted')
     if (!withinRoot(root, abs)) return fail(`Path escapes working root: ${filePath}`)
-    if (isProtectedSystemWrite(root, abs)) {
-        return fail(`Direct deletion of ${filePath} is protected.`)
-    }
     if (!fs.existsSync(abs)) return fail(`File not found: ${filePath}`)
 
     try {
@@ -325,11 +319,10 @@ function handleMove(root: string, args: Record<string, unknown>): ToolCallResult
 
     const absFrom = resolve(root, fromPath)
     const absTo   = resolve(root, toPath)
+    if (absFrom === path.resolve(root) || absTo === path.resolve(root)) return fail('Workspace root cannot be moved or replaced')
     if (!withinRoot(root, absFrom)) return fail(`Source escapes working root: ${fromPath}`)
     if (!withinRoot(root, absTo))   return fail(`Destination escapes working root: ${toPath}`)
-    if (isProtectedSystemWrite(root, absFrom) || isProtectedSystemWrite(root, absTo)) {
-        return fail('Direct moves involving agents/*/state.md are protected. Use skill_run(update-agent-state) instead.')
-    }
+
     if (!fs.existsSync(absFrom))    return fail(`Source not found: ${fromPath}`)
 
     try {
@@ -347,9 +340,6 @@ function handlePatch(root: string, args: Record<string, unknown>): ToolCallResul
 
     const abs = resolve(root, filePath)
     if (!withinRoot(root, abs)) return fail(`Path escapes working root: ${filePath}`)
-    if (isProtectedSystemWrite(root, abs)) {
-        return fail(`Direct writes to ${filePath} are protected.`)
-    }
     if (!fs.existsSync(abs)) return fail(`File not found: ${filePath}`)
     if (fs.statSync(abs).isDirectory()) return fail(`Path is a directory: ${filePath}`)
 
@@ -404,7 +394,11 @@ export class FsToolRuntime implements IToolRuntimeWithMeta {
 
     tools(): ToolDefinition[] {
         const definitions = structuredClone(DEFINITIONS)
-        definitions[0].description = `Read a regular file. UTF-8 pages contain complete numbered lines, up to ${this.textPageBytes} bytes including the continuation marker and at most 200 lines by default. Follow nextOffset for the next page; offset/limit select lines. A single line larger than the page is rejected. totalLines is available only after EOF. Base64 reads retain a 256 KiB file limit.`
+        definitions[0].description = `Read a regular file. UTF-8 pages contain complete numbered lines, up to ${this.textPageBytes} bytes including the continuation marker and at most 200 lines by default. Follow nextOffset for the next page; offset/limit select lines. A single line larger than the page is rejected. totalLines is available only after EOF. Base64 reads return the complete encoding, at most 256 KiB of encoded output; ranges require UTF-8.`
+        for (const tool of definitions) {
+            const schema = tool.name === 'fs_read' ? fsReadSchema : tool.name === 'fs_write' ? fsWriteSchema : undefined
+            if (schema) tool.parameters = { ...z.toJSONSchema(schema), type: 'object' } as ToolDefinition['parameters']
+        }
         return definitions
     }
 

@@ -119,8 +119,8 @@
     "node": ">=20.18.1"
   },
   "peerDependencies": {
-    "zod": "^4.0.0",
-    "@earendil-works/pi-ai": "0.85.1"
+    "@earendil-works/pi-ai": "0.85.1",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.85.1",
@@ -130,7 +130,8 @@
     "zod": "^4.3.6"
   },
   "dependencies": {
-    "@openai-oauth/local": "2.0.0"
+    "@openai-oauth/local": "2.0.0",
+    "ignore": "^7.0.9"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {

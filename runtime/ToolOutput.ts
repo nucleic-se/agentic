@@ -1,6 +1,14 @@
 import type { Message, ToolResultMessage } from '../contracts/llm.js';
 import type { ToolCallResult } from '../contracts/tool-runtime.js';
 
+/** Exact paging of host-owned text; offsets count UTF-16 code units. */
+export function readTextPage(text: string, offset = 0, limit = 8000) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > text.length) throw new RangeError('Offset exceeds saved result or is invalid');
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('Page limit must be a positive safe integer');
+    const content = text.slice(offset, offset + limit), nextOffset = offset + content.length;
+    return { totalCharacters: text.length, offset, nextOffset, eof: nextOffset === text.length, content };
+}
+
 /** Read saved text with both source identities. The host supplies the authorized archive. */
 export function readArchivedToolResult(history: readonly Message[], reference: { messageIndex?: number; callId?: string; offset?: number }) {
     if ((reference.messageIndex === undefined) === (reference.callId === undefined)) throw new Error('Provide exactly one of messageIndex or callId');
@@ -14,9 +22,7 @@ export function readArchivedToolResult(history: readonly Message[], reference: {
     const messageIndex = matches[0], source = history[messageIndex];
     if (!source || source.role !== 'tool_result') throw new Error('Saved tool result does not exist in this task');
     if (offset > source.content.length) throw new RangeError('Offset exceeds saved result');
-    const content = source.content.slice(offset, offset + 8000), nextOffset = offset + content.length;
-    return { messageIndex, callId: source.toolCallId, toolName: source.toolName, totalCharacters: source.content.length,
-        offset, nextOffset, eof: nextOffset === source.content.length, content };
+    return { messageIndex, callId: source.toolCallId, toolName: source.toolName, isError: source.isError ?? false, ...readTextPage(source.content, offset) };
 }
 
 /** Bounded presentation of retained text. Storage and retrieval belong to the host. */
@@ -40,4 +46,12 @@ export function toToolResultMessage(call: { id: string; name?: string }, result:
     return { role: 'tool_result', toolCallId: call.id, ...(call.name === undefined ? {} : { toolName: call.name }),
         content: result.content, isError: !result.ok,
         ...(result.contentBlocks ? { contentBlocks: structuredClone(result.contentBlocks) } : {}) };
+}
+
+/** Preserve failure status on protocols without a native tool-error field. */
+export function presentToolResult(message: ToolResultMessage): ToolResultMessage {
+    if (!message.isError) return message;
+    const marker = '[Tool failed]\n';
+    return { ...message, content: marker + message.content,
+        ...(message.contentBlocks?.length ? { contentBlocks: [{ type: 'text' as const, text: marker }, ...message.contentBlocks] } : {}) };
 }

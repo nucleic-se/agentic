@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { projectToolOutput } from './ToolOutput.js';
+import { projectToolOutput, presentToolResult } from './ToolOutput.js';
 export { projectToolOutput } from './ToolOutput.js';
 import type { Message, ToolDefinition, ToolResultMessage } from '../contracts/llm.js';
 import type { ITokenCounter } from '../contracts/ITokenCounter.js';
@@ -85,7 +85,8 @@ export function estimateContextTokens(
     const imageCost = integer(options.imageTokenEstimate ?? 4096, 'imageTokenEstimate', 1);
     const systemTokens = input.system ? count(counter.countTokensForMessages([{ role: 'system', content: input.system }])) : 0;
     let messageTokens = 0;
-    for (const message of input.messages) {
+    for (const source of input.messages) {
+        const message = source.role === 'tool_result' ? presentToolResult(source) : source;
         const rich = message.role === 'tool_result' && message.contentBlocks?.length ? message.contentBlocks : undefined;
         messageTokens += count(counter.countTokensForMessages([{ role: message.role,
             content: rich ? rich.filter(block => block.type === 'text').map(block => ({ ...block })) : message.content }]));

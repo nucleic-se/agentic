@@ -13,6 +13,7 @@ const DEFINITIONS: ToolDefinition[] = [
             type: 'object',
             required: ['pattern'],
             properties: {
+                include_ignored: { type: 'boolean', description: 'Include ignored/dependency/generated files. Default: false. Git metadata is always excluded.' },
                 pattern:        { type: 'string', description: 'Regex or literal string to search for.' },
                 path:           { type: 'string', description: 'File or directory to search (relative to root). Default: root.' },
                 include:        { type: 'string', description: 'Glob pattern to filter files (e.g. "*.ts", "**/*.md"). Default: all files.' },
@@ -31,6 +32,7 @@ const DEFINITIONS: ToolDefinition[] = [
             type: 'object',
             required: ['pattern'],
             properties: {
+                include_ignored: { type: 'boolean', description: 'Include ignored/dependency/generated files. Default: false. Git metadata is always excluded.' },
                 pattern: { type: 'string', description: 'Glob pattern (e.g. "**/*.md", "src/*.ts").' },
                 path:    { type: 'string', description: 'File or directory to search. Default: root.' },
             },
@@ -50,7 +52,7 @@ export class SearchToolRuntime implements IToolRuntime {
 
     tools(): ToolDefinition[] {
         return structuredClone(DEFINITIONS).map(tool => ({ ...tool,
-            description: `${tool.description} Output is bounded to ${this.maxOutputBytes} bytes. Truncated results require a narrower pattern/path. Oversized context is omitted with a notice; use fs_read for source lines. Files over 1 MiB are skipped.`,
+            description: `${tool.description} Respects .gitignore and excludes dependency/build/cache directories and common credential files by default; include_ignored overrides this. Hidden configuration is searchable; .git is always excluded. Output is bounded to ${this.maxOutputBytes} bytes. Truncated results require a narrower pattern/path. Oversized context is omitted with a notice; use fs_read for source lines. Files over 1 MiB are skipped.`,
         }))
     }
 

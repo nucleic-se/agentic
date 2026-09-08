@@ -554,7 +554,7 @@ The coding pack generates advertised argument schemas from the same Zod schemas
 used for validation, including search limits and mode-specific read constraints.
 Search accepts an omitted or empty path for the workspace root; directory listing
 also accepts an empty root path. Coding extension
-version 13 changes the persisted composition identity; active sessions require
+version 14 changes the persisted composition identity; active sessions require
 their original composition, or a fresh session under the new revision.
 
 `fs_read` supports numbered line pages by default and exact UTF-8 byte pages with
@@ -574,11 +574,14 @@ directory scopes; `projectInstructionText` renders that snapshot for the context
 The combined source limit is 64 KiB and overflow fails explicitly. Missing files
 are allowed; paths and resolved sources must stay within the workspace.
 
-Instructions participate in context budgeting and composition identity. Changes
-take effect on the next composition; active sessions retain their original
-snapshot. All discovered scopes are supplied with directory labels; the loader
-does not rescan or inject new instructions on each tool call. For large instruction
-catalogs, select scopes explicitly. Filesystem checks are confinement checks, not
+The default context reloads instructions for each model request. Root instructions
+are always supplied; nested bodies are selected by explicit instruction directories
+and file paths used in the active conversation. Other scopes appear as a path
+catalog, so the model can read applicable instructions before editing. File content
+changes take effect on the next request without changing composition identity;
+workspace and scope configuration remain part of that identity. Exact rendered
+instructions are captured in the request journal. Custom hosts can use the loader
+and renderer independently and choose their own refresh policy. Filesystem checks are confinement checks, not
 an OS sandbox. The reference prompt defers authorization to the host policy;
 changing a policy extension does not require rewriting approval instructions.
 
@@ -854,3 +857,26 @@ result. Source readers reject unresolved operations and prefer the verified resu
 once resolution is committed. Exact source retrieval uses the operation record,
 so long results survive transcript shortening, replacement and store reopening.
 The original uncertain execution remains available for inspection.
+
+
+### Model input fidelity
+
+The host stores complete tool-result text. Bounded context presentation never edits
+that transcript: `read_tool_result` pages the original text after reopening, with
+error status and explicit pagination. Provider adapters preserve failed-tool status;
+text-only representations prefix failed results with `[Tool failed]`. Context token
+estimation includes this marker without changing saved evidence.
+
+Coding read schemas distinguish UTF-8 ranges from complete base64 reads. Writes
+validate the documented UTF-8 byte ceiling, including multibyte text. The filesystem
+runtime enforces workspace confinement and root protection; application-specific
+path policies belong in a composition's policy role.
+
+Search respects hierarchical workspace `.gitignore` files and excludes dependency,
+build, cache and common credential files by default. Hidden project configuration
+is searchable. `include_ignored: true` explicitly includes ignored files; `.git`
+remains excluded. These defaults control relevance, not access authorization.
+
+This revision changes store, coding, provider and context extension identities.
+Existing active sessions require their original composition; use fresh sessions
+with the updated default composition.

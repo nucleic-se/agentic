@@ -135,3 +135,20 @@ it('passes cancellation to the dependency HTTP request', async () => {
         }) });
     await expect(provider.turn({ messages: [] }, { signal: controller.signal })).rejects.toThrow();
 });
+
+it('preserves failure status in the decoded request without changing receipt text or schemas', async () => {
+    const requests: unknown[] = [];
+    const provider = new SubscriptionProvider({ model: 'fixture', credentials: async () => token,
+        fetch: async () => response(), onRequest: request => { requests.push(request.body); } });
+    const tool = { name: 'read', description: 'Read exact evidence', parameters: { type: 'object' as const, properties: { limit: { type: 'integer' as const, maximum: 100 } } } };
+    const result = { role: 'tool_result' as const, toolCallId: 'call', toolName: 'read', content: 'same evidence' };
+    for (const isError of [false, true]) await provider.turn({ system: 'root instructions', tools: [tool], messages: [
+        { role: 'user', content: 'human correction' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'call', name: 'read', args: {} }] }, { ...result, isError },
+    ] });
+    expect(JSON.stringify(requests[0])).not.toContain('[Tool failed]');
+    expect(JSON.stringify(requests[1])).toContain('[Tool failed]');
+    expect(JSON.stringify(requests[1])).toContain('same evidence');
+    expect(requests[1]).toMatchObject({ instructions: 'root instructions', tools: [expect.objectContaining(tool)] });
+    expect(result.content).toBe('same evidence');
+});

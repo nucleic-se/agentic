@@ -1,3 +1,4 @@
+import ignore, { type Ignore } from 'ignore'
 import { parentPort, workerData } from 'node:worker_threads'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -56,25 +57,49 @@ function matchesGlob(filename: string, pattern: string): boolean {
     return new RegExp(`^${regex}$`).test(filename)
 }
 
-function* walkFiles(dir: string, root: string, include?: string): Generator<string> {
-    // Explicit file paths are as useful as directory roots for focused inspection.
-    if (fs.statSync(dir).isFile()) {
+interface SearchScope { base: string; rules: Ignore }
+function scope(base: string, defaults = false): SearchScope {
+    const rules = ignore().add(defaults ? ['node_modules/', 'dist/', 'build/', 'coverage/', '.cache/', '.data/', '.env', '.env.*', '.npmrc', '.pypirc', '.ssh/', '.aws/'] : [])
+    const file = path.join(base, '.gitignore')
+    try { if (fs.lstatSync(file).isFile()) rules.add(fs.readFileSync(file, 'utf8')) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    return { base, rules }
+}
+function searchScopes(root: string, target: string): SearchScope[] {
+    const scopes = [scope(root, true)]
+    const directory = fs.statSync(target).isDirectory() ? target : path.dirname(target)
+    let current = root
+    for (const part of path.relative(root, directory).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part); scopes.push(scope(current))
+    }
+    return scopes
+}
+function excluded(abs: string, directory: boolean, scopes: SearchScope[]): boolean {
+    let ignored = false
+    for (const scope of scopes) {
+        const rel = path.relative(scope.base, abs).split(path.sep).join('/')
+        if (!rel || rel.startsWith('../')) continue
+        const match = scope.rules.test(rel + (directory ? '/' : ''))
+        if (match.ignored) ignored = true
+        else if (match.unignored) ignored = false
+    }
+    return ignored
+}
+function* walkFiles(dir: string, root: string, include?: string, includeIgnored = false, scopes = includeIgnored ? [] : searchScopes(root, dir)): Generator<string> {
+    const directory = fs.statSync(dir).isDirectory()
+    if (path.relative(root, dir).split(path.sep).includes('.git') || (!includeIgnored && excluded(dir, directory, scopes))) return
+    if (!directory) {
         if (!include || matchesGlob(path.relative(root, dir), include) || matchesGlob(path.basename(dir), include)) yield dir
         return
     }
-    let entries: fs.Dirent[]
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
-
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
     for (const entry of entries) {
-        if (entry.name.startsWith('.')) continue
+        if (entry.name === '.git') continue
         const abs = path.join(dir, entry.name)
-        if (entry.isDirectory()) {
-            yield* walkFiles(abs, root, include)
-        } else if (entry.isFile()) {
-            if (include) {
-                const rel = path.relative(root, abs)
-                if (!matchesGlob(rel, include) && !matchesGlob(entry.name, include)) continue
-            }
+        if (!includeIgnored && excluded(abs, entry.isDirectory(), scopes)) continue
+        if (entry.isDirectory()) yield* walkFiles(abs, root, include, includeIgnored, includeIgnored ? [] : [...scopes, scope(abs)])
+        else if (entry.isFile()) {
+            if (include && !matchesGlob(path.relative(root, abs), include) && !matchesGlob(entry.name, include)) continue
             yield abs
         }
     }
@@ -96,8 +121,8 @@ function handleGrep(root: string, args: Record<string, unknown>, maxOutputBytes:
     const result = new SearchOutput(maxOutputBytes)
 
     const searchRoot = subdir ? path.resolve(root, subdir) : root
-    if (!withinRoot(root, searchRoot)) return fail(`Path escapes working root: ${subdir}`)
     if (!fs.existsSync(searchRoot)) return fail(`Path not found: ${subdir || '.'}`)
+    if (!withinRoot(root, searchRoot)) return fail(`Path escapes working root: ${subdir}`)
 
     let regex: RegExp
     try {
@@ -111,7 +136,7 @@ function handleGrep(root: string, args: Record<string, unknown>, maxOutputBytes:
     if (output === 'files_only' || output === 'count') {
         const fileCounts = new Map<string, number>()
         let truncated = false
-        for (const abs of walkFiles(searchRoot, root, include)) {
+        for (const abs of walkFiles(searchRoot, root, include, args.include_ignored === true)) {
             let stat: fs.Stats
             try { stat = fs.statSync(abs) } catch { continue }
             if (stat.size > MAX_FILE_BYTES) continue
@@ -150,7 +175,7 @@ function handleGrep(root: string, args: Record<string, unknown>, maxOutputBytes:
     let matchCount = 0
     let contextOmitted = false
 
-    for (const abs of walkFiles(searchRoot, root, include)) {
+    for (const abs of walkFiles(searchRoot, root, include, args.include_ignored === true)) {
         if (truncated) break
         let stat: fs.Stats
         try { stat = fs.statSync(abs) } catch { continue }
@@ -222,13 +247,13 @@ function handleFind(root: string, args: Record<string, unknown>, maxOutputBytes:
 
     const subdir     = String(args['path'] ?? '')
     const searchRoot = subdir ? path.resolve(root, subdir) : root
-    if (!withinRoot(root, searchRoot)) return fail(`Path escapes working root: ${subdir}`)
     if (!fs.existsSync(searchRoot)) return fail(`Path not found: ${subdir || '.'}`)
+    if (!withinRoot(root, searchRoot)) return fail(`Path escapes working root: ${subdir}`)
 
     const results = new SearchOutput(maxOutputBytes)
     let truncated = false
 
-    for (const abs of walkFiles(searchRoot, root)) {
+    for (const abs of walkFiles(searchRoot, root, undefined, args.include_ignored === true)) {
         const rel = path.relative(root, abs)
         if (matchesGlob(rel, pattern) || matchesGlob(path.basename(abs), pattern)) {
             if (!results.add(rel)) {

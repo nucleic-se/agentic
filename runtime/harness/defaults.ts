@@ -1,3 +1,4 @@
+import { fsReadSchema, fsWriteSchema, workspaceFilePath } from '../../tools/fs-schema.js';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -6,7 +7,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
-import type { ToolDefinition } from '../../contracts/llm.js';
+import type { Message, ToolDefinition } from '../../contracts/llm.js';
 import type { IToolPolicy } from '../../contracts/IToolPolicy.js';
 import type { IValidatedToolRuntime, ToolCallOptions, ToolCallResult } from '../../contracts/tool-runtime.js';
 import { FsToolRuntime } from '../../tools/fs.js';
@@ -67,33 +68,28 @@ export function fullHistoryContext(system = ''): ContextStrategy {
     return { async assemble(messages, signal, options) { signal.throwIfAborted(); return { system: options?.system ?? system, messages: structuredClone(messages) }; } };
 }
 
-export function budgetedContext(system: string, tokenBudget: number, policy: ContextCompositionOptions = {}): ContextStrategy {
+export function budgetedContext(system: string | ((messages: readonly Message[], signal: AbortSignal) => Promise<string>), tokenBudget: number, policy: ContextCompositionOptions = {}): ContextStrategy {
     if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1) throw new RangeError('tokenBudget must be a positive safe integer');
     return { async assemble(messages, signal, options) {
         signal.throwIfAborted();
-        const result = await composeAgentContext({ messages, system, tokenBudget, signal, ...options }, { protectUserMessages: 'all', ...policy });
+        const currentSystem = options?.system ?? (typeof system === 'function' ? await system(messages, signal) : system);
+        const result = await composeAgentContext({ messages, system: currentSystem, tokenBudget, signal, ...options }, { protectUserMessages: 'all', ...policy });
         signal.throwIfAborted();
         return { system: result.system, messages: result.messages, report: { tokenBudget: result.tokenBudget, usage: result.usage, decisions: result.decisions, systemSections: result.systemSections } };
     } };
 }
 
-const filePath = z.string().min(1).describe('Path relative to the workspace, or an absolute path inside it.');
+const filePath = workspaceFilePath;
+const includeIgnored = z.boolean().optional().describe('Include ignored, dependency and generated files. Default: false; Git metadata stays excluded.');
 const searchPath = z.string().describe('Path inside the workspace. An empty string means the workspace root.');
 const schemas: Record<string, z.ZodType<Record<string, unknown>>> = {
     read_output: z.object({ id: z.string().uuid(), offset: z.number().int().nonnegative().optional() }).strict(),
-    fs_read: z.union([
-        z.object({ path: filePath, encoding: z.enum(['utf8', 'base64']).optional(), mode: z.literal('lines').optional(),
-            offset: z.number().int().min(1).optional().describe('First line, numbered from 1. Default: 1.'),
-            limit: z.number().int().positive().optional().describe('Maximum lines. Default: 200; byte ceiling still applies.') }).strict(),
-        z.object({ path: filePath, encoding: z.literal('utf8').optional(), mode: z.literal('bytes'),
-            offset: z.number().int().nonnegative().optional().describe('Byte offset, starting at 0. Default: 0.'),
-            limit: z.number().int().min(1).max(16000).optional().describe('Maximum bytes. Default: 16000.') }).strict(),
-    ]),
-    fs_write: z.object({ path: filePath, content: z.string().max(262144), append: z.boolean().optional() }).strict(),
+    fs_read: fsReadSchema,
+    fs_write: fsWriteSchema,
     fs_list: z.object({ path: searchPath, recursive: z.boolean().optional() }).strict(),
     fs_patch: z.object({ path: filePath, patches: z.array(z.object({ search: z.string().min(1), replace: z.string() }).strict()).min(1).max(100) }).strict(),
-    search_grep: z.object({ pattern: z.string().min(1).max(4096).describe('Regex by default; set literal: true to search for exact text.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.'), include: z.string().optional(), case_sensitive: z.boolean().optional(), literal: z.boolean().optional().describe('Treat pattern as literal text instead of regex. Default: false.'), context_lines: z.number().int().min(0).max(10).optional(), max_results: z.number().int().min(1).max(100).optional(), output: z.enum(['content', 'files_only', 'count']).optional() }).strict(),
-    search_find: z.object({ pattern: z.string().min(1).describe('Glob pattern, for example **/*.ts.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.') }).strict(),
+    search_grep: z.object({ include_ignored: includeIgnored, pattern: z.string().min(1).max(4096).describe('Regex by default; set literal: true to search for exact text.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.'), include: z.string().optional(), case_sensitive: z.boolean().optional(), literal: z.boolean().optional().describe('Treat pattern as literal text instead of regex. Default: false.'), context_lines: z.number().int().min(0).max(10).optional(), max_results: z.number().int().min(1).max(100).optional(), output: z.enum(['content', 'files_only', 'count']).optional() }).strict(),
+    search_find: z.object({ include_ignored: includeIgnored, pattern: z.string().min(1).describe('Glob pattern, for example **/*.ts.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.') }).strict(),
     shell_run: z.object({ command: z.string().min(1), cwd: filePath.optional(), timeout_ms: z.number().int().min(1).max(120000).optional(), env: z.record(z.string(), z.string()).optional() }).strict(),
 };
 
