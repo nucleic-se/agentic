@@ -6,6 +6,7 @@ import { lstatSync, realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
+import type { ToolDefinition } from '../../contracts/llm.js';
 import type { IToolPolicy } from '../../contracts/IToolPolicy.js';
 import type { IValidatedToolRuntime, ToolCallOptions, ToolCallResult } from '../../contracts/tool-runtime.js';
 import { FsToolRuntime } from '../../tools/fs.js';
@@ -76,16 +77,23 @@ export function budgetedContext(system: string, tokenBudget: number, policy: Con
     } };
 }
 
-const filePath = z.string().min(1);
+const filePath = z.string().min(1).describe('Path relative to the workspace, or an absolute path inside it.');
+const searchPath = z.string().describe('Path inside the workspace. An empty string means the workspace root.');
 const schemas: Record<string, z.ZodType<Record<string, unknown>>> = {
     read_output: z.object({ id: z.string().uuid(), offset: z.number().int().nonnegative().optional() }).strict(),
-    fs_read: z.object({ path: filePath, encoding: z.enum(['utf8', 'base64']).optional(), mode: z.enum(['lines', 'bytes']).optional(), offset: z.number().int().nonnegative().optional(), limit: z.number().int().positive().optional() }).strict()
-        .refine(args => args.mode === 'bytes' ? (args.encoding ?? 'utf8') === 'utf8' && (args.limit ?? 16000) <= 16000 : (args.offset ?? 1) >= 1, 'Invalid read mode, offset or limit'),
+    fs_read: z.union([
+        z.object({ path: filePath, encoding: z.enum(['utf8', 'base64']).optional(), mode: z.literal('lines').optional(),
+            offset: z.number().int().min(1).optional().describe('First line, numbered from 1. Default: 1.'),
+            limit: z.number().int().positive().optional().describe('Maximum lines. Default: 200; byte ceiling still applies.') }).strict(),
+        z.object({ path: filePath, encoding: z.literal('utf8').optional(), mode: z.literal('bytes'),
+            offset: z.number().int().nonnegative().optional().describe('Byte offset, starting at 0. Default: 0.'),
+            limit: z.number().int().min(1).max(16000).optional().describe('Maximum bytes. Default: 16000.') }).strict(),
+    ]),
     fs_write: z.object({ path: filePath, content: z.string().max(262144), append: z.boolean().optional() }).strict(),
-    fs_list: z.object({ path: filePath, recursive: z.boolean().optional() }).strict(),
+    fs_list: z.object({ path: searchPath, recursive: z.boolean().optional() }).strict(),
     fs_patch: z.object({ path: filePath, patches: z.array(z.object({ search: z.string().min(1), replace: z.string() }).strict()).min(1).max(100) }).strict(),
-    search_grep: z.object({ pattern: z.string().min(1).max(4096), path: filePath.optional(), include: z.string().optional(), case_sensitive: z.boolean().optional(), literal: z.boolean().optional(), context_lines: z.number().int().min(0).max(10).optional(), max_results: z.number().int().min(1).max(100).optional(), output: z.enum(['content', 'files_only', 'count']).optional() }).strict(),
-    search_find: z.object({ pattern: z.string().min(1), path: filePath.optional() }).strict(),
+    search_grep: z.object({ pattern: z.string().min(1).max(4096).describe('Regex by default; set literal: true to search for exact text.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.'), include: z.string().optional(), case_sensitive: z.boolean().optional(), literal: z.boolean().optional().describe('Treat pattern as literal text instead of regex. Default: false.'), context_lines: z.number().int().min(0).max(10).optional(), max_results: z.number().int().min(1).max(100).optional(), output: z.enum(['content', 'files_only', 'count']).optional() }).strict(),
+    search_find: z.object({ pattern: z.string().min(1).describe('Glob pattern, for example **/*.ts.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.') }).strict(),
     shell_run: z.object({ command: z.string().min(1), cwd: filePath.optional(), timeout_ms: z.number().int().min(1).max(120000).optional(), env: z.record(z.string(), z.string()).optional() }).strict(),
 };
 
@@ -164,7 +172,8 @@ export function codingToolRuntime(workingRoot: string, options: {
     const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), {
         name: 'read_output', description: 'Read exact saved shell text by output ID. Offset and nextOffset use UTF-16 code units; returns up to 4000 units. Continue until eof. Saved output may be incomplete if capture reached its limit.',
         parameters: { type: 'object' as const, properties: { id: { type: 'string' as const }, offset: { type: 'integer' as const, minimum: 0 } }, required: ['id'], additionalProperties: false },
-    }]).filter(tool => codingToolEffect(tool.name) !== undefined && (!options.readOnly || codingToolEffect(tool.name) === 'read'));
+    }]).filter(tool => codingToolEffect(tool.name) !== undefined && (!options.readOnly || codingToolEffect(tool.name) === 'read'))
+        .map(tool => ({ ...tool, parameters: { ...z.toJSONSchema(schemas[tool.name], { target: 'draft-7' }), type: 'object' } as ToolDefinition['parameters'] }));
     const shellDefinition = definitions.find(tool => tool.name === 'shell_run');
     if (shellDefinition) shellDefinition.description += ' Large output is saved with a read_output reference; capture is limited to 8 MiB and reports incompleteness.';
     const enabled = new Set(definitions.map(tool => tool.name));
@@ -192,6 +201,7 @@ export function codingToolRuntime(workingRoot: string, options: {
             } catch (error) { return { ok: false, content: String(error), errorKind: 'runtime' }; }
         },
         trustTierFor: () => 'standard',
+        effectFor: name => enabled.has(name) ? codingToolEffect(name) : undefined,
     };
     return runtime;
 }

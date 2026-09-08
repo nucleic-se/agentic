@@ -126,10 +126,12 @@ export async function executeToolBatchDetailed(
         if (item.validation.ok) item.plan.input = item.validation.args;
     }
 
-    const rawBatchRejected = prepared.some(item => item.validation?.ok === false);
+    const independentReads = prepared.every(item => config.tools.effectFor?.(item.plan.name) === 'read');
+    const rawBatchRejected = !independentReads && prepared.some(item => item.validation?.ok === false);
     if (!rawBatchRejected) {
         // Resolve authorization and call-transform hooks for the whole batch.
         for (const item of prepared) {
+            if (!item.validation?.ok) continue;
             if (config.beforeToolCall) {
                 let hook: BeforeToolCallResult;
                 try {
@@ -209,7 +211,13 @@ export async function executeToolBatchDetailed(
         }
     }
 
-    const batchRejected = prepared.some(item => item.validation?.ok === false);
+    const batchRejected = !independentReads && prepared.some(item => item.validation?.ok === false);
+    for (const item of prepared) {
+        if (item.validation && !item.validation.ok) item.blocked = {
+            callId: item.plan.callId, plan: item.plan, status: 'runtime_failure', dispatched: false,
+            result: item.validation.result, error: item.validation.result.content,
+        };
+    }
     const executions: ToolExecution[] = [];
     let interruption: 'abort' | 'steering' | null = null;
     let controlFailure: Failure | undefined;
@@ -218,10 +226,6 @@ export async function executeToolBatchDetailed(
     if (batchRejected) {
         for (const item of prepared) {
             if (item.blocked) executions.push(item.blocked);
-            else if (item.validation && !item.validation.ok) executions.push({
-                callId: item.plan.callId, plan: item.plan, status: 'runtime_failure', dispatched: false,
-                result: item.validation.result, error: item.validation.result.content,
-            });
             else executions.push({
                 callId: item.plan.callId, plan: item.plan, status: 'skipped', dispatched: false,
                 error: 'Batch rejected before execution because another tool call was invalid',

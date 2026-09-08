@@ -93,6 +93,10 @@ export interface IToolRuntime {
      * to IToolPolicy.evaluate(). If absent or returning undefined, callers default to 'standard'.
      */
     trustTierFor?(name: string): ToolTrustTier | undefined
+    /** Trusted runtime declaration. Read calls do not mutate external state and
+     * may proceed independently when another read in the batch is invalid.
+     * Missing declarations are treated conservatively. */
+    effectFor?(name: string): 'read' | 'write' | undefined
 }
 
 /**

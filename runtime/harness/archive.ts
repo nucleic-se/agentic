@@ -17,6 +17,7 @@ export function archivedToolResultReference(message: ToolResultMessage, _index: 
 /** The host supplies only the current session's original transcript. */
 export function archiveToolRuntime(read: (sessionId: string, signal?: AbortSignal) => Promise<readonly Message[]>): IValidatedToolRuntime {
     const runtime: IValidatedToolRuntime = {
+        effectFor: name => name === 'read_tool_result' ? 'read' : undefined,
         tools: () => [{ name: 'read_tool_result', description: 'Read exact saved tool-result text from this session by callId or original messageIndex. Returns at most 8000 UTF-16 code units; use nextOffset until eof. This reads historical evidence and never reruns the tool.',
             parameters: z.toJSONSchema(schema) as ReturnType<IValidatedToolRuntime['tools']>[number]['parameters'] }],
         validate(name, args) {

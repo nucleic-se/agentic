@@ -51,7 +51,7 @@ export async function defaultAgentExtensions(options: DefaultAgentOptions): Prom
         { id: `provider.subscription.${model}`, version: '3.0.0', apiVersion: 1,
             ...(reasoningEffort === 'low' ? {} : { configuration: JSON.stringify({ reasoningEffort }) }),
             roles: { provider: async () => new (await import('../../providers/subscription.js')).SubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort }) } },
-        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null, textPageBytes: options.textPageBytes ?? 4000, readOnly: options.readOnly ?? false }), version: '12.0.0', apiVersion: 1,
+        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null, textPageBytes: options.textPageBytes ?? 4000, readOnly: options.readOnly ?? false }), version: '13.0.0', apiVersion: 1,
             activate: async value => { client = value; },
             roles: { tools: async () => {
                 const coding = codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined, textPageBytes: options.textPageBytes, readOnly: options.readOnly });

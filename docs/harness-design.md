@@ -270,6 +270,14 @@ whole-batch preflight, final-argument policy/confirmation, dispatch, and effect
 journaling. Session scope exposes constrained transitions, not a mutable message
 array or arbitrary edits to authoritative history.
 
+The shared executor completes preflight before dispatch. If every call has a
+trusted runtime `effectFor(name)` declaration of `read`, an invalid call receives
+its own error and the remaining authorized reads can proceed. A batch containing
+a write or an undeclared effect still rejects all calls when any arguments are
+invalid. An uncertain dispatched outcome stops the remaining calls for
+reconciliation in either case. Composite runtimes forward the owning runtime's
+declaration; model arguments cannot supply it.
+
 A custom loop can make several model calls before tools, branch its reasoning,
 or implement a planner/executor. It must not need to reproduce approval,
 persistence, or cancellation machinery. The canonical record cannot assume one
@@ -541,6 +549,13 @@ manifest and dispatch. `defaultAgentExtensions({ workspace, readOnly: true })`
 uses that restriction while keeping archived tool results available. This setting
 is part of the composition identity. Without it, the default agent continues to
 confirm mutation arguments.
+
+The coding pack generates advertised argument schemas from the same Zod schemas
+used for validation, including search limits and mode-specific read constraints.
+Search accepts an omitted or empty path for the workspace root; directory listing
+also accepts an empty root path. Coding extension
+version 13 changes the persisted composition identity; active sessions require
+their original composition, or a fresh session under the new revision.
 
 `fs_read` supports numbered line pages by default and exact UTF-8 byte pages with
 `mode: "bytes"`. Byte offsets are zero-based, with a 16,000-byte maximum page;

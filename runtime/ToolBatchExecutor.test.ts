@@ -193,3 +193,41 @@ describe('shared tool batch execution', () => {
         expect(result.isError ?? false).toBe(!ok);
     });
 });
+
+describe('independent read preflight', () => {
+    it('returns an invalid read receipt while authorizing and executing valid reads in order', async () => {
+        const tools = runtime(); tools.effectFor = () => 'read';
+        const input = calls(); input[0].args.value = 42;
+        const evaluate = vi.fn(async () => ({ kind: 'allow' as const }));
+        const events: AgentEvent[] = [];
+        const result = await executeToolBatch(input, { tools, policy: { evaluate }, emit: e => { events.push(e); } });
+        expect(result.map(r => [r.status, r.dispatched])).toEqual([['runtime_failure', false], ['success', true]]);
+        expect(evaluate).toHaveBeenCalledTimes(1);
+        expect(tools.call).toHaveBeenCalledTimes(1);
+        expect(events.map(e => [e.type, 'callId' in e ? e.callId : null])).toEqual([
+            ['tool_end', 'one'], ['tool_start', 'two'], ['tool_end', 'two'],
+        ]);
+    });
+    it.each(['write', undefined] as const)('rejects the whole batch when any effect is %s', async effect => {
+        const tools = runtime(); tools.effectFor = name => name === 'read' ? 'read' : effect;
+        const input = calls(); input[0].name = 'read'; input[0].args.value = 42;
+        const result = await executeToolBatch(input, { tools });
+        expect(tools.call).not.toHaveBeenCalled();
+        expect(result.map(r => r.status)).toEqual(['runtime_failure', 'skipped']);
+    });
+    it('does not authorize or execute an invalid rewrite, but retains independent reads', async () => {
+        const tools = runtime(); tools.effectFor = () => 'read';
+        const result = await executeToolBatch(calls(), { tools, policy: { evaluate: async c =>
+            c.callId === 'one' ? { kind: 'rewrite', args: { value: 42 } } : { kind: 'allow' } } });
+        expect(result.map(r => r.dispatched)).toEqual([false, true]);
+        expect(vi.mocked(tools.call).mock.calls[0][2]?.authorizedArgs).toEqual({ value: 'second' });
+    });
+    it('still stops after an uncertain dispatched read', async () => {
+        const tools = runtime(); tools.effectFor = () => 'read';
+        vi.mocked(tools.call).mockResolvedValue({ ok: false, content: 'Lost receipt', errorKind: 'unknown' });
+        const result = await executeToolBatchDetailed(calls(), { tools });
+        expect(tools.call).toHaveBeenCalledTimes(1);
+        expect(result.controlFailure?.kind).toBe('tool_outcome_unknown');
+        expect(result.executions.map(r => r.status)).toEqual(['unknown', 'skipped']);
+    });
+});

@@ -57,6 +57,10 @@ export class CompositeToolRuntime implements IToolRuntimeWithMeta, IValidatedToo
         return this.map.get(name)?.trustTierFor?.(name);
     }
 
+    effectFor(name: string): 'read' | 'write' | undefined {
+        return this.map.get(name)?.effectFor?.(name);
+    }
+
     validate(name: string, args: Record<string, unknown>): ToolCallValidation {
         const runtime = this.map.get(name);
         if (!runtime) {
