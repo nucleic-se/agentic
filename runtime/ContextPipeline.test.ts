@@ -397,3 +397,23 @@ it('previews older protected evidence before evicting history and leaves the lat
     expect(context.decisions.find(decision => decision.action === 'compressed')).toMatchObject({ protected: true, compression: 'referenced' });
     expect(messages).toEqual(original);
 });
+
+it.each([0, 1, 3])('keeps the same recent conversation when %s pinned status messages are added', async count => {
+    const history: Message[] = [
+        { role: 'assistant', content: 'Older high-priority background.' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'recent-read', name: 'read', args: {} }] },
+        { role: 'tool_result', toolCallId: 'recent-read', content: 'Recent exact evidence.' },
+        { role: 'assistant', content: 'Latest finding.' },
+    ];
+    const status: Message[] = Array.from({ length: count }, (_, index) => ({
+        role: 'user', provenance: 'deterministic', sticky: true, content: `Current resources ${index}`,
+    }));
+    const expected = [...history.slice(1), ...status];
+    const tokenBudget = estimateContextTokens({ messages: expected }, { tokenCounter: counter }).totalTokens;
+    const result = await composeAgentContext({ messages: [...history, ...status], tokenBudget }, {
+        tokenCounter: counter, minRecentGroups: 2, scoreGroup: (_messages, index) => index === 0 ? 100 : 0,
+    });
+    expect(result.messages).toEqual(expected);
+    expect(result.usage.totalTokens).toBe(tokenBudget);
+    expect(result.decisions.find(decision => decision.id === 'messages:0')).toMatchObject({ action: 'dropped', protected: false });
+});

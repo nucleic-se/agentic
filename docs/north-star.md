@@ -19,6 +19,12 @@ integration in Gears. Reuse Gears infrastructure where it already solves the
 problem. Extract shared behavior when there is a concrete need, without forcing
 different hosts to expose identical clients or storage models.
 
+The default Gears agent should use the same reusable agent modules as the local
+agent, with explicit additions or replacements where durable execution needs
+them. Replacing a local driver or session store is appropriate; maintaining a
+parallel context policy, provider adapter or coding tool implementation is not.
+Keep adapters thin. A shared behavior fix should normally benefit both agents.
+
 Loop policy, context policy, providers, tools, session storage and UI belong behind
 explicit extension boundaries. The host enforces the contracts between them.
 Extensions are a means of composition, not a reason to turn every helper into a

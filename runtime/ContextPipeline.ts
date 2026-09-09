@@ -31,6 +31,8 @@ export interface ContextTokenOptions {
 export interface ContextCompositionOptions extends ContextTokenOptions {
     /** Render source IDs as model-visible data when tools require exact receipt references. */
     includeToolCallIds?: boolean;
+    /** Recent conversation groups to protect. Pinned deterministic status messages
+     * remain protected separately and do not consume this allowance. */
     minRecentGroups?: number;
     /** Retain human instructions through tools and synthetic updates. `all` preserves
      * objectives and later corrections; `latest` supports explicitly disposable history.
@@ -225,6 +227,9 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     const candidates: Candidate[] = sections.map((section, index) => ({ kind: 'section', section, id: section.id,
         score: sectionPriority(section),
         protected: sectionProtected(section), action: 'kept', order: index }));
+    const conversationGroups = messageGroups.filter(group => !group.messages.every(message =>
+        message.role === 'user' && message.provenance === 'deterministic' && message.sticky === true));
+    const recentGroups = new Set(recent ? conversationGroups.slice(-recent) : []);
     messageGroups.forEach((group, index) => {
         const score = options.scoreGroup?.(structuredClone(group.messages), index) ?? 0;
         if ((!Number.isFinite(score) && score !== Infinity)) throw new RangeError('Message group score must be finite or positive Infinity');
@@ -234,7 +239,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             (message.role === 'user' && message.sticky === true) ||
             options.protectMessage?.(structuredClone(message), group.firstIndex + offset));
         candidates.push({ kind: 'messages', group, originalTokens: groupTokens(group.messages), id: `messages:${group.firstIndex}`, score,
-            protected: group.unbound || sticky || score === Infinity || index >= messageGroups.length - recent,
+            protected: group.unbound || sticky || score === Infinity || recentGroups.has(group),
             action: 'kept', order: sections.length + index });
     });
     const render = (protectedOnly = false) => {

@@ -27,3 +27,6 @@ export { textCheckpointFormat, type CheckpointFormat, type CheckpointRequestOpti
 export type { ContextLifecycle, ContextLifecycleInput, ContextPreparation, ContextStep, ContextMaintenance, ContextTransition, CheckpointContextState } from './context-lifecycle.js';
 
 export { resolveContextBudget } from './context-budget.js';
+
+export { agentContext, codingAgentContext } from './agent-context.js';
+export type { AgentContextOptions, CodingAgentContextOptions } from './agent-context.js';

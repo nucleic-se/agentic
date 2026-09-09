@@ -949,3 +949,16 @@ may accept saved message annotations across an effort change while a durable
 composition correctly rejects that change to persisted execution settings.
 The provider extension revision changes with this contract. Existing active
 sessions require their original composition; no migration or silent reset occurs.
+## Shared agent defaults
+
+`agentContext(system, tokenBudget, options)` composes the reference context policy:
+source-referenced tool results, visible tool-call identifiers, protected user
+history and a replaceable checkpoint lifecycle. `codingAgentContext(options)`
+adds the default coding instruction and refreshed, scoped workspace instructions.
+These modules have no provider, session-store or driver dependency. The local
+default agent uses them; durable hosts can use them directly without extracting
+roles from a local session composition.
+
+Custom context strategies own their system instruction and lifecycle. Per-request
+system overrides remain available for maintenance requests. Pinned deterministic status messages are protected separately and do not consume
+the recent-conversation allowance. Storage, scheduling and request admission remain driver work.
