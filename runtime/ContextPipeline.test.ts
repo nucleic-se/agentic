@@ -347,3 +347,27 @@ it('includes rich tool output, image estimates and visible call identities in gr
     const unlabelled = await composeAgentContext({ messages, tokenBudget: 1000 }, { ...options, includeToolCallIds: false });
     expect(result.decisions[0].tokens!.original).toBeGreaterThan(unlabelled.decisions[0].tokens!.original);
 });
+
+it('distinguishes exact-source previews from mixed lossy compression for checkpoint policies', async () => {
+    const { checkpointBoundary, checkpointView } = await import('./harness/checkpoint.js');
+    const history: Message[] = [
+        { role: 'user', content: 'Keep the requirement' },
+        { role: 'assistant', content: 'decision '.repeat(250), toolCalls: [{ id: 'read', name: 'read', args: {} }] },
+        { role: 'tool_result', toolCallId: 'read', content: 'source '.repeat(700) },
+        { role: 'assistant', content: 'Recent working observation' },
+    ];
+    const original = structuredClone(history);
+    const result = await composeAgentContext({ messages: history, tokenBudget: 1400 }, {
+        tokenCounter: counter, minRecentGroups: 1, protectUserMessages: 'all', referenceToolResult: () => 'read exact source',
+        compressMessage: message => message.role === 'assistant' ? { ...message, content: 'short decision' } : null,
+    });
+    const group = result.decisions.find(d => d.messageRange?.start === 1)!;
+    expect(group).toMatchObject({ action: 'compressed', compression: 'lossy' });
+    expect(group.references).toHaveLength(1);
+    expect(result.decisions.some(d => d.action === 'dropped')).toBe(false);
+    expect(checkpointBoundary(checkpointView(history), result)).toBe(3);
+    expect(history).toEqual(original);
+    const unknown = structuredClone(result);
+    delete unknown.decisions.find(d => d.messageRange?.start === 1)!.compression;
+    expect(checkpointBoundary(checkpointView(history), unknown)).toBe(3);
+});

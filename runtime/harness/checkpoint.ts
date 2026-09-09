@@ -141,7 +141,7 @@ function sourceBoundaries(view: CheckpointView, report: ContextReport) {
             if (source !== null) end = Math.max(end, source + 1);
         }
         if (end && !decision.protected) boundaries.push({ end, tokens: decision.tokens?.original,
-            reclaim: decision.action === 'dropped' || (decision.reason === 'budget' && decision.action === 'compressed') });
+            reclaim: decision.action === 'dropped' || (decision.action === 'compressed' && decision.compression !== 'referenced') });
     }
     return boundaries;
 }

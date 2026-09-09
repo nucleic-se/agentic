@@ -115,6 +115,9 @@ export interface ContextDecision {
     action: 'kept' | 'compressed' | 'dropped';
     /** Why this group or section was changed; omitted when kept. */
     reason?: 'budget' | 'presentation';
+    /** Referenced changes preserve exact-source access; lossy changes may discard information.
+     * Omitted metadata must be treated conservatively by history-preservation policies. */
+    compression?: 'referenced' | 'lossy';
     score: number;
     protected: boolean;
     /** Message-group estimates using the same counter and presentation as the full request.

@@ -880,3 +880,12 @@ remains excluded. These defaults control relevance, not access authorization.
 This revision changes store, coding, provider and context extension identities.
 Existing active sessions require their original composition; use fresh sessions
 with the updated default composition.
+
+Default checkpointing preserves history when context selection drops a group or
+compresses text without an exact-source reference. Recoverable tool previews alone
+do not trigger a summary call. `ContextDecision.compression` distinguishes
+`referenced` presentation from `lossy` compression; missing metadata is treated
+conservatively. A group containing both kinds is lossy. Custom compositions may
+still opt into an elective `triggerRatio`; the default has no elective threshold.
+This keeps presentation separate from generated memory while preserving original
+receipts and charging every maintenance call to the run allowance.

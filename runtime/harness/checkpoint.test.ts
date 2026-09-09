@@ -216,7 +216,7 @@ it('distinguishes protected-input overflow without silently weakening retention'
         .rejects.toMatchObject({ reason: 'protected', budget: 100 });
 });
 
-it('checkpoints pressure-compressed history without waiting for eviction, retaining the recent tail', async () => {
+it('keeps recoverable pressure previews without default maintenance, retaining optional elective checkpoints', async () => {
     const { createHarnessExecution } = await import('./execution.js');
     const { budgetedContext } = await import('./defaults.js');
     const { prepareCheckpoint } = await import('./checkpoint.js');
@@ -234,8 +234,10 @@ it('checkpoints pressure-compressed history without waiting for eviction, retain
     const task = await execution.prepareModel({ messages: view.messages, maxTokens: 100 });
     expect(task.report!.decisions.some(d => d.reason === 'budget' && d.action === 'compressed')).toBe(true);
     expect(task.report!.decisions.some(d => d.action === 'dropped')).toBe(false);
-    expect(checkpointBoundary(view, task.report!)).toBe(3);
-    const selected = await prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100 });
+    expect(checkpointBoundary(view, task.report!)).toBeUndefined();
+    expect(await prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100 })).toBeUndefined();
+    expect(readArchivedToolResult(history, { callId: 'read' }).content).toBe(history[2].content.slice(0, 8000));
+    const selected = await prepareCheckpoint(execution, history, view, task.report!, { maxTokens: 100, triggerRatio: 0.1 });
     expect(selected).toBeDefined();
     // The source may require chunks, but never includes the protected recent group.
     expect(selected!.sourceRange.end).toBeLessThanOrEqual(3);

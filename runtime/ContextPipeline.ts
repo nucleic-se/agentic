@@ -219,7 +219,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     const groupTokens = (messages: readonly Message[]) => estimateContextTokens({ messages: presentMessages(messages) }, tokenOptions).messageTokens;
     const sourceText = messageGroups.flatMap(group => group.messages.map(message => message.content));
     type Item = { kind: 'messages'; group: Group; originalTokens: number; } | { kind: 'section'; section: PromptSection; };
-    type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; reason?: ContextDecision['reason']; references?: ContextDecision['references']; order: number };
+    type Candidate = Item & { id: string; score: number; protected: boolean; action: ContextDecision['action']; reason?: ContextDecision['reason']; compression?: ContextDecision['compression']; references?: ContextDecision['references']; order: number };
     const candidates: Candidate[] = sections.map((section, index) => ({ kind: 'section', section, id: section.id,
         score: sectionPriority(section),
         protected: sectionProtected(section), action: 'kept', order: index }));
@@ -275,6 +275,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
                 if (render().usage.totalTokens >= before) { item.group.messages[offset] = message; continue; }
                 item.action = 'compressed';
                 item.reason = 'presentation';
+                item.compression ??= 'referenced';
                 (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
             }
         }
@@ -298,6 +299,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             result = trial;
             item.action = 'compressed';
             item.reason = 'budget';
+            item.compression ??= 'referenced';
             if (existing) existing.retainedCharacters = content.length;
             else (item.references ??= []).push({ messageIndex, reference, originalCharacters: message.content.length, retainedCharacters: content.length });
         }
@@ -330,7 +332,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
             const before = item.group.messages;
             item.group.messages = compressed;
             const trial = render();
-            if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; item.reason = 'budget'; }
+            if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; item.reason = 'budget'; item.compression = 'lossy'; }
             else item.group.messages = before;
         } else if (options.compressSection) {
             const compressed = await options.compressSection(snapshotSection(item.section));
@@ -340,7 +342,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
                 const before = item.section;
                 item.section = { ...before, text: () => compressed, estimatedTokens: count(counter.countTokens(compressed)) };
                 const trial = render();
-                if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; item.reason = 'budget'; }
+                if (trial.usage.totalTokens < result.usage.totalTokens) { result = trial; item.action = 'compressed'; item.reason = 'budget'; item.compression = 'lossy'; }
                 else item.section = before;
             }
         }
@@ -361,6 +363,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         excludedSections: candidates.filter((item): item is Candidate & { kind: 'section' } => item.kind === 'section' && item.action === 'dropped').map(item => item.section),
         decisions: candidates.map(item => ({ kind: item.kind, id: item.id, score: item.score, protected: item.protected, action: item.action,
             ...(item.reason ? { reason: item.reason } : {}),
+            ...(item.action === 'compressed' && item.compression ? { compression: item.compression } : {}),
             ...(item.kind === 'messages' ? { messageRange: { start: item.group.firstIndex, end: item.group.firstIndex + item.group.messages.length },
                 tokens: { original: item.originalTokens, retained: item.action === 'dropped' ? 0 : groupTokens(item.group.messages) } } : {}),
             ...(item.references ? { references: item.references } : {}) })) };
