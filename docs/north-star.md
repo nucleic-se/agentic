@@ -79,6 +79,10 @@ execution wherever they apply.
   document persistence consequences and never silently discard user data.
 - Test meaningful contracts and failure cases. Passing tests does not excuse
   an architecture that is harder to understand.
+- Choose defaults from verified model capabilities and representative task results.
+  Keep illustrative numbers and stress-test settings out of product requirements.
+  When an experiment changes direction, review its policies, prompts, code and
+  documentation; remove machinery that no longer earns its maintenance cost.
 
 ## Establish the foundation before expanding features
 

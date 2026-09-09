@@ -8,7 +8,7 @@ import type { TurnRequest, TurnResponse } from '../../contracts/llm.js';
 
 const clients: SessionClient[] = [];
 afterEach(async () => { for (const client of clients.splice(0)) await client.close(); });
-async function setup(turn: (request: TurnRequest) => string | TurnResponse, maxModelCalls = 20, lifecycle: ContextLifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 }), system = 'Complete the audit.') {
+async function setup(turn: (request: TurnRequest) => string | TurnResponse, maxModelCalls = 20, lifecycle: ContextLifecycle = checkpointContextLifecycle({ maxTokens: 64 }), system = 'Complete the audit.') {
     const client = await createHarness().compose({ limits: { maxModelCalls }, extensions: [{ id: 'continuity.test', version: '1', apiVersion: 1, roles: {
         store: () => new MemorySessionStore(),
         loop: () => conversationalLoop({ maxTokens: 64 }),
@@ -21,7 +21,7 @@ async function setup(turn: (request: TurnRequest) => string | TurnResponse, maxM
     let record = await client.create();
     record = await client.replaceMessages(record.id, record.revision, [
         { role: 'user', content: 'Do not release until verification passes.' },
-        ...Array.from({ length: 40 }, (_, index) => ({ role: 'assistant' as const, content: `Observation ${index}: ${'evidence '.repeat(28)}` })),
+        ...Array.from({ length: 40 }, (_, index) => ({ role: 'assistant' as const, content: `Observation ${index}: ${'evidence '.repeat(32)}` })),
         { role: 'user', content: 'Correction: security verification is also required.' },
     ]);
     return { client, record };
@@ -116,7 +116,7 @@ it('composes automatic checkpoints and source recovery in the default agent acro
             { role: 'user', content: 'Release only after all verification passes.' },
             { role: 'assistant', content: '', toolCalls: [{ id: 'source-call', name: 'fs_read', args: { path: 'evidence.txt' } }] },
             { role: 'tool_result', toolCallId: 'source-call', content: source },
-            ...Array.from({ length: 140 }, (_, index) => ({ role: 'assistant' as const, content: `Observation ${index}: ${'evidence '.repeat(28)}` })),
+            ...Array.from({ length: 140 }, (_, index) => ({ role: 'assistant' as const, content: `Observation ${index}: ${'evidence '.repeat(32)}` })),
         ]);
         await active.submit(record.id, 'Continue', { commandId: 'first' });
         const saved = await active.wait(record.id);
@@ -204,7 +204,7 @@ it('uses fitting checkpoints above the character target without repair through t
 
 
 it('persists structured maintenance as state without dispatching its schema call', async () => {
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8, format: {
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, format: {
         instructions: 'Return checkpoint_state with remaining work.',
         tools: [{ name: 'checkpoint_state', description: '', parameters: { type: 'object', properties: { remaining: { type: 'string' } }, required: ['remaining'], additionalProperties: false } }],
         decode(response) {

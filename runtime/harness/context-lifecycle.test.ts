@@ -11,7 +11,7 @@ it('uses current task grants for maintenance presentation through the existing l
         { role: 'assistant', content: 'Verification remains unfinished.', toolCalls: [{ id: 'evidence', name: 'read', args: {} }] },
         { role: 'tool_result', toolName: 'read', toolCallId: 'evidence', content: 'exact evidence '.repeat(300) });
     const original = structuredClone(history);
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8,
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64,
         presentation: { maxToolResultCharacters: 500, referenceToolResult: archivedToolResultReference } });
     const tools = [{ name: 'read_tool_result', description: '', parameters: { type: 'object' as const } }];
     const step = await lifecycle.prepare({ request: { ...request, tools } }, execution) as ContextMaintenance;
@@ -29,7 +29,7 @@ it('uses current task grants for maintenance presentation through the existing l
 const response = (content: string): TurnResponse => ({ message: { role: 'assistant', content }, stopReason: 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } });
 function fixture() {
     const history: Message[] = [{ role: 'user', content: 'Do not release until verification passes.' },
-        ...Array.from({ length: 40 }, (_, index) => ({ role: 'assistant' as const, content: `Observation ${index}: ${'evidence '.repeat(28)}` })),
+        ...Array.from({ length: 40 }, (_, index) => ({ role: 'assistant' as const, content: `Observation ${index}: ${'evidence '.repeat(32)}` })),
         { role: 'user', content: 'Correction: security verification is also required.' }];
     const execution = createHarnessExecution({ context: budgetedContext('', 3000), provider: {
         turn: async () => { throw new Error('Lifecycle must not dispatch'); }, structured: async () => { throw new Error('unused'); },
@@ -39,7 +39,7 @@ function fixture() {
 it('swaps checkpoint maintenance for direct source selection using the same preparation boundary', async () => {
     const { request, execution, history } = fixture();
     const original = structuredClone(history);
-    const checkpoint = await checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 }).prepare({ request }, execution);
+    const checkpoint = await checkpointContextLifecycle({ maxTokens: 64 }).prepare({ request }, execution);
     expect(checkpoint.kind).toBe('maintenance');
     const direct = await referenceContextLifecycle().prepare({ request }, execution);
     expect(direct.kind).toBe('task');
@@ -49,7 +49,7 @@ it('swaps checkpoint maintenance for direct source selection using the same prep
 });
 it('resumes exact rejected candidate repair from serialized state before trying task preparation', async () => {
     const { request, execution } = fixture();
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64 });
     const first = await lifecycle.prepare({ request }, execution) as ContextMaintenance;
     expect(first.kind).toBe('maintenance');
     const rejected = first.reduce({ ...response('x'.repeat(8591)), stopReason: 'max_tokens' });
@@ -79,7 +79,7 @@ it('resumes exact rejected candidate repair from serialized state before trying 
 it('keeps transient host facts outside source coverage and preserves their task presentation', async () => {
     const { request, execution } = fixture();
     const suffix: Message[] = [{ role: 'user', provenance: 'deterministic', sticky: true, content: 'Remaining calls: 7' }];
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64 });
     const step = await lifecycle.prepare({ request, suffix }, execution) as ContextMaintenance;
     const evidence = JSON.parse(step.prepared.request.messages[0].content);
     expect(JSON.stringify(evidence)).not.toContain('Remaining calls');
@@ -91,7 +91,7 @@ it('keeps transient host facts outside source coverage and preserves their task 
 it('anchors later source chunks to original human requirements and corrections', async () => {
     const { request, execution } = fixture();
     request.messages.splice(1, 0, { role: 'user', provenance: 'model', content: 'Incorrect derived interpretation of the task.' });
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64 });
     const step = await lifecycle.prepare({ request, state: { kind: 'checkpoint', checkpoint: {
         through: 3, text: 'A previous summary with a different interpretation.', partial: { end: 10, offset: 1 },
     } } }, execution) as ContextMaintenance;
@@ -108,7 +108,7 @@ it('anchors later source chunks to original human requirements and corrections',
 
 it('admits a complete draft above the character target through real context preparation after serialization', async () => {
     const { request, execution, history } = fixture();
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64 });
     const first = await lifecycle.prepare({ request }, execution) as ContextMaintenance;
     const pending = first.reduce(response('Evidence remains available. '.repeat(350)));
     expect(pending.decision).toEqual({ pending: true, attempt: 1 });
@@ -136,7 +136,7 @@ it('repairs actual context overflow once and retains the last valid checkpoint a
     const { request: base, execution } = fixture();
     // The task system consumes space that a tools-free maintenance request does not need.
     const request = { ...base, system: 'Task instruction. '.repeat(250) };
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64 });
     const checkpoint = { through: 1, text: 'Previous verified evidence.' };
     const first = await lifecycle.prepare({ request, state: { kind: 'checkpoint', checkpoint } }, execution) as ContextMaintenance;
     const pending = first.reduce(response('x'.repeat(8591)));
@@ -161,7 +161,7 @@ it('repairs actual context overflow once and retains the last valid checkpoint a
 
 it('does not turn cancellation or preparation failures into checkpoint repair', async () => {
     const { request, execution } = fixture();
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64 });
     const first = await lifecycle.prepare({ request }, execution) as ContextMaintenance;
     const pending = first.reduce(response('Complete candidate.'));
     const error = new Error('Preparation cancelled');
@@ -172,7 +172,7 @@ it('does not turn cancellation or preparation failures into checkpoint repair', 
 
 it('uses the same narrowed preparation boundary for maintenance and repair', async () => {
     const { request, execution } = fixture();
-    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64 });
     const bounded = {
         prepareModel: (request: Parameters<typeof execution.prepareModel>[0], options: Parameters<typeof execution.prepareModel>[1]) =>
             execution.prepareModel(request, { ...options, contextTokenBudget: 2800 }),

@@ -599,7 +599,6 @@ lifecycle, without changing the host:
 ```ts
 checkpointContextLifecycle({
     maxTokens: 800,
-    triggerRatio: 0.8,
     presentation: {
         maxToolResultCharacters: 2000,
         referenceToolResult: archivedToolResultReference,
@@ -653,9 +652,11 @@ composition identity when upgrading from offsets into unprojected messages.
 
 Context decisions record whether a change was caused by `budget` pressure or an
 optional `presentation` cap.
-By default, `prepareCheckpoint` starts when older, unprotected history is shortened under
-that pressure or dropped. It does not wait for eviction after recoverable tool
-previews have already made the request fit.
+By default, `prepareCheckpoint` starts when older, unprotected history is dropped
+or compressed without an exact-source reference. Recoverable previews alone do
+not trigger maintenance. `ContextDecision.compression` distinguishes `referenced`
+presentation from `lossy` compression; missing metadata is treated conservatively.
+A group containing both kinds is lossy.
 
 Hosts can set `triggerRatio` to start earlier, when estimated usage reaches that
 fraction of `ContextReport.tokenBudget`. The context strategy owns this ceiling,
@@ -672,7 +673,9 @@ and summary unchanged. Persist partial progress just like completed-prefix progr
 The archive must not be edited or reordered while these cursors refer to it.
 
 `createHarnessExecution().prepareModel()` returns an execution-owned preparation.
-Its request/report getters return inspection copies. `dispatchModel()` accepts only
+Preparation accepts cancellation, a deadline, and context constraints; provider
+callbacks, streaming and admission hooks belong to dispatch. Its request/report
+getters return inspection copies. `dispatchModel()` accepts only
 preparations from that execution and sends the internal snapshot; editing an
 inspection copy cannot alter its request or accounting. Preparations are not
 serializable dispatch handles. Persist the inspected request/report as evidence,
@@ -692,7 +695,7 @@ not silently flattened.
 Context lifecycle is owned by the context extension, not by the loop or driver.
 `ContextStrategy.lifecycle` optionally supplies a `ContextLifecycle`; without it,
 the assembler prepares ordinary task context. Both reference compositions select
-`checkpointContextLifecycle({ maxTokens: 800, triggerRatio: 0.8 })` (Gears also
+`checkpointContextLifecycle({ maxTokens: 800 })` (Gears also
 caps maintenance output by its configured output budget). To choose direct source
 selection with no generated checkpoints, supply `referenceContextLifecycle()`
 instead. Configure the assembler's archive-reference policy separately from the
@@ -886,16 +889,6 @@ remains excluded. These defaults control relevance, not access authorization.
 This revision changes store, coding, provider and context extension identities.
 Existing active sessions require their original composition; use fresh sessions
 with the updated default composition.
-
-Default checkpointing preserves history when context selection drops a group or
-compresses text without an exact-source reference. Recoverable tool previews alone
-do not trigger a summary call. `ContextDecision.compression` distinguishes
-`referenced` presentation from `lossy` compression; missing metadata is treated
-conservatively. A group containing both kinds is lossy. Custom compositions may
-still opt into an elective `triggerRatio`; the default has no elective threshold.
-This keeps presentation separate from generated memory while preserving original
-receipts and charging every maintenance call to the run allowance.
-
 
 Per-request context capacity can be supplied as
 `prepareModel(request, { contextTokenBudget })` (or through `model`).

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { ILLMProvider, TurnRequest } from '../../contracts/llm.js';
+import type { ILLMProvider, ProviderCallOptions, TurnRequest } from '../../contracts/llm.js';
 import type { ContextReport } from '../../contracts/IAgentContextAssembler.js';
 import { executeModelTurn, type ModelTurnOptions } from '../ModelExecutor.js';
 import { executeToolBatchDetailed } from '../ToolBatchExecutor.js';
@@ -17,7 +17,7 @@ export interface PreparedHarnessModel {
     readonly request: TurnRequest;
     readonly report?: ContextReport;
 }
-export interface HarnessPreparationOptions extends ModelTurnOptions {
+export interface HarnessPreparationOptions extends Pick<ProviderCallOptions, 'signal' | 'deadline'> {
     /** Per-request estimated context ceiling, including reserved output. Requires accounting. */
     contextTokenBudget?: number;
     /** Reject a context strategy that removes or rewrites any supplied source message. */
