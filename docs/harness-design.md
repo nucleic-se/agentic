@@ -114,10 +114,14 @@ earlier Node 22 versions. Built-in SQLite first appeared in Node 22.5.
 On restart, unfinished operations become `unknown`, active approvals are
 invalidated, and missing tool-result messages receive explicit interruption
 results. Unknown tool outcomes block further execution and forks. The host does
-not blindly replay them. There is currently no user-facing reconciliation API:
-inspect the execution history and use a new session when an unknown tool outcome
-cannot be resolved. Approvals survive browser/terminal detachment while the host
-continues running; they are deliberately invalid after process recovery.
+not blindly replay them. After inspecting the external outcome, call
+`SessionClient.resolveOperation` with the current session revision, evidence, and
+the observed tool result. This journals the resolution and corrects the
+model-visible result; it does not verify the evidence or retry the tool. Once all
+unknown tool outcomes are resolved, a separate `resume` continues execution.
+Unknown model outcomes permit explicit resume without tool reconciliation.
+Approvals survive browser/terminal detachment while the host continues running;
+they are deliberately invalid after process recovery.
 
 Forks copy the current safe snapshot and record parent ID/revision. They do not
 yet implement a storage-efficient branch DAG or selection of historical fork
