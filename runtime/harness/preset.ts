@@ -54,7 +54,7 @@ export async function defaultAgentExtensions(options: DefaultAgentOptions): Prom
         { id: `provider.subscription.${model}`, version: '6.0.0', apiVersion: 1,
             configuration: provider.configurationIdentity,
             roles: { provider: () => provider } },
-        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null, textPageBytes: options.textPageBytes ?? 16000, readOnly: options.readOnly ?? false }), version: '17.0.0', apiVersion: 1,
+        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null, textPageBytes: options.textPageBytes ?? 16000, readOnly: options.readOnly ?? false }), version: '19.0.0', apiVersion: 1,
             activate: async value => { client = value; },
             roles: { tools: async () => {
                 const coding = codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined, textPageBytes: options.textPageBytes, readOnly: options.readOnly });

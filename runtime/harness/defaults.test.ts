@@ -30,10 +30,12 @@ it('keeps the coding pack small and rejects excluded effects at dispatch', async
     try {
         const runtime = codingToolRuntime(root);
         expect(runtime.tools().map(tool => tool.name).sort()).toEqual([
-            'fs_list', 'fs_patch', 'fs_read', 'fs_write', 'read_output', 'search_find', 'search_grep', 'shell_run',
+            'fs_list', 'fs_patch', 'fs_read', 'fs_write', 'read_output', 'review_changes', 'search_find', 'search_grep', 'shell_run',
         ]);
         const reads = codingToolRuntime(root, { readOnly: true });
         expect(reads.tools()).toHaveLength(5);
+        expect(reads.validate('review_changes', {}).ok).toBe(false);
+        expect((await reads.call('review_changes', {})).ok).toBe(false);
         expect(reads.validate('fs_write', { path: 'unwanted', content: 'changed' }).ok).toBe(false);
         expect((await reads.call('shell_run', { command: 'touch unwanted' })).ok).toBe(false);
         expect((await runtime.call('fs_delete', { path: 'unwanted' })).ok).toBe(false);

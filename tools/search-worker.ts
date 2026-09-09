@@ -16,7 +16,6 @@ class SearchOutput {
     readonly entries: string[] = []
     private bytes = 0
     constructor(readonly limit: number) {}
-    fits(entry: string): boolean { return Buffer.byteLength(entry) <= this.limit - 256 }
     add(entry: string): boolean {
         const size = Buffer.byteLength(entry) + (this.entries.length ? 1 : 0)
         if (this.bytes + size > this.limit - 256) return false
@@ -150,12 +149,11 @@ function handleGrep(root: string, args: Record<string, unknown>, maxOutputBytes:
                 if (regex.test(line)) count++
             }
             if (count > 0) {
-                if (!result.add(output === 'count' ? `${rel}: ${count}` : rel)) {
+                if (fileCounts.size >= maxResults || !result.add(output === 'count' ? `${rel}: ${count}` : rel)) {
                     if (!fileCounts.size) return fail('Search entry exceeds output ceiling; use a narrower search path.')
                     truncated = true; break
                 }
                 fileCounts.set(rel, count)
-                if (fileCounts.size >= maxResults) { truncated = true; break }
             }
         }
 
@@ -170,75 +168,54 @@ function handleGrep(root: string, args: Record<string, unknown>, maxOutputBytes:
             { fileCount: fileCounts.size, totalMatches: total, truncated })
     }
 
-    // content mode — matching lines with optional context
+    // Reserve matching evidence across files before spending anything on context.
     let truncated = false
     let matchCount = 0
     let contextOmitted = false
+    let linesClipped = false
+    const context = new Map<string, string>()
+    const entry = (rel: string, index: number, line: string, marker: string) => {
+        let end = Math.min(line.length, MAX_LINE_LEN)
+        if (end < line.length && /[\uD800-\uDBFF]/.test(line[end - 1]) && /[\uDC00-\uDFFF]/.test(line[end])) end--
+        return `${rel}:${index + 1}${marker} ${line.slice(0, end)}${end < line.length ? '…' : ''}`
+    }
 
     for (const abs of walkFiles(searchRoot, root, include, args.include_ignored === true)) {
         if (truncated) break
         let stat: fs.Stats
         try { stat = fs.statSync(abs) } catch { continue }
         if (stat.size > MAX_FILE_BYTES) continue
-
         let fileContent: string
         try { fileContent = fs.readFileSync(abs, 'utf8') } catch { continue }
 
-        const rel   = path.relative(root, abs)
+        const rel = path.relative(root, abs)
         const lines = fileContent.split('\n')
-
-        // Collect matching line indices for this file
-        const hitIndices: number[] = []
-        for (let i = 0; i < lines.length; i++) {
-            if (regex.test(lines[i])) hitIndices.push(i)
-        }
-        if (hitIndices.length === 0) continue
-        const hits = new Set(hitIndices)
-
-        // Build context-aware output
-        const emittedLines = new Set<number>()
-        for (const hitIdx of hitIndices) {
-            if (truncated) break
-
-            const rangeStart = Math.max(0, hitIdx - contextLines)
-            const rangeEnd   = Math.min(lines.length - 1, hitIdx + contextLines)
-
-            let block: string[] = []
-            let included: number[] = []
-            // Separator between non-contiguous ranges
-            if (emittedLines.size > 0 && !emittedLines.has(rangeStart - 1)) {
-                block.push('--')
+        const hits = new Set<number>()
+        for (let i = 0; i < lines.length; i++) if (regex.test(lines[i])) hits.add(i)
+        for (const hit of hits) {
+            if (matchCount >= maxResults || !result.add(entry(rel, hit, lines[hit], ':'))) {
+                if (!matchCount) return fail('Search entry exceeds output ceiling; use fs_read for this file.')
+                truncated = true
+                break
             }
-
-            for (let i = rangeStart; i <= rangeEnd; i++) {
-                if (emittedLines.has(i)) continue
-                included.push(i)
-
-                const line = lines[i].length > MAX_LINE_LEN ? lines[i].slice(0, MAX_LINE_LEN) + '…' : lines[i]
-                const marker = hits.has(i) ? ':' : '-'  // : for match, - for context
-                block.push(`${rel}:${i + 1}${marker} ${line}`)
-            }
-
-            let omitted = false
-            if (!result.fits(block.join('\n'))) {
-                block = [`${rel}:${hitIdx + 1}: ${lines[hitIdx].slice(0, MAX_LINE_LEN)}${lines[hitIdx].length > MAX_LINE_LEN ? '…' : ''}`, '[context omitted for this match; use fs_read]']
-                included = [hitIdx]
-                omitted = true
-            }
-            if (!result.add(block.join('\n'))) {
-                if (!matchCount) return fail('Search entry exceeds output ceiling; use a narrower search path.')
-                truncated = true; break
-            }
-            contextOmitted ||= omitted
-            for (const index of included) emittedLines.add(index)
             matchCount++
-            if (matchCount >= maxResults) { truncated = true; break }
+            linesClipped ||= lines[hit].length > MAX_LINE_LEN
+            for (let i = Math.max(0, hit - contextLines); i <= Math.min(lines.length - 1, hit + contextLines); i++) {
+                if (!hits.has(i)) context.set(`${rel}:${i}`, lines[i])
+            }
         }
     }
 
     if (matchCount === 0) return ok('No matches found.')
-
-    return ok(result.text(truncated), { count: matchCount, truncated, contextOmitted })
+    for (const [key, line] of context) {
+        const colon = key.lastIndexOf(':')
+        if (result.add(entry(key.slice(0, colon), Number(key.slice(colon + 1)), line, '-'))) {
+            linesClipped ||= line.length > MAX_LINE_LEN
+        } else contextOmitted = true
+    }
+    const notices = (contextOmitted ? '\n[context omitted; use fs_read for source lines]' : '')
+        + (linesClipped ? '\n[long lines clipped; use fs_read for full source text]' : '')
+    return ok(result.text(truncated) + notices, { count: matchCount, truncated, contextOmitted, linesClipped })
 }
 
 function handleFind(root: string, args: Record<string, unknown>, maxOutputBytes: number): ToolCallResult {
@@ -256,11 +233,10 @@ function handleFind(root: string, args: Record<string, unknown>, maxOutputBytes:
     for (const abs of walkFiles(searchRoot, root, undefined, args.include_ignored === true)) {
         const rel = path.relative(root, abs)
         if (matchesGlob(rel, pattern) || matchesGlob(path.basename(abs), pattern)) {
-            if (!results.add(rel)) {
+            if (results.entries.length >= MAX_MATCHES || !results.add(rel)) {
                 if (!results.entries.length) return fail('Search entry exceeds output ceiling; use a narrower search path.')
                 truncated = true; break
             }
-            if (results.entries.length >= MAX_MATCHES) { truncated = true; break }
         }
     }
 

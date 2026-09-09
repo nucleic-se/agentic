@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { FileToolOutputStore, ToolOutputCapture } from './output.js';
+import { reviewChanges } from './change-review.js';
 import { lstatSync, realpathSync } from 'node:fs';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -84,6 +85,7 @@ const filePath = workspaceFilePath;
 const includeIgnored = z.boolean().optional().describe('Include ignored, dependency and generated files. Default: false; Git metadata stays excluded.');
 const searchPath = z.string().describe('Path inside the workspace. An empty string means the workspace root.');
 const schemas: Record<string, z.ZodType<Record<string, unknown>>> = {
+    review_changes: z.object({ base: z.string().min(1).max(4096).optional().describe('Commit or ref to compare with the tracked working tree. Default: HEAD. Requires an existing commit.') }).strict(),
     read_output: z.object({ id: z.string().uuid(), offset: z.number().int().nonnegative().optional() }).strict(),
     fs_read: fsReadSchema,
     fs_write: fsWriteSchema,
@@ -147,7 +149,8 @@ function runShell(root: string, outputStore: FileToolOutputStore, args: Record<s
 /** Local trusted-code tools. Root checks do not sandbox arbitrary shell commands. */
 const codingEffects = {
     fs_read: 'read', fs_list: 'read', search_grep: 'read', search_find: 'read', read_output: 'read',
-    fs_write: 'write', fs_patch: 'write', shell_run: 'write',
+    // Git may invoke repository-configured filters or filesystem-monitor hooks.
+    fs_write: 'write', fs_patch: 'write', shell_run: 'write', review_changes: 'write',
 } as const;
 
 export function codingToolEffect(name: string): 'read' | 'write' | undefined {
@@ -167,8 +170,11 @@ export function codingToolRuntime(workingRoot: string, options: {
     const search = new SearchToolRuntime(root, { maxOutputBytes: 4000 });
     const shell = new ShellToolRuntime(root);
     const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), {
-        name: 'read_output', description: 'Read exact saved shell text by output ID. Offset and nextOffset use UTF-16 code units; returns up to 4000 units. Continue until eof. Saved output may be incomplete if capture reached its limit.',
+        name: 'read_output', description: 'Read exact saved tool text by output ID. Offset and nextOffset use UTF-16 code units; returns up to 4000 units. Continue until eof. Saved output may be incomplete if capture reached its limit.',
         parameters: { type: 'object' as const, properties: { id: { type: 'string' as const }, offset: { type: 'integer' as const, minimum: 0 } }, required: ['id'], additionalProperties: false },
+    }, {
+        name: 'review_changes', description: 'Review actual Git changes within this workspace: tracked diff statistics, whitespace-ignored statistics (not semantic equivalence), untracked paths, and a read_output reference to the exact tracked patch. Includes staged and unstaged changes against base (default HEAD); untracked contents and ignored files are excluded. Requires Git, an existing commit and command-execution permission: Git may invoke repository-configured helpers. Fails if capture exceeds 8 MiB. Use source, tests and task requirements to assess fulfillment.',
+        parameters: { type: 'object' as const, properties: {} },
     }]).filter(tool => codingToolEffect(tool.name) !== undefined && (!options.readOnly || codingToolEffect(tool.name) === 'read'))
         .map(tool => ({ ...tool, parameters: { ...z.toJSONSchema(schemas[tool.name], { target: 'draft-7' }), type: 'object' } as ToolDefinition['parameters'] }));
     const shellDefinition = definitions.find(tool => tool.name === 'shell_run');
@@ -193,6 +199,7 @@ export function codingToolRuntime(workingRoot: string, options: {
                 if (options?.authorizedArgs && !isDeepStrictEqual(checked.args, options.authorizedArgs)) return { ok: false, content: 'Arguments differ from authorization', errorKind: 'policy' };
                 if (options?.signal?.aborted) return { ok: false, content: 'Cancelled', errorKind: 'cancelled' };
                 if (name === 'read_output') return { ok: true, content: JSON.stringify(await outputStore.read(checked.args.id as string, checked.args.offset as number ?? 0, options?.signal)) };
+                if (name === 'review_changes') return await reviewChanges(root, outputStore, checked.args.base as string ?? 'HEAD', options?.signal);
                 if (name === 'shell_run') return await runShell(root, outputStore, checked.args, options);
                 return await (name.startsWith('fs_') ? fs : search).call(name, checked.args, options);
             } catch (error) { return { ok: false, content: String(error), errorKind: 'runtime' }; }

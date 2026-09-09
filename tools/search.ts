@@ -52,7 +52,7 @@ export class SearchToolRuntime implements IToolRuntime {
 
     tools(): ToolDefinition[] {
         return structuredClone(DEFINITIONS).map(tool => ({ ...tool,
-            description: `${tool.description} Respects .gitignore and excludes dependency/build/cache directories and common credential files by default; include_ignored overrides this. Hidden configuration is searchable; .git is always excluded. Output is bounded to ${this.maxOutputBytes} bytes. Truncated results require a narrower pattern/path. Oversized context is omitted with a notice; use fs_read for source lines. Files over 1 MiB are skipped.`,
+            description: `${tool.description} Respects .gitignore and excludes dependency/build/cache directories and common credential files by default; include_ignored overrides this. Hidden configuration is searchable; .git is always excluded. Output is bounded to ${this.maxOutputBytes} bytes. Truncated results require a narrower pattern/path. Matching lines come first; context uses remaining space. Omitted context and clipped long lines have notices; use fs_read for source lines. Files over 1 MiB are skipped.`,
         }))
     }
 

@@ -962,3 +962,29 @@ roles from a local session composition.
 Custom context strategies own their system instruction and lifecycle. Per-request
 system overrides remain available for maintenance requests. Pinned deterministic status messages are protected separately and do not consume
 the recent-conversation allowance. Storage, scheduling and request admission remain driver work.
+
+### Search evidence and explicit change review
+
+Coding search allocates its bounded page to matching lines first, then surrounding
+context. Notices distinguish omitted matches, omitted context and clipped long
+lines; `fs_read` retrieves source text. Result counts describe returned matching
+lines, not context lines, and reaching a result limit alone is not an omission.
+
+The shared coding composition includes `review_changes({ base?: string })` for
+Git workspaces with an existing commit. It compares the tracked working tree
+(including staged and unstaged edits) with the resolved base, defaulting to HEAD.
+It returns compact ordinary and whitespace-ignored statistics, lists non-ignored
+untracked paths separately, and saves the tracked patch through the existing
+`read_output` store. Untracked contents are excluded; inspect them with `fs_read`.
+Reviews exceeding the 8 MiB capture boundary fail explicitly. Git observations
+are sequential, so callers should avoid concurrent edits during review.
+Git can invoke repository-configured filters and filesystem-monitor hooks. The
+helper therefore requires command-execution authorization and is excluded from
+the read-only coding preset, just like shell execution.
+
+Whitespace-ignored differences are a textual aid, not proof of formatting-only or
+behavior-preserving changes. A diff cannot establish visual quality, factual
+accuracy or fulfillment of a task; source review and appropriate checks remain
+necessary. The helper adds no completion loop or policy to the empty harness.
+The coding extension identity changes; active sessions require their original
+composition. Existing session data is not migrated or discarded.

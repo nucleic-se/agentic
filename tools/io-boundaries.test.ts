@@ -195,6 +195,43 @@ it('validates search output ceilings without changing other instances', () => {
     expect(new SearchToolRuntime(root).tools()[0].description).toContain('262144')
 })
 
+it('prioritizes distant matches over context under long paths and a small byte budget', async () => {
+    const directory = 'reference/' + 'source-'.repeat(12)
+    await mkdir(join(root, directory), { recursive: true })
+    const file = directory + '/host.ts'
+    const lines = Array.from({ length: 310 }, () => 'surrounding source '.repeat(4))
+    lines[5] = 'import { validateOperationResolution } from "./resolution.js"'
+    lines[290] = 'validateOperationResolution(operation, result)'
+    await writeFile(join(root, file), lines.join('\n'))
+    const result = await new SearchToolRuntime(root, { maxOutputBytes: 4000 }).call('search_grep', {
+        path: file, pattern: 'validateOperationResolution', context_lines: 8, max_results: 10,
+    })
+    expect(result).toMatchObject({ ok: true, data: { count: 2, truncated: false, contextOmitted: true } })
+    expect(result.content).toContain(`${file}:6: ${lines[5]}`)
+    expect(result.content).toContain(`${file}:291: ${lines[290]}`)
+    expect(result.content).toContain('use fs_read')
+    expect(Buffer.byteLength(result.content)).toBeLessThanOrEqual(4000)
+})
+
+it('counts adjacent matching lines once and reports only actual result omissions', async () => {
+    await writeFile(join(root, 'adjacent'), 'before\nhit one\nhit two\nafter')
+    const runtime = new SearchToolRuntime(root)
+    const result = await runtime.call('search_grep', { pattern: 'hit', context_lines: 2, max_results: 2 })
+    expect(result.data).toMatchObject({ count: 2, truncated: false, contextOmitted: false })
+    expect(result.content.match(/hit one/g)).toHaveLength(1)
+    expect(result.content.match(/hit two/g)).toHaveLength(1)
+    expect((await runtime.call('search_grep', { pattern: 'hit', max_results: 1 })).data).toMatchObject({ count: 1, truncated: true })
+})
+
+it('clips long Unicode lines at complete code points and discloses source clipping', async () => {
+    await writeFile(join(root, 'unicode'), 'needle' + 'x'.repeat(493) + '🌱 remainder')
+    const result = await new SearchToolRuntime(root).call('search_grep', { pattern: 'needle' })
+    expect(result.content).not.toMatch(/[\uD800-\uDFFF\uFFFD]/)
+    expect(result.content).toContain('…')
+    expect(result.content).toContain('use fs_read')
+    expect(result.data).toMatchObject({ count: 1, truncated: false, linesClipped: true })
+})
+
 it.skipIf(process.platform === 'win32')('rejects a FIFO without waiting for a writer', () => {
     expect(spawnSync('mkfifo', [join(root, 'pipe')]).status).toBe(0)
     // A subprocess timeout contains a regression in blocking open/read.
