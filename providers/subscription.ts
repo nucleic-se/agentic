@@ -42,6 +42,18 @@ function annotations(content: NativeMessage['content']): JsonValue {
     });
 }
 
+/** Generated reasoning is a replay-cost proxy, not measured input occupancy. */
+function continuationTokens(message: NativeMessage): number | undefined {
+    const visible = Math.ceil(message.content.reduce((total, block) =>
+        total + (block.type === 'thinking' ? block.thinking.length : 0), 0) / 4);
+    if ((message.usage.reasoning ?? 0) > 0) return Math.max(message.usage.reasoning!, visible);
+    // The backend maps missing reasoning usage to zero. Opaque state still has unknown cost.
+    const opaque = message.content.some(block => block.type === 'thinking'
+        ? block.thinkingSignature || block.redacted
+        : block.type === 'toolCall' && block.thoughtSignature);
+    return opaque ? undefined : visible;
+}
+
 function restore(message: AssistantMessage, data: JsonValue): NativeMessage['content'] {
     const invalid = () => new LLMProtocolError('Invalid subscription continuation annotations');
     if (!Array.isArray(data)) throw invalid();
@@ -171,6 +183,8 @@ export class SubscriptionProvider implements ILLMProvider {
         const message: AssistantMessage = { role: 'assistant', content: native.content.flatMap(block => block.type === 'text' ? [block.text] : []).join(''),
             ...(calls.length ? { toolCalls: calls } : {}) };
         message.continuation = createContinuation(message, format, this.#identity, annotations(native.content));
+        const estimatedInputTokens = continuationTokens(native);
+        if (estimatedInputTokens !== undefined) message.continuation.estimatedInputTokens = estimatedInputTokens;
         return { message, usage: measured, stopReason: native.stopReason === 'toolUse' ? 'tool_use' : native.stopReason === 'length' ? 'max_tokens' : 'end_turn', responseId: native.responseId };
     }
 

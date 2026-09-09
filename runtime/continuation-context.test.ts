@@ -15,3 +15,19 @@ it('budgets continuation and preserves it atomically with its message', async ()
     expect(dropped.messages).toEqual([]);
     expect(message.continuation.data).toEqual({ opaque: 'x'.repeat(1000) });
 });
+
+it.each([0, 37])('counts the adapter estimate %i without changing replay state', async tokens => {
+    const message: AssistantMessage = { role: 'assistant', content: 'Done' };
+    const plain = estimateContextTokens({ messages: [message] }).totalTokens;
+    message.continuation = { ...createContinuation(message, 'fixture/v1', 'backend', { signature: 'x'.repeat(10000) }), estimatedInputTokens: tokens };
+    const restored = JSON.parse(JSON.stringify(message));
+    expect(estimateContextTokens({ messages: [restored] }).totalTokens).toBe(plain + tokens);
+    const context = await composeAgentContext({ messages: [restored], tokenBudget: plain + tokens });
+    expect(context.messages).toEqual([message]);
+});
+
+it.each([-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])('rejects invalid continuation estimate %s', tokens => {
+    const message: AssistantMessage = { role: 'assistant', content: 'Done' };
+    message.continuation = { ...createContinuation(message, 'fixture/v1', 'backend', {}), estimatedInputTokens: tokens };
+    expect(() => estimateContextTokens({ messages: [message] })).toThrow('continuation.estimatedInputTokens');
+});

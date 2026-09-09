@@ -13,10 +13,17 @@ invalidates the state; adapters must not restore stale content over those edits.
 Store annotations only, without duplicating visible text, arguments or history.
 
 Context composition retains or drops continuation with its assistant message and
-includes its serialized size in the token estimate. This is a conservative
-heuristic, especially for encrypted annotations, not a backend tokenizer. Session
-stores preserve it as ordinary JSON. A backend without a matching decoder can
-still consume the visible message.
+uses an adapter's optional `estimatedInputTokens` for its additional context cost,
+excluding visible text and tool calls already counted. Estimates must be nonnegative
+safe integers. Missing estimates fall back to serialized size. Neither method is a
+backend tokenizer or a guaranteed bound; usage receipts remain unchanged.
+
+The subscription adapter uses positive reported reasoning tokens or a larger visible
+thinking estimate as a replay-cost proxy. With opaque reasoning and missing or zero
+reasoning usage it leaves the estimate unknown. Signatures remain intact. Session
+stores preserve the estimate and annotations as ordinary JSON. A backend without a
+matching decoder still consumes the visible message; the unused estimate may then
+overstate its context cost.
 
 `TurnResponse.responseId` and `TurnRequest.previousResponseId` provide optional,
 opaque provider continuation. The generic OpenAI-compatible adapter forwards

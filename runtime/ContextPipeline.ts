@@ -94,10 +94,12 @@ export function estimateContextTokens(
         if (message.role === 'assistant' && message.toolCalls?.length) {
             messageTokens += count(counter.countTokens(JSON.stringify(message.toolCalls)));
         }
-        // Opaque protocol annotations occupy context too. Counting their serialized
-        // representation is a conservative heuristic, not a provider tokenizer.
+        // Let adapters estimate opaque state; ciphertext length is not model occupancy.
+        // Unknown encodings retain the serialized heuristic.
         if (message.role === 'assistant' && message.continuation) {
-            messageTokens += count(counter.countTokens(JSON.stringify(message.continuation)));
+            messageTokens += message.continuation.estimatedInputTokens === undefined
+                ? count(counter.countTokens(JSON.stringify(message.continuation)))
+                : integer(message.continuation.estimatedInputTokens, 'continuation.estimatedInputTokens');
         }
         if (message.role === 'tool_result') {
             messageTokens += count(counter.countTokens(JSON.stringify({ toolCallId: message.toolCallId,

@@ -71,6 +71,9 @@ export interface ProviderContinuation {
     contentHash: string
     /** Protocol annotations only; do not duplicate the visible message or transcript. */
     data: JsonValue
+    /** Adapter estimate of additional input context beyond visible text/tool calls.
+     * Advisory, not billable usage or a guaranteed bound. Missing uses serialized fallback. */
+    estimatedInputTokens?: number
 }
 
 export interface ToolResultMessage {
