@@ -563,14 +563,19 @@ confirm mutation arguments.
 The coding pack generates advertised argument schemas from the same Zod schemas
 used for validation, including search limits and mode-specific read constraints.
 Search accepts an omitted or empty path for the workspace root; directory listing
-also accepts an empty root path. Coding extension
-version 14 changes the persisted composition identity; active sessions require
+also accepts an empty root path. Search paths
+and shell `cwd` accept an empty string for the workspace root. Coding extension
+version 17 changes the persisted composition identity; active sessions require
 their original composition, or a fresh session under the new revision.
 
 `fs_read` supports numbered line pages by default and exact UTF-8 byte pages with
 `mode: "bytes"`. Byte offsets are zero-based, with a 16,000-byte maximum page;
 partial UTF-8 characters are left for the next page. Both modes reject malformed
 text. Directory enumeration streams entries and stops at the shared 200-item cap.
+With no explicit encoding, supported image files become native image tool results.
+The same result blocks pass through context assembly, session storage and provider
+adapters; compositions do not need a separate image tool. Original image bytes are
+bounded at 5 MiB and remain unchanged. Image pagination is rejected explicitly.
 
 ### Project instructions
 

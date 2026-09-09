@@ -91,7 +91,7 @@ const schemas: Record<string, z.ZodType<Record<string, unknown>>> = {
     fs_patch: z.object({ path: filePath, patches: z.array(z.object({ search: z.string().min(1), replace: z.string() }).strict()).min(1).max(100) }).strict(),
     search_grep: z.object({ include_ignored: includeIgnored, pattern: z.string().min(1).max(4096).describe('Regex by default; set literal: true to search for exact text.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.'), include: z.string().optional(), case_sensitive: z.boolean().optional(), literal: z.boolean().optional().describe('Treat pattern as literal text instead of regex. Default: false.'), context_lines: z.number().int().min(0).max(10).optional(), max_results: z.number().int().min(1).max(100).optional(), output: z.enum(['content', 'files_only', 'count']).optional() }).strict(),
     search_find: z.object({ include_ignored: includeIgnored, pattern: z.string().min(1).describe('Glob pattern, for example **/*.ts.'), path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.') }).strict(),
-    shell_run: z.object({ command: z.string().min(1), cwd: filePath.optional(), timeout_ms: z.number().int().min(1).max(120000).optional(), env: z.record(z.string(), z.string()).optional() }).strict(),
+    shell_run: z.object({ command: z.string().min(1), cwd: searchPath.optional(), timeout_ms: z.number().int().min(1).max(120000).optional(), env: z.record(z.string(), z.string()).optional() }).strict(),
 };
 
 function confined(root: string, target: string): string {

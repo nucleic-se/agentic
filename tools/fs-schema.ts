@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 export const workspaceFilePath = z.string().min(1).describe('Path relative to the workspace, or an absolute path inside it.');
 export const fsReadSchema = z.union([
-    z.object({ path: workspaceFilePath, encoding: z.literal('utf8').optional(), mode: z.literal('lines').optional(),
+    z.object({ path: workspaceFilePath, encoding: z.literal('utf8').optional().describe('Force UTF-8 text. Omit to return supported images as native attachments.'), mode: z.literal('lines').optional(),
         offset: z.number().int().min(1).optional().describe('First line, numbered from 1. Default: 1.'),
         limit: z.number().int().positive().optional().describe('Maximum lines. Default: 200; byte ceiling still applies.') }).strict(),
     z.object({ path: workspaceFilePath, encoding: z.literal('utf8').optional(), mode: z.literal('bytes'),

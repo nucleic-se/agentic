@@ -354,7 +354,16 @@ interface ToolCallOptions {
 | `WebToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
 | `SkillToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
 
-`FsToolRuntime.fs_read` reads regular files only, with a default 256 KiB output ceiling.
+`FsToolRuntime.fs_read` reads regular files only. With no explicit encoding, PNG,
+JPEG, GIF and WebP signatures produce native image attachments, up to 5 MiB of
+original file bytes. Image reads reject pagination; they do not resize or decode
+the file. Container detection is not image validation: decoding and format support
+belong to the provider. Use an image-capable model and resize larger captures
+before reading them. Base64 stays in `contentBlocks`, outside the text caption.
+Context accounting uses its configurable image estimate, not base64 text length;
+actual image token usage remains provider-dependent.
+
+Text reads have a default 256 KiB output ceiling.
 `new FsToolRuntime(root, { textPageBytes })` configures UTF-8 page size between
 256 bytes and 256 KiB, including numbering and the continuation marker.
 UTF-8 reads default to 200 numbered lines starting at line 1. Use search to locate

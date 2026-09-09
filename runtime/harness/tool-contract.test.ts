@@ -7,6 +7,17 @@ import { codingToolRuntime } from '../../dist/runtime/harness/defaults.js';
 import { CompositeToolRuntime } from '../../tools/composite.js';
 import { executeToolBatch } from '../ToolBatchExecutor.js';
 
+it('accepts an empty shell cwd as the confined workspace root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'shell-cwd-'));
+    try {
+        const runtime = codingToolRuntime(root);
+        const result = await runtime.call('shell_run', { command: 'pwd', cwd: '' });
+        expect(result).toMatchObject({ ok: true });
+        expect(result.content).toContain(root);
+        expect(runtime.validate('shell_run', { command: 'pwd', cwd: '..' }).ok).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 it('advertises coding limits and byte/line modes from the validation schemas', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tool-contract-'));
     try {

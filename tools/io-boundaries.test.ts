@@ -12,6 +12,51 @@ let base: string, root: string
 beforeEach(async () => { base = await mkdtemp(join(tmpdir(), 'agentic-io-test-')); root = join(base, 'root'); await mkdir(root) })
 afterEach(async () => { await rm(base, { recursive: true, force: true }) })
 
+it('returns native images through coding tools without putting base64 in text context', async () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nqAAAAAASUVORK5CYII=', 'base64')
+    // Detection follows bytes rather than the extension; explicit encodings retain their meaning.
+    await writeFile(join(root, 'capture.data'), png)
+    const runtime = codingToolRuntime(root, { readOnly: true })
+    const result = await runtime.call('fs_read', { path: 'capture.data' })
+    const image = { type: 'image', mimeType: 'image/png', data: png.toString('base64') }
+    expect(result).toMatchObject({ ok: true, contentBlocks: [{ type: 'text', text: result.content }, image] })
+    expect(result.content).not.toContain(png.toString('base64'))
+    const context = await composeAgentContext({ tokenBudget: 10000, messages: [
+        { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'fs_read', args: { path: 'capture.data' } }] },
+        { role: 'tool_result', toolCallId: 'read', ...result },
+    ] })
+    expect(context.messages[1]).toMatchObject({ contentBlocks: result.contentBlocks })
+    const encoded = await runtime.call('fs_read', { path: 'capture.data', encoding: 'base64' })
+    expect(encoded.content).toBe(png.toString('base64'))
+    expect(encoded.contentBlocks).toBeUndefined()
+    expect((await runtime.call('fs_read', { path: 'capture.data', encoding: 'utf8' })).ok).toBe(false)
+    expect((await runtime.call('fs_read', { path: 'capture.data', offset: 1 })).content).toContain('do not accept offset/limit')
+    await writeFile(join(root, 'source.png'), 'ordinary text')
+    expect((await runtime.call('fs_read', { path: 'source.png' })).content).toBe('1: ordinary text')
+})
+
+it('bounds image reads and retains file confinement and cancellation', async () => {
+    const oversized = Buffer.alloc(5 * 1024 * 1024 + 1)
+    Buffer.from('89504e470d0a1a0a', 'hex').copy(oversized)
+    await writeFile(join(root, 'large.png'), oversized)
+    const runtime = codingToolRuntime(root)
+    expect(await runtime.call('fs_read', { path: 'large.png' })).toMatchObject({ ok: false, content: expect.stringContaining('Resize the image') })
+    await symlink(join(root, 'large.png'), join(root, 'linked.png'))
+    expect((await runtime.call('fs_read', { path: 'linked.png' })).ok).toBe(false)
+    expect((await runtime.call('fs_read', { path: '../outside.png' })).ok).toBe(false)
+    expect(await runtime.call('fs_read', { path: 'large.png' }, { signal: AbortSignal.abort() })).toMatchObject({ ok: false, errorKind: 'cancelled' })
+})
+
+it.each([
+    ['ffd8ffe000104a464946', 'image/jpeg'],
+    ['47494638396101000100', 'image/gif'],
+    ['524946461000000057454250', 'image/webp'],
+])('recognizes the %s image container without decoding it', async (header, mimeType) => {
+    await writeFile(join(root, 'image'), Buffer.from(header, 'hex'))
+    const result = await codingToolRuntime(root).call('fs_read', { path: 'image' })
+    expect(result).toMatchObject({ ok: true, contentBlocks: [expect.anything(), { type: 'image', mimeType }] })
+})
+
 it('matches globstar directories at zero or multiple depths in find and grep', async () => {
     await mkdir(join(root, 'src', 'nested'), { recursive: true })
     const names = ['ledger-1.json', 'src/ledger-2.json', 'src/nested/ledger-3.json']

@@ -20,6 +20,7 @@ import type { IToolRuntime, ToolCallResult, ToolCallOptions } from '../contracts
 // ── Limits ────────────────────────────────────────────────────────────────────
 
 const MAX_READ_BYTES  = 256 * 1024   // 256 KB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_WRITE_BYTES = 256 * 1024   // 256 KB
 const MAX_LIST_ITEMS  = 200
 
@@ -31,6 +32,15 @@ function ok(content: string, data?: unknown): ToolCallResult {
 
 function fail(content: string): ToolCallResult {
     return { ok: false, content }
+}
+
+/** Sniff supported containers; decoding and model support belong to the provider. */
+function imageMimeType(header: Buffer): string | undefined {
+    if (header.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return 'image/png'
+    if (header.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return 'image/jpeg'
+    if (['GIF87a', 'GIF89a'].includes(header.toString('ascii', 0, 6))) return 'image/gif'
+    if (header.toString('ascii', 0, 4) === 'RIFF' && header.toString('ascii', 8, 12) === 'WEBP') return 'image/webp'
+    return undefined
 }
 
 function resolve(root: string, filePath: string): string {
@@ -56,13 +66,13 @@ function withinRoot(root: string, abs: string): boolean {
 const DEFINITIONS: ToolDefinition[] = [
     {
         name:        'fs_read',
-        description: 'Read a regular file, with a 256 KiB output ceiling. UTF-8 reads return numbered lines, defaulting to 200 lines. Use search_grep to locate relevant code, then offset/limit for focused reads; truncated ranges include nextOffset. A single oversized line is rejected. totalLines is available only after EOF.',
+        description: 'Read a regular file. By default PNG, JPEG, GIF and WebP files are returned as native image attachments (up to 5 MiB, unchanged; requires an image-capable model). Images do not accept offset/limit. Explicit encoding selects text instead. Text has a 256 KiB output ceiling; UTF-8 reads return numbered lines, defaulting to 200 lines. Use search_grep to locate relevant code, then offset/limit for focused reads; truncated ranges include nextOffset. A single oversized line is rejected. totalLines is available only after EOF.',
         parameters: {
             type: 'object',
             required: ['path'],
             properties: {
                 path:     { type: 'string', description: 'File path (relative to working root or absolute).' },
-                encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Encoding. Default: utf8.' },
+                encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'Force text encoding. Omit to detect supported images, otherwise UTF-8.' },
                 mode:     { type: 'string', enum: ['lines', 'bytes'], description: 'Default: lines. Bytes mode reads exact UTF-8 text with zero-based byte offset and a byte limit up to 16000; returns JSON with nextOffset/eof. Use for long records.' },
                 offset:   { type: 'integer', description: 'Lines mode: 1-based line number, default 1. Bytes mode: zero-based byte position, default 0.' },
                 limit:    { type: 'integer', description: 'Lines mode: maximum lines, default 200. Bytes mode: maximum bytes, default and maximum 16000.' },
@@ -170,6 +180,13 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
         file = await open(abs, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW)
         const stat = await file.stat()
         if (!stat.isFile()) return fail('Not a regular file')
+        let mimeType: string | undefined
+        if (args.encoding === undefined && mode === 'lines') {
+            const header = Buffer.alloc(12)
+            const { bytesRead } = await file.read(header, 0, header.length, 0)
+            mimeType = imageMimeType(header.subarray(0, bytesRead))
+            if (mimeType && hasLineRange) return fail('Image reads do not accept offset/limit; omit them to receive the image')
+        }
         if (mode === 'bytes') {
             const page = Buffer.alloc(limit)
             const { bytesRead } = await file.read(page, 0, limit, offset)
@@ -182,8 +199,9 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
             return ok(JSON.stringify({ bytes: stat.size, offset, bytesRead: consumed, nextOffset, eof: nextOffset >= stat.size, content }))
         }
         const buffer = Buffer.alloc(8192)
-        if (encoding === 'base64') {
-            if (stat.size > MAX_READ_BYTES) return fail(`File too large: ${stat.size} bytes (max ${MAX_READ_BYTES}). Use offset/limit to read a line range.`)
+        if (encoding === 'base64' || mimeType) {
+            const maxBytes = mimeType ? MAX_IMAGE_BYTES : MAX_READ_BYTES
+            if (stat.size > maxBytes) return fail(`File too large: ${stat.size} bytes (max ${maxBytes}). ${mimeType ? 'Resize the image before reading.' : 'Use offset/limit to read a line range.'}`)
             const chunks: Buffer[] = []
             let bytes = 0
             while (true) {
@@ -191,10 +209,16 @@ async function handleRead(root: string, args: Record<string, unknown>, textPageB
                 const { bytesRead } = await file.read(buffer, 0, buffer.length, null)
                 if (!bytesRead) break
                 bytes += bytesRead
-                if (bytes > MAX_READ_BYTES) return fail('File grew beyond read limit')
+                if (bytes > maxBytes) return fail('File grew beyond read limit')
                 chunks.push(Buffer.from(buffer.subarray(0, bytesRead)))
             }
-            const content = Buffer.concat(chunks).toString(encoding)
+            const content = Buffer.concat(chunks).toString('base64')
+            if (mimeType) {
+                const caption = `Image: ${filePath} (${mimeType}, ${bytes} bytes)`
+                return { ok: true, content: caption, contentBlocks: [
+                    { type: 'text', text: caption }, { type: 'image', mimeType, data: content },
+                ], data: { path: abs, bytes, mimeType } }
+            }
             if (Buffer.byteLength(content) > MAX_READ_BYTES) return fail('Encoded file exceeds output limit; use a UTF-8 line range')
             return ok(content, { path: abs, bytes: stat.size })
         }
@@ -394,7 +418,7 @@ export class FsToolRuntime implements IToolRuntimeWithMeta {
 
     tools(): ToolDefinition[] {
         const definitions = structuredClone(DEFINITIONS)
-        definitions[0].description = `Read a regular file. UTF-8 pages contain complete numbered lines, up to ${this.textPageBytes} bytes including the continuation marker and at most 200 lines by default. Follow nextOffset for the next page; offset/limit select lines. A single line larger than the page is rejected. totalLines is available only after EOF. Base64 reads return the complete encoding, at most 256 KiB of encoded output; ranges require UTF-8.`
+        definitions[0].description = `Read a regular file. By default PNG, JPEG, GIF and WebP files become native image attachments (up to 5 MiB, unchanged; requires an image-capable model). Image reads reject offset/limit. Explicit encoding selects text instead. UTF-8 pages contain complete numbered lines, up to ${this.textPageBytes} bytes including the continuation marker and at most 200 lines by default. Follow nextOffset for the next page; offset/limit select lines. A single line larger than the page is rejected. totalLines is available only after EOF. Base64 reads return the complete encoding, at most 256 KiB of encoded output; ranges require UTF-8.`
         for (const tool of definitions) {
             const schema = tool.name === 'fs_read' ? fsReadSchema : tool.name === 'fs_write' ? fsWriteSchema : undefined
             if (schema) tool.parameters = { ...z.toJSONSchema(schema), type: 'object' } as ToolDefinition['parameters']
