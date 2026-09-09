@@ -1,11 +1,25 @@
 import type { Message, ToolResultMessage } from '../contracts/llm.js';
 import type { ToolCallResult } from '../contracts/tool-runtime.js';
 
-/** Exact paging of host-owned text; offsets count UTF-16 code units. */
+function splitsSurrogatePair(text: string, index: number): boolean {
+    return /[\uD800-\uDBFF]/.test(text[index - 1] ?? '') && /[\uDC00-\uDFFF]/.test(text[index] ?? '');
+}
+
+/**
+ * Exact paging of host-owned text; offsets and limits count UTF-16 code units.
+ * Pages preserve complete code points in well-formed text. Reject interior-pair
+ * offsets and limits too small for the next code point rather than losing text.
+ */
 export function readTextPage(text: string, offset = 0, limit = 8000) {
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > text.length) throw new RangeError('Offset exceeds saved result or is invalid');
     if (!Number.isSafeInteger(limit) || limit < 1) throw new RangeError('Page limit must be a positive safe integer');
-    const content = text.slice(offset, offset + limit), nextOffset = offset + content.length;
+    if (splitsSurrogatePair(text, offset)) {
+        throw new RangeError('Offset is inside a surrogate pair');
+    }
+    let nextOffset = offset + Math.min(limit, text.length - offset);
+    if (splitsSurrogatePair(text, nextOffset)) nextOffset--;
+    if (nextOffset === offset && offset < text.length) throw new RangeError('Page limit is too small for the next code point');
+    const content = text.slice(offset, nextOffset);
     return { totalCharacters: text.length, offset, nextOffset, eof: nextOffset === text.length, content };
 }
 
@@ -35,9 +49,8 @@ export function projectToolOutput(text: string, reference: string, maxCharacters
     const room = maxCharacters - header.length - `\n[${text.length} UTF-16 code units omitted]\n`.length;
     if (room < 2) return null;
     let headEnd = Math.floor(room * 0.4), tailStart = text.length - (room - headEnd);
-    const splitsPair = (at: number) => /[\uD800-\uDBFF]/.test(text[at - 1] ?? '') && /[\uDC00-\uDFFF]/.test(text[at] ?? '');
-    if (splitsPair(headEnd)) headEnd--;
-    if (splitsPair(tailStart)) tailStart++;
+    if (splitsSurrogatePair(text, headEnd)) headEnd--;
+    if (splitsSurrogatePair(text, tailStart)) tailStart++;
     return header + text.slice(0, headEnd) + `\n[${tailStart - headEnd} UTF-16 code units omitted]\n` + text.slice(tailStart);
 }
 

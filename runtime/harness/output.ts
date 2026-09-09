@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { projectToolOutput } from '../ToolOutput.js';
+import { projectToolOutput, readTextPage } from '../ToolOutput.js';
 
 export const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
 const PREVIEW_CHARACTERS = 4000;
@@ -38,8 +38,7 @@ export class FileToolOutputStore {
             }
             const text = Buffer.concat(chunks).toString('utf8');
             if (offset > text.length) throw new Error('Offset exceeds saved output');
-            const content = text.slice(offset, offset + 4000), nextOffset = offset + content.length;
-            return { content, offset, nextOffset, eof: nextOffset === text.length, totalCharacters: text.length };
+            return readTextPage(text, offset, 4000);
         } finally { await file.close(); }
     }
 }

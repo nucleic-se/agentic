@@ -9,7 +9,9 @@ beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'agentic-output-tes
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
 it('recovers shell output beyond the old cap exactly after reopening, without repeating execution', async () => {
-    const expected = 'first error\n' + 'a'.repeat(70000) + '😀\nlast diagnostic\n';
+    // Place the astral character across a 4000-code-unit page boundary.
+    const prefix = 'first error\n';
+    const expected = prefix + 'a'.repeat(18 * 4000 - 1 - prefix.length) + '😀\nlast diagnostic\n';
     await writeFile(join(root, 'run.cjs'), `require('node:fs').appendFileSync('runs','1'); process.stdout.write(${JSON.stringify(expected)}); process.exitCode=1;`);
     const options = { outputDirectory: join(root, 'saved') };
     const runtime = codingToolRuntime(root, options);
@@ -24,6 +26,8 @@ it('recovers shell output beyond the old cap exactly after reopening, without re
         const read = await reopened.call('read_output', { id, offset });
         expect(read.ok).toBe(true);
         const page = JSON.parse(read.content);
+        expect(page.content.length).toBeLessThanOrEqual(4000);
+        expect(Buffer.from(page.content, 'utf8').toString('utf8')).toBe(page.content);
         restored += page.content;
         if (page.eof) break;
         expect(page.nextOffset).toBeGreaterThan(offset);
@@ -32,6 +36,7 @@ it('recovers shell output beyond the old cap exactly after reopening, without re
     expect(restored).toBe(expected);
     const { readFile } = await import('node:fs/promises');
     expect(await readFile(join(root, 'runs'), 'utf8')).toBe('1');
+    expect((await reopened.call('read_output', { id, offset: expected.indexOf('😀') + 1 })).ok).toBe(false);
     expect((await reopened.call('read_output', { id, offset: expected.length + 1 })).ok).toBe(false);
 });
 
