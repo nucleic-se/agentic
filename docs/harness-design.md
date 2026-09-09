@@ -920,3 +920,23 @@ capacity is metadata, not an exact token-counting guarantee. The assembler still
 reserves output within the ceiling, and durable execution can narrow each request
 further through `contextTokenBudget`. Context capacity does not increase task
 spending, call limits or deadlines.
+
+### Provider configuration identity
+
+`ILLMProvider.configurationIdentity` optionally identifies an adapter's effective,
+non-secret configuration. It stays stable for the provider instance. The default
+agent records the subscription adapter's identity in its provider extension;
+other compositions can use the same contract without importing that adapter.
+The generic empty harness still fingerprints the extensions supplied by its caller.
+
+The subscription identity includes provider/API, model, endpoint and effective
+reasoning effort. Omitted effort equals explicit `low`; trailing endpoint slashes
+are normalized consistently with transport. Credentials and observation callbacks
+are excluded. Opaque behavioral overrides, such as a custom transport callback,
+remain part of the caller's explicit composition contract.
+
+Configuration identity is distinct from continuation compatibility: an adapter
+may accept saved message annotations across an effort change while a durable
+composition correctly rejects that change to persisted execution settings.
+The provider extension revision changes with this contract. Existing active
+sessions require their original composition; no migration or silent reset occurs.

@@ -8,7 +8,11 @@ import { compositionFingerprint } from './composition.js';
 const construct = vi.hoisted(() => vi.fn());
 vi.mock('../../providers/subscription.js', () => ({ SubscriptionProvider: class {
     readonly capabilities = { contextWindowTokens: 272000 };
-    constructor(readonly options: unknown) { construct(options); }
+    readonly configurationIdentity: string;
+    constructor(readonly options: { model: string; reasoningEffort: string }) {
+        this.configurationIdentity = `${options.model}:${options.reasoningEffort}`;
+        construct(options);
+    }
 } }));
 
 it('configures reasoning without replacing the provider and preserves the default composition identity', async () => {
@@ -18,7 +22,7 @@ it('configures reasoning without replacing the provider and preserves the defaul
         const low = await defaultAgentExtensions({ workspace, reasoningEffort: 'low' });
         const medium = await defaultAgentExtensions({ workspace, model: 'gpt-5.6-sol', reasoningEffort: 'medium' });
         expect(compositionFingerprint(defaults)).toBe(compositionFingerprint(low));
-        expect(defaults.find(e => e.roles?.provider)?.configuration).toBeUndefined();
+        expect(defaults.find(e => e.roles?.provider)?.configuration).toBe('gpt-6-astra:low');
         const solLow = await defaultAgentExtensions({ workspace, model: 'gpt-5.6-sol' });
         expect(compositionFingerprint(solLow)).not.toBe(compositionFingerprint(medium));
         await medium.find(e => e.roles?.provider)!.roles!.provider!();

@@ -211,6 +211,13 @@ export interface ProviderRequestObservation {
 }
 
 export interface ILLMProvider {
+    /** Stable, non-secret identity of effective provider configuration for persistence.
+     * Include adapter-owned model, deployment and behavior settings; exclude credentials
+     * and observers. Callers must identify opaque behavioral overrides separately.
+     * Must remain stable for this instance. Omit when the adapter cannot describe its
+     * configuration; durable compositions then need a caller-owned identity.
+     * This is separate from compatibility of provider continuation data. */
+    readonly configurationIdentity?: string
     readonly capabilities?: Readonly<ProviderCapabilities>
     /**
      * Single-call structured completion without executing application tools.

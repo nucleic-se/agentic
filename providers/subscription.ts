@@ -95,6 +95,7 @@ function usage(value: NativeMessage['usage']): TokenUsage {
 /** Optional subscription backend. Requires Node >=22.19 and its optional provider dependency. */
 export class SubscriptionProvider implements ILLMProvider {
     readonly capabilities: Readonly<ProviderCapabilities>;
+    readonly configurationIdentity: string;
     readonly #options: SubscriptionProviderOptions;
     readonly #model: Model<'openai-codex-responses'>;
     readonly #identity: string;
@@ -102,17 +103,20 @@ export class SubscriptionProvider implements ILLMProvider {
     constructor(options: SubscriptionProviderOptions) {
         if (!options.model.trim()) throw new Error('A model is required');
         this.#options = { ...options };
-        const catalog = options.baseUrl === undefined || options.baseUrl.replace(/\/$/, '') === 'https://chatgpt.com/backend-api'
+        const baseUrl = (options.baseUrl ?? 'https://chatgpt.com/backend-api').replace(/\/+$/, '');
+        if (!baseUrl.trim()) throw new Error('baseUrl must be nonempty text');
+        const catalog = baseUrl === 'https://chatgpt.com/backend-api'
             ? OPENAI_CODEX_MODELS[options.model as keyof typeof OPENAI_CODEX_MODELS] : undefined;
         const capacity = catalog?.contextWindow;
         this.capabilities = Object.freeze({ transport: 'http-sse', toolBatching: true,
             outputLimit: 'advisory', automaticRetries: 0, continuation: 'message', requestObservation: 'decoded-wire',
             ...(capacity && Number.isSafeInteger(capacity) && capacity > 0 ? { contextWindowTokens: capacity } : {}) });
         this.#model = { id: options.model, name: options.model, provider: 'openai-codex', api: 'openai-codex-responses',
-            baseUrl: options.baseUrl ?? 'https://chatgpt.com/backend-api', reasoning: true, input: ['text', 'image'],
+            baseUrl, reasoning: true, input: ['text', 'image'],
             // Direct stream uses caller limits; these catalog fields are not admission policy.
             contextWindow: 0, maxTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
         this.#identity = hash([this.#model.provider, this.#model.api, this.#model.id, this.#model.baseUrl]);
+        this.configurationIdentity = hash([this.#identity, options.reasoningEffort ?? 'low']);
     }
 
     #context(request: TurnRequest): Context {

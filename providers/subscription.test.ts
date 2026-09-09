@@ -180,3 +180,38 @@ it.each([
     expect(requests[1]).toEqual(requests[2]);
     expect(JSON.stringify(requests[1])).toContain(signature);
 });
+
+it('identifies effective configuration without exposing credentials or evaluating callbacks', () => {
+    const plain = new SubscriptionProvider({ model: 'gpt-5.6-sol' });
+    const credentials = vi.fn(async () => 'private-token');
+    const observed = new SubscriptionProvider({ model: 'gpt-5.6-sol', reasoningEffort: 'low',
+        baseUrl: 'https://chatgpt.com/backend-api///', authFilePath: '/private/credentials', credentials, onRequest: vi.fn() });
+    expect(observed.configurationIdentity).toBe(plain.configurationIdentity);
+    expect(observed.capabilities).toEqual(plain.capabilities);
+    expect(credentials).not.toHaveBeenCalled();
+    expect(plain.configurationIdentity).toMatch(/^[a-f0-9]{64}$/);
+    const options = { model: 'gpt-5.6-sol', reasoningEffort: 'medium' as const };
+    const configured = new SubscriptionProvider(options);
+    options.model = 'gpt-5.6-terra';
+    expect(configured.configurationIdentity).toBe(new SubscriptionProvider({ model: 'gpt-5.6-sol', reasoningEffort: 'medium' }).configurationIdentity);
+    for (const provider of [
+        new SubscriptionProvider({ model: 'gpt-5.6-terra' }),
+        configured,
+        new SubscriptionProvider({ model: 'gpt-5.6-sol', baseUrl: 'https://alternate.example/backend-api' }),
+    ]) expect(provider.configurationIdentity).not.toBe(plain.configurationIdentity);
+});
+
+it('keeps continuation compatibility separate from persisted configuration identity', async () => {
+    const options = { model: 'fixture', credentials: async () => token, fetch: async () => response(3) };
+    const low = new SubscriptionProvider({ ...options, baseUrl: 'https://chatgpt.com/backend-api///' });
+    const medium = new SubscriptionProvider({ ...options, reasoningEffort: 'medium' });
+    expect(low.configurationIdentity).not.toBe(medium.configurationIdentity);
+    const first = await low.turn({ messages: [{ role: 'user', content: 'hello' }] });
+    const next = await medium.turn({ messages: [first.message, { role: 'user', content: 'continue' }] });
+    expect(next.message.continuation?.identity).toBe(first.message.continuation?.identity);
+    expect(next.message.content).toBe('OK');
+});
+
+it.each(['', ' ', '///'])('rejects an empty effective endpoint (%s)', baseUrl => {
+    expect(() => new SubscriptionProvider({ model: 'fixture', baseUrl })).toThrow('baseUrl must be nonempty');
+});
