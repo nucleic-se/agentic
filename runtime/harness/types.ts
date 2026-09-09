@@ -122,6 +122,8 @@ export interface ContextStrategy {
     assemble(messages: Message[], signal: AbortSignal, options?: {
         tools?: ToolDefinition[];
         reservedOutputTokens?: number;
+        /** Narrows the composition ceiling for this preparation; includes reserved output. */
+        tokenBudget?: number;
         /** Overrides the normal system instruction and must participate in budgeting. */
         system?: string;
     }): Promise<{ system?: string; messages: Message[]; report?: ContextReport }>;

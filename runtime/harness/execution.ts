@@ -7,16 +7,19 @@ import { executionSignal } from '../ExecutionOptions.js';
 import type { ContextStrategy } from './types.js';
 
 export interface HarnessExecutionRoles { provider: ILLMProvider; context: ContextStrategy }
-export interface HarnessModelOptions extends ModelTurnOptions {
+export interface HarnessDispatchOptions extends ModelTurnOptions {
     /** Awaited before intent/admission; observations cannot alter the selected request. */
     onPrepared?(report: ContextReport | undefined): void | Promise<void>;
 }
+export interface HarnessModelOptions extends HarnessPreparationOptions, HarnessDispatchOptions {}
 /** An execution-owned preparation. Inspection returns copies; dispatch uses its original snapshot. */
 export interface PreparedHarnessModel {
     readonly request: TurnRequest;
     readonly report?: ContextReport;
 }
 export interface HarnessPreparationOptions extends ModelTurnOptions {
+    /** Per-request estimated context ceiling, including reserved output. Requires accounting. */
+    contextTokenBudget?: number;
     /** Reject a context strategy that removes or rewrites any supplied source message. */
     preserveMessages?: boolean;
 }
@@ -50,9 +53,12 @@ export function createHarnessExecution(roles: HarnessExecutionRoles) {
         try {
             signal.throwIfAborted();
             const source = structuredClone(request);
+            const ceiling = options.contextTokenBudget;
+            if (ceiling !== undefined && (!Number.isSafeInteger(ceiling) || ceiling < 1)) throw new RangeError('contextTokenBudget must be a positive safe integer');
             if (source.maxTokens !== undefined && (!Number.isSafeInteger(source.maxTokens) || source.maxTokens < 1)) throw new RangeError('maxTokens must be a positive safe integer');
             const context = await roles.context.assemble(structuredClone(source.messages), signal, {
                 tools: structuredClone(source.tools ?? []),
+                ...(ceiling === undefined ? {} : { tokenBudget: ceiling }),
                 ...(source.system === undefined ? {} : { system: source.system }),
                 ...(source.maxTokens === undefined ? {} : { reservedOutputTokens: source.maxTokens }),
             });
@@ -63,6 +69,8 @@ export function createHarnessExecution(roles: HarnessExecutionRoles) {
             if (options.preserveMessages && !isDeepStrictEqual(source.messages, context.messages))
                 throw new Error('Context strategy changed protected source messages');
             validateReport(context.report, source.maxTokens ?? 0);
+            if (ceiling !== undefined && (!context.report || context.report.usage.totalTokens > ceiling))
+                throw new Error('Context strategy must report usage within the requested context token budget');
             // An opaque provider continuation can retain history the local selector never counted.
             if (context.report && source.previousResponseId) throw new Error('Budgeted context cannot account for opaque provider continuation history');
             const snapshot = structuredClone({ request: { ...source, system: context.system, messages: context.messages }, report: context.report });
@@ -74,7 +82,7 @@ export function createHarnessExecution(roles: HarnessExecutionRoles) {
             return prepared;
         } finally { dispose(); }
     }
-    async function dispatchModel(prepared: PreparedHarnessModel, options: HarnessModelOptions = {}) {
+    async function dispatchModel(prepared: PreparedHarnessModel, options: HarnessDispatchOptions = {}) {
         const { signal, dispose } = executionSignal(options);
         try {
             signal.throwIfAborted();

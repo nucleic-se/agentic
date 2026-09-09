@@ -88,3 +88,47 @@ it('allows alternative strategies to omit group estimates without inventing zero
     await execution.dispatchModel(prepared);
     expect(turn).toHaveBeenCalledTimes(1);
 });
+
+it('rejects invalid request ceilings before invoking a strategy or provider', async () => {
+    const { execution, assemble, turn } = fixture();
+    for (const contextTokenBudget of [0, -1, NaN, Infinity, 1.5]) {
+        await expect(execution.model({ messages: [] }, { contextTokenBudget })).rejects.toThrow('positive safe integer');
+    }
+    expect(assemble).not.toHaveBeenCalled();
+    expect(turn).not.toHaveBeenCalled();
+});
+
+it('requires accounting within an explicit request ceiling before admission', async () => {
+    const { execution, turn } = fixture();
+    const onIntent = vi.fn();
+    await expect(execution.model({ messages: [] }, { contextTokenBudget: 100, onIntent })).rejects.toThrow('must report usage');
+    const counted = createHarnessExecution({
+        provider: { turn, structured: async () => { throw new Error('unused'); } },
+        context: { assemble: async messages => ({ messages, report: { decisions: [], usage: {
+            systemTokens: 0, messageTokens: 101, toolTokens: 0, schemaTokens: 0, reservedOutputTokens: 0, totalTokens: 101,
+        } } }) },
+    });
+    await expect(counted.model({ messages: [] }, { contextTokenBudget: 100, onIntent })).rejects.toThrow('must report usage');
+    expect(onIntent).not.toHaveBeenCalled();
+    expect(turn).not.toHaveBeenCalled();
+});
+
+it('narrows budgeted preparation without enlarging or changing the composition ceiling', async () => {
+    const { budgetedContext } = await import('./defaults.js');
+    const { turn } = fixture();
+    const execution = createHarnessExecution({
+        context: budgetedContext('system', 1000),
+        provider: { turn, structured: async () => { throw new Error('unused'); } },
+    });
+    const request: TurnRequest = { messages: [{ role: 'user', content: 'task' }], maxTokens: 20 };
+    const narrowed = await execution.prepareModel(request, { contextTokenBudget: 100, preserveMessages: true });
+    expect(narrowed.report?.tokenBudget).toBe(100);
+    expect(narrowed.report!.usage.totalTokens).toBeLessThanOrEqual(100);
+    expect(narrowed.report!.usage.reservedOutputTokens).toBeGreaterThanOrEqual(20);
+    expect((await execution.prepareModel(request, { contextTokenBudget: 2000 })).report?.tokenBudget).toBe(1000);
+    expect((await execution.prepareModel(request)).report?.tokenBudget).toBe(1000);
+    await expect(execution.prepareModel(request, { contextTokenBudget: 1 })).rejects.toThrow();
+    await execution.dispatchModel(narrowed);
+    expect(turn).toHaveBeenCalledTimes(1);
+    expect(turn.mock.calls[0][0]).not.toHaveProperty('contextTokenBudget');
+});

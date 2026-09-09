@@ -169,3 +169,20 @@ it('does not turn cancellation or preparation failures into checkpoint repair', 
         prepareModel: async () => { throw error; },
     })).rejects.toBe(error);
 });
+
+it('uses the same narrowed preparation boundary for maintenance and repair', async () => {
+    const { request, execution } = fixture();
+    const lifecycle = checkpointContextLifecycle({ maxTokens: 64, triggerRatio: 0.8 });
+    const bounded = {
+        prepareModel: (request: Parameters<typeof execution.prepareModel>[0], options: Parameters<typeof execution.prepareModel>[1]) =>
+            execution.prepareModel(request, { ...options, contextTokenBudget: 2800 }),
+    };
+    const first = await lifecycle.prepare({ request }, bounded) as ContextMaintenance;
+    expect(first.kind).toBe('maintenance');
+    expect(first.prepared.report?.tokenBudget).toBe(2800);
+    const rejected = first.reduce({ ...response('incomplete draft'), stopReason: 'max_tokens' });
+    const repair = await lifecycle.prepare({ request, state: rejected.state }, bounded);
+    expect(repair.kind).toBe('maintenance');
+    expect(repair.prepared.report?.tokenBudget).toBe(2800);
+    expect(repair.prepared.request.system).toMatch(/^Repair/);
+});

@@ -895,3 +895,13 @@ conservatively. A group containing both kinds is lossy. Custom compositions may
 still opt into an elective `triggerRatio`; the default has no elective threshold.
 This keeps presentation separate from generated memory while preserving original
 receipts and charging every maintenance call to the run allowance.
+
+
+Per-request context capacity can be supplied as
+`prepareModel(request, { contextTokenBudget })` (or through `model`).
+The ceiling includes instructions, tool schemas, selected messages and reserved
+output. Budgeted strategies use the smaller of this value and their configured
+ceiling. An explicit ceiling requires consistent accounting within that ceiling;
+unsupported strategies fail before admission. Durable drivers can apply the same
+preparation options to task, maintenance and repair requests. This is estimated
+request capacity, not a guarantee of provider usage or eventual task completion.
