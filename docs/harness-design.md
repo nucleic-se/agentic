@@ -635,6 +635,12 @@ marked `sticky` also remain verbatim, in source order and without duplication.
 Pinned instructions still consume context budget; summaries cannot silently remove
 them to make a request fit.
 
+Checkpoint and repair requests carry pinned nonhuman user messages as
+`pinnedEvidence`, retaining their source index and provenance. They stay separate
+from original human requirements, including when the current source chunk starts
+after them. Delegated task intent remains exact evidence without being relabeled
+as a human instruction.
+
 `WorkingCheckpoint` stores `through` (exclusive end of complete source groups) and
 `text`. An oversized group adds `partial: { end, offset }`: progress into the
 UTF-16 JSON representation of indexed evidence `[through, end)`. Each maintenance

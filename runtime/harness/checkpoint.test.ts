@@ -381,3 +381,39 @@ it('defers elective maintenance of small prefixes while preserving evicted or pa
     const unknown = { ...task.report!, decisions: task.report!.decisions.map(({ tokens: _tokens, ...d }) => d) };
     expect((await prepareCheckpoint(execution, history, view, unknown, configuration))?.through).toBe(1);
 });
+
+it('keeps pinned delegated intent separate from human requirements across checkpoint chunks and repair', async () => {
+    const { createHarnessExecution } = await import('./execution.js');
+    const { budgetedContext } = await import('./defaults.js');
+    const { prepareCheckpoint, prepareCheckpointRepair } = await import('./checkpoint.js');
+    const history: Message[] = [
+        { role: 'user', provenance: 'model', sticky: true, content: 'Inspect the storage contract and report unresolved effects.' },
+        { role: 'user', provenance: 'human', content: 'Do not modify files.' },
+        { role: 'user', provenance: 'model', content: 'Unpinned peer speculation.' },
+        { role: 'assistant', content: 'source '.repeat(2500) },
+    ];
+    const original = structuredClone(history);
+    const previous = { through: 3, text: 'Earlier observations.' };
+    const expected = [{ index: 0, provenance: 'model', content: history[0].content }];
+    const view = checkpointView(history, previous);
+    expect(view.messages).toContainEqual(history[0]);
+    const request = checkpointRequest(history, 4, { previous, maxTokens: 100 });
+    expect(JSON.parse(request.messages[0].content)).toMatchObject({
+        requirements: [{ index: 1, content: 'Do not modify files.' }], pinnedEvidence: expected,
+    });
+    const execution = createHarnessExecution({ context: budgetedContext('', 6000), provider: {
+        turn: async () => { throw new Error('Preparation must not dispatch'); }, structured: async () => { throw new Error('unused'); },
+    } });
+    const partial = { ...previous, partial: { end: 4, offset: 1 } };
+    const chunkView = checkpointView(history, partial);
+    const task = await execution.prepareModel({ messages: chunkView.messages, maxTokens: 100 });
+    const chunk = await prepareCheckpoint(execution, history, chunkView, task.report!, { previous: partial, maxTokens: 100 });
+    const chunkInput = JSON.parse(chunk!.prepared.request.messages[0].content);
+    expect(chunkInput.pinnedEvidence).toEqual(expected);
+    expect(chunkInput.sourceChunk.offset).toBe(1);
+    const repaired = await prepareCheckpointRepair(execution, history, {
+        through: 4, text: 'Incomplete derived notes.', reason: 'incomplete', sourceRange: { start: 3, end: 4 },
+    }, { maxTokens: 100 });
+    expect(JSON.parse(repaired.prepared.request.messages[0].content).pinnedEvidence).toEqual(expected);
+    expect(history).toEqual(original);
+});
