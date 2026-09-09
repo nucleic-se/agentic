@@ -157,12 +157,12 @@ export function codingToolRuntime(workingRoot: string, options: {
     outputDirectory?: string;
     /** Exclude editing and command execution from both discovery and dispatch. */
     readOnly?: boolean;
-    /** Complete-line file page ceiling in bytes; defaults to 4000. Validated by FsToolRuntime. */
+    /** Complete-line file page ceiling in bytes; defaults to 16000. Validated by FsToolRuntime. */
     textPageBytes?: number;
 } = {}): IValidatedToolRuntime {
     const root = realpathSync(workingRoot);
     const outputStore = new FileToolOutputStore(options.outputDirectory ?? path.join(tmpdir(), 'agentic-output', createHash('sha256').update(root).digest('hex')));
-    const fs = new FsToolRuntime(root, { textPageBytes: options.textPageBytes ?? 4000 });
+    const fs = new FsToolRuntime(root, { textPageBytes: options.textPageBytes ?? 16000 });
     const search = new SearchToolRuntime(root, { maxOutputBytes: 4000 });
     const shell = new ShellToolRuntime(root);
     const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), {

@@ -23,7 +23,7 @@ export interface DefaultAgentOptions {
     memoryDatabase?: string;
     planning?: boolean;
     tokenBudget?: number;
-    /** Complete-line read page ceiling in bytes. Defaults to the coding pack's 4000. */
+    /** Complete-line read page ceiling in bytes. Defaults to the coding pack's 16000. */
     textPageBytes?: number;
     /** Exclude workspace edits and command execution from the coding toolset. */
     readOnly?: boolean;
@@ -51,7 +51,7 @@ export async function defaultAgentExtensions(options: DefaultAgentOptions): Prom
         { id: `provider.subscription.${model}`, version: '5.0.0', apiVersion: 1,
             ...(reasoningEffort === 'low' ? {} : { configuration: JSON.stringify({ reasoningEffort }) }),
             roles: { provider: async () => new (await import('../../providers/subscription.js')).SubscriptionProvider({ model, authFilePath: options.authFilePath, reasoningEffort }) } },
-        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null, textPageBytes: options.textPageBytes ?? 4000, readOnly: options.readOnly ?? false }), version: '14.0.0', apiVersion: 1,
+        { id: 'tools.coding', configuration: JSON.stringify({ workspace: options.workspace, outputDirectory: options.database ? `${options.database}.outputs` : null, memoryDatabase: options.memoryDatabase ?? null, textPageBytes: options.textPageBytes ?? 16000, readOnly: options.readOnly ?? false }), version: '15.0.0', apiVersion: 1,
             activate: async value => { client = value; },
             roles: { tools: async () => {
                 const coding = codingToolRuntime(options.workspace, { outputDirectory: options.database ? `${options.database}.outputs` : undefined, textPageBytes: options.textPageBytes, readOnly: options.readOnly });

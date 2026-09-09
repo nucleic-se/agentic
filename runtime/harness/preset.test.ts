@@ -10,11 +10,11 @@ it('configures source pages without replacing the default tool composition', asy
     try {
         await writeFile(join(workspace, 'source.ts'), Array.from({ length: 200 }, (_, i) => `line ${i}: ${'x'.repeat(50)}`).join('\n'));
         const defaults = await defaultAgentExtensions({ workspace });
-        const larger = await defaultAgentExtensions({ workspace, textPageBytes: 16000 });
-        expect(compositionFingerprint(defaults)).not.toBe(compositionFingerprint(larger));
-        expect(compositionFingerprint(defaults)).toBe(compositionFingerprint(await defaultAgentExtensions({ workspace, textPageBytes: 4000 })));
-        const small = await defaults.find(e => e.id === 'tools.coding')!.roles!.tools!();
-        const large = await larger.find(e => e.id === 'tools.coding')!.roles!.tools!();
+        const smaller = await defaultAgentExtensions({ workspace, textPageBytes: 4000 });
+        expect(compositionFingerprint(defaults)).not.toBe(compositionFingerprint(smaller));
+        expect(compositionFingerprint(defaults)).toBe(compositionFingerprint(await defaultAgentExtensions({ workspace, textPageBytes: 16000 })));
+        const small = await smaller.find(e => e.id === 'tools.coding')!.roles!.tools!();
+        const large = await defaults.find(e => e.id === 'tools.coding')!.roles!.tools!();
         expect(large.tools().map(t => t.name)).toEqual(small.tools().map(t => t.name));
         expect(await small.call('fs_read', { path: 'source.ts' })).toMatchObject({ ok: true, data: { truncated: true } });
         expect(await large.call('fs_read', { path: 'source.ts' })).toMatchObject({ ok: true, data: { linesReturned: 200, truncated: false } });

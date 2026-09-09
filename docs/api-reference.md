@@ -364,11 +364,12 @@ lines within that ceiling; truncated output names the next `offset`
 and includes `data.nextOffset`. A single line that cannot fit is rejected
 explicitly. `data.totalLines` is present only when the scan reaches EOF. Base64
 is supported for full reads, not line ranges. Reads check cancellation between
-asynchronous chunks. Since coding extension version 5, UTF-8 pages
-are bounded to 4,000 bytes so complete lines and their continuation cursor fit
-the harness's 4,000-character presentation cap. Larger `limit` values do not
-override the byte ceiling. An oversized individual line is rejected; use another
-tool or a composition with a larger page ceiling for that file.
+asynchronous chunks. The default coding pack bounds UTF-8 pages to 16,000 bytes,
+including complete lines and their continuation cursor. Compositions can choose
+`textPageBytes` independently of context selection; larger `limit` values do not
+override the byte ceiling. An oversized individual line is rejected; byte mode
+provides exact pages for that file. Context admission still applies to the whole
+request, with exact archived recovery for referenced previews.
 Older persisted sessions require their original composition.
 
 `SearchToolRuntime` accepts an explicit file or directory path in every output

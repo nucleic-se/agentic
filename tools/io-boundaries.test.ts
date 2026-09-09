@@ -40,14 +40,14 @@ it('returns complete coding read pages that survive context presentation unchang
     for (let page = 0; page < source.length; page++) {
         const result = await runtime.call('fs_read', { path: 'source.ts', offset, limit: 1000 })
         expect(result.ok).toBe(true)
-        expect(Buffer.byteLength(result.content)).toBeLessThanOrEqual(4000)
+        expect(Buffer.byteLength(result.content)).toBeLessThanOrEqual(16000)
         const data = result.data as { linesReturned: number; nextOffset?: number }
         expect(data.linesReturned).toBeGreaterThan(0)
         collected.push(...result.content.split('\n').slice(0, data.linesReturned).map(line => line.replace(/^\d+: /, '')))
         const context = await composeAgentContext({ tokenBudget: 16000, messages: [
             { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'fs_read', args: { path: 'source.ts', offset } }] },
             { role: 'tool_result', toolCallId: 'read', toolName: 'fs_read', content: result.content },
-        ] }, { maxToolResultCharacters: 4000, referenceToolResult: () => 'read_tool_result for original' })
+        ] }, { maxToolResultCharacters: 16000, referenceToolResult: () => 'read_tool_result for original' })
         expect(context.messages[1].content).toBe(result.content)
         if (data.nextOffset === undefined) break
         expect(data.nextOffset).toBe(offset + data.linesReturned)
@@ -234,8 +234,8 @@ it('pages default UTF-8 reads and reconstructs every line through continuation o
     expect(offset).toBeUndefined()
     expect(restored).toEqual(lines)
     const largerRange = await runtime.call('fs_read', { path: 'paged', limit: 500 })
-    expect(largerRange).toMatchObject({ ok: true, data: { truncated: true } })
-    expect(Buffer.byteLength(largerRange.content)).toBeLessThanOrEqual(4000)
+    expect(largerRange).toMatchObject({ ok: true, data: { linesReturned: 451, truncated: false } })
+    expect(Buffer.byteLength(largerRange.content)).toBeLessThanOrEqual(16000)
     expect(await new FsToolRuntime(root).call('fs_read', { path: 'paged', limit: 500 })).toMatchObject({ ok: true, data: { linesReturned: 451, truncated: false } })
 })
 

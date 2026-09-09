@@ -147,8 +147,8 @@ describe('default coding runtime', () => {
         try {
             const source = Array.from({ length: 100 }, (_, i) => `line ${i}: ${'x'.repeat(70)}`).join('\n');
             writeFileSync(join(root, 'source.txt'), source);
-            const small = await codingToolRuntime(root).call('fs_read', { path: 'source.txt' });
-            const large = await codingToolRuntime(root, { textPageBytes: 16000 }).call('fs_read', { path: 'source.txt' });
+            const small = await codingToolRuntime(root, { textPageBytes: 4000 }).call('fs_read', { path: 'source.txt' });
+            const large = await codingToolRuntime(root).call('fs_read', { path: 'source.txt' });
             expect(small.content).toContain('[truncated; continue with offset:');
             expect(large.ok).toBe(true);
             expect(large.content).toContain('100: line 99:');
