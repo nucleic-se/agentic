@@ -371,3 +371,29 @@ it('distinguishes exact-source previews from mixed lossy compression for checkpo
     delete unknown.decisions.find(d => d.messageRange?.start === 1)!.compression;
     expect(checkpointBoundary(checkpointView(history), unknown)).toBe(3);
 });
+
+it('previews older protected evidence before evicting history and leaves the latest archive page intact', async () => {
+    const { archivedToolResultReference, archivedToolResultDefinition } = await import('./harness/archive.js');
+    const definitions = [archivedToolResultDefinition()];
+    const messages: Message[] = [
+        { role: 'user', sticky: true, content: 'Keep the requirements.' },
+        { role: 'assistant', content: 'Earlier finding. '.repeat(80) },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'fs_read', args: { path: 'source.ts' } }] },
+        { role: 'tool_result', toolCallId: 'read', toolName: 'fs_read', content: 'source evidence '.repeat(280) },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'recover', name: 'read_tool_result', args: { callId: 'older' } }] },
+        { role: 'tool_result', toolCallId: 'recover', toolName: 'read_tool_result', content: 'exact recovered page '.repeat(80) },
+    ];
+    const original = structuredClone(messages);
+    const protectedMessages = [messages[0], ...messages.slice(2)];
+    const budget = estimateContextTokens({ messages: protectedMessages, tools: definitions }, { tokenCounter: counter }).totalTokens + 50;
+    const context = await composeAgentContext({ messages, tools: definitions, tokenBudget: budget }, {
+        tokenCounter: counter, minRecentGroups: 2, referenceToolResult: archivedToolResultReference,
+    });
+    expect(context.usage.totalTokens).toBeLessThanOrEqual(budget);
+    expect(context.decisions.every(decision => decision.action !== 'dropped')).toBe(true);
+    expect(context.messages[1]).toEqual(messages[1]);
+    expect(context.messages[3].content).toContain('read_tool_result({"callId":"read","offset":0})');
+    expect(context.messages[5]).toEqual(messages[5]);
+    expect(context.decisions.find(decision => decision.action === 'compressed')).toMatchObject({ protected: true, compression: 'referenced' });
+    expect(messages).toEqual(original);
+});

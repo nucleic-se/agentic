@@ -480,9 +480,15 @@ longer than 1,200 characters for a 400-character preview and that reference,
 only when doing so reduces estimated tokens. It uses the existing ascending
 priority order (oldest first for tied message groups) and stops as soon as the
 request fits, including between results in the same tool-call group. Fitting
-contexts stay intact and do not invoke the reference callback. Protected/recent groups, error
-results and native content blocks are excluded. Tool-call identities and grouping
-remain unchanged; original history is never mutated. Selection reports include
+contexts stay intact and do not invoke the reference callback. This first pass
+excludes protected groups, error results and native content blocks. Before evicting
+history, the pipeline also considers protected tool text in chronological order,
+using bounded head-and-tail previews with exact-source references. It stops as soon
+as the request fits, leaving newer evidence intact when older previews suffice.
+Native content blocks remain unchanged, and archive retrieval pages are excluded
+by the default reference policy to prevent recursive retrieval. Protection retains
+the group and its identities; it does not promise all tool text stays inline.
+Original history is never mutated. Selection reports include
 source indices, retrieval instructions and original/retained character counts.
 A later pressure compressor cannot erase the reference. The existing whole-group
 drop policy still applies if the request remains too large.

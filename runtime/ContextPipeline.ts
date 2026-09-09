@@ -41,8 +41,8 @@ export interface ContextCompositionOptions extends ContextTokenOptions {
     maxToolResultCharacters?: number;
     /** Return an exact-source retrieval instruction for retained text.
      * Without maxToolResultCharacters, only older results under budget pressure are considered,
-     * in priority order; fitting contexts stay intact. Protected groups may retain
-     * a recoverable preview when their full text alone exceeds the budget.
+     * in priority order; fitting contexts stay intact. Before eviction, protected
+     * groups may retain recoverable previews, oldest first, to preserve history.
      * Return null when the source cannot be recovered with the current tool grants.
      * The host must preserve the original message at this index. */
     referenceToolResult?(message: ToolResultMessage, messageIndex: number, tools: readonly ToolDefinition[]): string | null;
@@ -283,17 +283,17 @@ export async function composeAgentContext(input: ContextCompositionInput, option
         }
     }
     let result = render();
-    const referenceResults = (item: Candidate & { kind: 'messages' }, protectedOnly = false) => {
+    const referenceResults = (item: Candidate & { kind: 'messages' }, protectedResult = false, fits = () => result.usage.totalTokens <= budget) => {
         if (options.referenceToolResult) for (const [offset, message] of item.group.messages.entries()) {
             input.signal?.throwIfAborted();
-            if ((protectedOnly ? render(true) : result).usage.totalTokens <= budget) break;
-            if (message.role !== 'tool_result' || (!protectedOnly && message.isError) || message.contentBlocks?.length || message.content.length <= 1200) continue;
+            if (fits()) break;
+            if (message.role !== 'tool_result' || (!protectedResult && message.isError) || message.contentBlocks?.length || message.content.length <= 1200) continue;
             const messageIndex = item.group.firstIndex + offset;
             const existing = item.references?.find(reference => reference.messageIndex === messageIndex);
             const reference = existing?.reference ?? options.referenceToolResult(structuredClone(message), messageIndex, structuredClone(tools));
             if (reference === null) continue;
             if (typeof reference !== 'string' || !reference.trim()) throw new ContextCompressionError('Tool result reference must be nonempty text or null');
-            const content = protectedOnly ? projectToolOutput(message.content, reference, 1000) : `[Earlier tool result; exact saved text: ${reference}]\nPreview (not the full result):\n${sourceText[messageIndex].slice(0, 400)}`;
+            const content = protectedResult ? projectToolOutput(message.content, reference, 1000) : `[Earlier tool result; exact saved text: ${reference}]\nPreview (not the full result):\n${sourceText[messageIndex].slice(0, 400)}`;
             if (content === null || content.length >= message.content.length) continue;
             item.group.messages[offset] = { ...message, content };
             const trial = render();
@@ -309,7 +309,7 @@ export async function composeAgentContext(input: ContextCompositionInput, option
     // Protection retains the group; recoverable text can still need a preview to fit.
     for (const item of candidates) {
         if (render(true).usage.totalTokens <= budget) break;
-        if (item.protected && item.kind === 'messages') referenceResults(item, true);
+        if (item.protected && item.kind === 'messages') referenceResults(item, true, () => render(true).usage.totalTokens <= budget);
     }
     const minimum = render(true);
     if (minimum.usage.totalTokens > budget) throw new ContextBudgetExceededError(budget, minimum.usage.totalTokens, 'protected');
@@ -348,6 +348,12 @@ export async function composeAgentContext(input: ContextCompositionInput, option
                 else item.section = before;
             }
         }
+    }
+    // Preserve older context before evicting it: protection retains groups, while
+    // exact-source previews can release space from their tool results.
+    for (const item of candidates) {
+        if (result.usage.totalTokens <= budget) break;
+        if (item.protected && item.kind === 'messages') referenceResults(item, true);
     }
     for (const item of removable) {
         if (result.usage.totalTokens <= budget) break;

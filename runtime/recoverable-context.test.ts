@@ -36,12 +36,14 @@ it('does not reference unavailable sources, error results or native media', asyn
     expect(untouched.messages).toEqual(messages);
     for (const change of [{ isError: true }, { contentBlocks: [{ type: 'text' as const, text: 'media caption' }] }]) {
         const source = history(); Object.assign(source[2], change);
-        const reference = vi.fn(() => 'read_saved(2)');
+        const reference = vi.fn((_message, index) => `read_saved(${index})`);
         const full = await composeAgentContext({ messages: source, tokenBudget: 20000 });
         const result = await composeAgentContext({ messages: source, tokenBudget: full.usage.totalTokens - 1 }, { referenceToolResult: reference });
-        expect(result.decisions.find(decision => decision.id === 'messages:1')?.action).toBe('dropped');
-        expect(result.decisions.every(decision => !decision.references)).toBe(true);
-        expect(reference).not.toHaveBeenCalled();
+        expect(result.messages[2]).toEqual(source[2]);
+        expect(result.decisions.find(decision => decision.id === 'messages:1')?.action).toBe('kept');
+        expect(result.messages[4].content).toContain('read_saved(4)');
+        expect(reference).toHaveBeenCalledOnce();
+        expect(reference.mock.calls[0][1]).toBe(4);
     }
 });
 
