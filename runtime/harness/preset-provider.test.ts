@@ -7,7 +7,8 @@ import { compositionFingerprint } from './composition.js';
 
 const construct = vi.hoisted(() => vi.fn());
 vi.mock('../../providers/subscription.js', () => ({ SubscriptionProvider: class {
-    constructor(options: unknown) { construct(options); }
+    readonly capabilities = { contextWindowTokens: 272000 };
+    constructor(readonly options: unknown) { construct(options); }
 } }));
 
 it('configures reasoning without replacing the provider and preserves the default composition identity', async () => {
@@ -21,8 +22,8 @@ it('configures reasoning without replacing the provider and preserves the defaul
         const solLow = await defaultAgentExtensions({ workspace, model: 'gpt-5.6-sol' });
         expect(compositionFingerprint(solLow)).not.toBe(compositionFingerprint(medium));
         await medium.find(e => e.roles?.provider)!.roles!.provider!();
-        expect(construct).toHaveBeenLastCalledWith({ model: 'gpt-5.6-sol', authFilePath: undefined, reasoningEffort: 'medium' });
+        expect(construct).toHaveBeenCalledWith({ model: 'gpt-5.6-sol', authFilePath: undefined, reasoningEffort: 'medium' });
         await defaults.find(e => e.roles?.provider)!.roles!.provider!();
-        expect(construct).toHaveBeenLastCalledWith({ model: 'gpt-6-astra', authFilePath: undefined, reasoningEffort: 'low' });
+        expect(construct).toHaveBeenCalledWith({ model: 'gpt-6-astra', authFilePath: undefined, reasoningEffort: 'low' });
     } finally { await rm(workspace, { recursive: true, force: true }); }
 });

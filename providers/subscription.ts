@@ -1,6 +1,7 @@
 import { presentToolResult } from '../runtime/ToolOutput.js';
 import { createHash } from 'node:crypto';
 import { zstdDecompressSync } from 'node:zlib';
+import { OPENAI_CODEX_MODELS } from '@earendil-works/pi-ai/providers/openai-codex.models';
 import { stream } from '@earendil-works/pi-ai/api/openai-codex-responses';
 import type { AssistantMessage as NativeMessage, Context, Model } from '@earendil-works/pi-ai';
 import { openaiCredentials } from '@openai-oauth/local';
@@ -93,8 +94,7 @@ function usage(value: NativeMessage['usage']): TokenUsage {
 
 /** Optional subscription backend. Requires Node >=22.19 and its optional provider dependency. */
 export class SubscriptionProvider implements ILLMProvider {
-    readonly capabilities = Object.freeze({ transport: 'http-sse', toolBatching: true,
-        outputLimit: 'advisory', automaticRetries: 0, continuation: 'message', requestObservation: 'decoded-wire' } as const satisfies ProviderCapabilities);
+    readonly capabilities: Readonly<ProviderCapabilities>;
     readonly #options: SubscriptionProviderOptions;
     readonly #model: Model<'openai-codex-responses'>;
     readonly #identity: string;
@@ -102,6 +102,12 @@ export class SubscriptionProvider implements ILLMProvider {
     constructor(options: SubscriptionProviderOptions) {
         if (!options.model.trim()) throw new Error('A model is required');
         this.#options = { ...options };
+        const catalog = options.baseUrl === undefined || options.baseUrl.replace(/\/$/, '') === 'https://chatgpt.com/backend-api'
+            ? OPENAI_CODEX_MODELS[options.model as keyof typeof OPENAI_CODEX_MODELS] : undefined;
+        const capacity = catalog?.contextWindow;
+        this.capabilities = Object.freeze({ transport: 'http-sse', toolBatching: true,
+            outputLimit: 'advisory', automaticRetries: 0, continuation: 'message', requestObservation: 'decoded-wire',
+            ...(capacity && Number.isSafeInteger(capacity) && capacity > 0 ? { contextWindowTokens: capacity } : {}) });
         this.#model = { id: options.model, name: options.model, provider: 'openai-codex', api: 'openai-codex-responses',
             baseUrl: options.baseUrl ?? 'https://chatgpt.com/backend-api', reasoning: true, input: ['text', 'image'],
             // Direct stream uses caller limits; these catalog fields are not admission policy.

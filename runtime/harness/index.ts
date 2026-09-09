@@ -25,3 +25,5 @@ export { archiveToolRuntime, archivedToolResultReference, archivedToolResultDefi
 export { checkpointContextLifecycle, referenceContextLifecycle } from './context-lifecycle.js';
 export { textCheckpointFormat, type CheckpointFormat, type CheckpointRequestOptions, type CheckpointEvidencePresentation } from './checkpoint.js';
 export type { ContextLifecycle, ContextLifecycleInput, ContextPreparation, ContextStep, ContextMaintenance, ContextTransition, CheckpointContextState } from './context-lifecycle.js';
+
+export { resolveContextBudget } from './context-budget.js';

@@ -905,3 +905,19 @@ ceiling. An explicit ceiling requires consistent accounting within that ceiling;
 unsupported strategies fail before admission. Durable drivers can apply the same
 preparation options to task, maintenance and repair requests. This is estimated
 request capacity, not a guarantee of provider usage or eventual task completion.
+
+
+Default context sizing uses `ProviderCapabilities.contextWindowTokens` through
+`resolveContextBudget(provider, optionalCap)`. The capability describes the
+selected model and endpoint; absence means unknown. Explicit caps can narrow
+known capacity. Unknown providers need an explicit cap instead of an inferred
+window. Invalid advertised or requested values fail before composition opens
+resources. The resolved ceiling is part of the composition fingerprint.
+
+The subscription adapter reads exact model IDs from its optional backend's
+subscription model catalog for the canonical endpoint. It does not apply that
+catalog to custom endpoints or infer capacity from model-name prefixes. Catalog
+capacity is metadata, not an exact token-counting guarantee. The assembler still
+reserves output within the ceiling, and durable execution can narrow each request
+further through `contextTokenBudget`. Context capacity does not increase task
+spending, call limits or deadlines.

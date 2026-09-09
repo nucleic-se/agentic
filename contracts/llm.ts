@@ -194,6 +194,8 @@ export interface ProviderCallOptions {
 
 /** Effective adapter behavior. Absence means unknown, never an implied guarantee. */
 export interface ProviderCapabilities {
+    /** Known context capacity for this model and endpoint, including output. Missing means unknown. */
+    contextWindowTokens?: number
     transport: string
     toolBatching: boolean
     outputLimit: 'enforced' | 'advisory'
