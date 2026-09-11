@@ -37,6 +37,52 @@ function toolTurn(calls: Array<{ id: string; name: string; args: Record<string, 
     };
 }
 
+it('keeps original history separate from selected context across tool reconciliation', async () => {
+    const original: Message[] = [
+        { role: 'user', content: 'Earlier evidence retained for later inspection.' },
+        { role: 'user', content: 'Inspect the current result and answer.' },
+    ];
+    const conversation = structuredClone(original);
+    const call = { id: 'inspect-current', name: 'inspect', args: {} };
+    const receipt = { ok: true, content: 'Detailed original evidence. '.repeat(10), data: { source: 'original-result' } };
+    const tools: IValidatedToolRuntime = {
+        tools: () => [{ name: 'inspect', description: 'Inspect current evidence', parameters: { type: 'object' } }],
+        validate: (_name, args) => ({ ok: true, args }),
+        call: vi.fn(async () => structuredClone(receipt)),
+    };
+    const requests: TurnRequest[] = [];
+    const responses = [toolTurn([call]), text('Finished inspection.')];
+    const provider = providerWith(responses);
+    provider.turn = async request => {
+        requests.push(structuredClone(request));
+        return responses[requests.length - 1];
+    };
+
+    const records = await runAgentKernel(conversation, { provider, tools, maxToolResultChars: 40 }, () => ({
+        system: 'Use the selected evidence.',
+        messages: structuredClone(conversation.slice(1)),
+    }));
+
+    expect(records).toHaveLength(2);
+    expect(requests.map(request => request.messages)).toEqual([
+        [original[1]],
+        conversation.slice(1, -1),
+    ]);
+    expect(records.map(record => record.modelRequest)).toEqual(requests);
+    expect(conversation.slice(0, original.length)).toEqual(original);
+    expect(conversation.slice(original.length)).toEqual([
+        responses[0].message,
+        {
+            role: 'tool_result',
+            toolCallId: call.id,
+            content: receipt.content.slice(0, 40) + `\n\n[truncated — ${receipt.content.length} chars total]`,
+        },
+        responses[1].message,
+    ]);
+    expect(records[0].executions[0]).toMatchObject({ callId: call.id, status: 'success', result: receipt });
+    expect(tools.call).toHaveBeenCalledOnce();
+});
+
 function stringTool(execute = vi.fn(async ({ value }: { value: string }) => ({ value }))): {
     tool: ITool<{ value: string }, { value: string }>;
     execute: typeof execute;

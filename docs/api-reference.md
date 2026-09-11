@@ -11,6 +11,10 @@ Quick reference for all exported types, classes, and functions.
 | `@nucleic-se/agentic` | Core contracts, runtimes, patterns, and basic tool adapters |
 | `@nucleic-se/agentic/contracts` | TypeScript interfaces — zero runtime code |
 | `@nucleic-se/agentic/runtime` | Concrete implementations |
+| `@nucleic-se/agentic/execution` | Model/tool execution and journal primitives |
+| `@nucleic-se/agentic/context` | Context composition and token budgeting without the harness |
+| `@nucleic-se/agentic/testing` | Deterministic provider, store and harness conformance checks |
+| `@nucleic-se/agentic/evaluation` | Deterministic context-selection evaluation |
 | `@nucleic-se/agentic/kernel` | Kernel plus budgeted conversation assembler |
 | `@nucleic-se/agentic/llm` | Provider and message protocols without the full contract barrel |
 | `@nucleic-se/agentic/tool-runtime` | Executable tool-runtime protocols |
@@ -19,6 +23,23 @@ Quick reference for all exported types, classes, and functions.
 | `@nucleic-se/agentic/patterns` | Pre-built agent workflows |
 | `@nucleic-se/agentic/tools` | Tool runtime implementations |
 | `@nucleic-se/agentic/providers` | LLM provider implementations |
+| `@nucleic-se/agentic/providers/select` | Explicit OpenAI/Anthropic API-key or subscription selection |
+| `@nucleic-se/agentic/providers/anthropic-subscription` | Optional Anthropic subscription transport, OAuth helper and credential store |
+| `@nucleic-se/agentic/providers/subscription` | Subscription provider with its optional backend |
+| `@nucleic-se/agentic/harness` | Compatibility facade including the coding preset |
+| `@nucleic-se/agentic/harness/core` | Empty host, driver composition and execution contracts |
+| `@nucleic-se/agentic/harness/loops` | Conversational and planning loops |
+| `@nucleic-se/agentic/harness/context` | Full-history and budgeted context strategies |
+| `@nucleic-se/agentic/harness/sqlite` | Session-store implementations, including optional SQLite storage |
+| `@nucleic-se/agentic/harness/web` | Detachable web UI |
+| `@nucleic-se/agentic/harness/terminal` | Detachable interactive terminal |
+| `@nucleic-se/agentic/coding` | Coding tools, context and default composition |
+| `@nucleic-se/agentic/skills` | Explicit SKILL.md snapshots and a read tool |
+| `@nucleic-se/agentic/browser` | Browser tools using a caller-supplied driver |
+| `@nucleic-se/agentic/delegation` | Optional bounded read-only workers with explicit child-call limits |
+
+Use `/harness/core` for the narrow host dependency graph. See [optional addons](./optional-addons.md) for composition and resource ownership.
+The [embedding guide](./embedding.md) shows the recommended application APIs and the distinction between history and prepared context.
 
 Provider adapters may throw `LLMProtocolError` when a response violates the
 semantic provider protocol. The kernel records it as `llm_protocol_error`;
@@ -353,6 +374,13 @@ interface ToolCallOptions {
 | `SearchToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string, { maxOutputBytes?: number }?)` |
 | `WebToolRuntime` | `@nucleic-se/agentic/tools` | `({ outputDir?: string }?)` |
 | `SkillToolRuntime` | `@nucleic-se/agentic/tools` | `(root: string)` |
+
+`SkillToolRuntime` is the legacy executable-module adapter: it discovers
+`skills/<category>/<name>/index.js` under its root, loads those modules during
+discovery, and exposes `skill_run` to execute them. For SKILL.md instructions,
+use `loadSkills` and `skillToolRuntime` from `@nucleic-se/agentic/skills` instead.
+That addon snapshots text and exposes `read_skill`; it never executes scripts.
+See [skills composition](./optional-addons.md#skills).
 
 `FsToolRuntime.fs_read` reads regular files only. With no explicit encoding, PNG,
 JPEG, GIF and WebP signatures produce native image attachments, up to 5 MiB of

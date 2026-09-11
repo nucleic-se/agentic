@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, stat, chmod, symlink, rm } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -341,3 +341,39 @@ it('searches an explicit file in every output mode, respecting include filters a
     await symlink(join(base, 'outside.ts'), join(root, 'escape.ts'))
     expect((await runtime.call('search_grep', { path: 'escape.ts', pattern: 'hit' })).ok).toBe(false)
 })
+
+
+it('rejects malformed patch input unchanged and preserves BOM, CRLF, Unicode and file mode', async () => {
+    const runtime = codingToolRuntime(root);
+    const file = join(root, 'patch');
+    const args = { path: 'patch', patches: [{ search: 'abc', replace: 'x' }] };
+    const invalid = Buffer.from([255, 97, 98, 99, 10]);
+    await writeFile(file, invalid);
+    expect((await runtime.call('fs_patch', args)).ok).toBe(false);
+    expect(await readFile(file)).toEqual(invalid);
+    await writeFile(file, '\uFEFFabc\r\n🌱tail');
+    await chmod(file, 0o640);
+    const mode = (await stat(file)).mode;
+    expect((await runtime.call('fs_patch', args)).ok).toBe(true);
+    expect(await readFile(file, 'utf8')).toBe('\uFEFFx\r\n🌱tail');
+    expect((await stat(file)).mode).toBe(mode);
+    expect((await runtime.call('fs_write', { path: 'patch', content: 'short' })).ok).toBe(true);
+    expect(await readFile(file, 'utf8')).toBe('short');
+    expect((await runtime.call('fs_write', { path: 'patch', content: '+', append: true })).ok).toBe(true);
+    expect(await readFile(file, 'utf8')).toBe('short+');
+    expect((await stat(file)).mode).toBe(mode);
+    expect((await runtime.call('fs_write', { path: 'new', content: 'created' })).ok).toBe(true);
+    expect(await readFile(join(root, 'new'), 'utf8')).toBe('created');
+});
+
+it.skipIf(process.platform === 'win32').each(['fs_write', 'fs_patch'])('rejects FIFO targets in %s without blocking cancellation', name => {
+    expect(spawnSync('mkfifo', [join(root, 'pipe')]).status).toBe(0);
+    const script = `import { codingToolRuntime } from ${JSON.stringify(new URL('../dist/runtime/harness/defaults.js', import.meta.url).href)};
+        console.log(JSON.stringify(await codingToolRuntime(process.argv[1]).call(process.argv[2],
+        process.argv[2] === 'fs_write' ? {path:'pipe',content:'effect'} : {path:'pipe',patches:[{search:'a',replace:'b'}]}, {signal:AbortSignal.timeout(30)})))`;
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script, root, name], { timeout: 2000, encoding: 'utf8' });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
+    expect(JSON.parse(result.stdout).content).toMatch(/regular file|ENXIO/);
+});

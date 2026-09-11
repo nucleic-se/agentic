@@ -1,19 +1,51 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
+import { killProcessGroup } from './process.js';
 import type { ToolCallResult } from '../../contracts/tool-runtime.js';
 import { projectToolOutput } from '../ToolOutput.js';
 import { FileToolOutputStore, MAX_CAPTURE_BYTES } from './output.js';
 
-const execute = promisify(execFile);
+class GitFailure extends Error {
+    constructor(message: string, readonly kind: 'runtime' | 'cancelled' | 'timeout' | 'unknown') { super(message); }
+}
 
-/** Explicit Git review for the coding composition; no command parsing or completion policy. */
-export async function reviewChanges(root: string, store: FileToolOutputStore, base: string, signal?: AbortSignal): Promise<ToolCallResult> {
-    const git = async (args: string[]) => {
-        signal?.throwIfAborted();
-        const { stdout } = await execute('git', ['--no-pager', ...args], {
-            cwd: root, signal, timeout: 30000, maxBuffer: MAX_CAPTURE_BYTES, encoding: 'buffer',
+function executeGit(root: string, args: string[], signal?: AbortSignal): Promise<Buffer> {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+        const child = spawn('git', ['--no-pager', ...args], {
+            cwd: root, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
         });
+        const stdout: Buffer[] = [], stderr: Buffer[] = [];
+        let bytes = 0, failure: Error | undefined;
+        const stop = (error: Error) => { failure ??= error; killProcessGroup(child); };
+        const abort = () => stop(new GitFailure('Change review cancelled', 'cancelled'));
+        const timer = setTimeout(() => stop(new GitFailure('Change review timed out', 'timeout')), 30000);
+        const capture = (target: Buffer[]) => (chunk: Buffer) => {
+            if (failure) return;
+            bytes += chunk.length;
+            if (bytes > MAX_CAPTURE_BYTES) stop(new GitFailure('Change review exceeds the 8 MiB capture limit; no complete patch was saved', 'unknown'));
+            else target.push(chunk);
+        };
+        child.stdout.on('data', capture(stdout));
+        child.stderr.on('data', capture(stderr));
+        child.on('error', error => { failure ??= error; });
+        child.on('close', code => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', abort);
+            if (failure) reject(failure);
+            else if (code !== 0) reject(new GitFailure(Buffer.concat(stderr).toString('utf8') || `Git exited with code ${code}`, 'runtime'));
+            else resolve(Buffer.concat(stdout));
+        });
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+    });
+}
+
+/** Explicit Git review for the coding composition; no command parsing or completion policy. */
+async function collectReview(root: string, store: FileToolOutputStore, base: string, signal?: AbortSignal): Promise<ToolCallResult> {
+    const git = async (args: string[]) => {
+        signal?.throwIfAborted();
+        const stdout = await executeGit(root, args, signal);
         // Saved text must not silently replace invalid source bytes.
         return new TextDecoder('utf-8', { fatal: true }).decode(stdout);
     };
@@ -40,4 +72,11 @@ export async function reviewChanges(root: string, store: FileToolOutputStore, ba
     return { ok: true, content: (projectToolOutput(summary, reference, 3000) ?? summary)
         + `\nSaved review: ${reference}\nExact tracked patch: read_output({"id":"${outputId}","offset":${patchOffset}}). Continue until eof.`,
         data: { outputId, patchOffset, base: commit, untrackedCount: untracked.length } };
+}
+
+export async function reviewChanges(root: string, store: FileToolOutputStore, base: string, signal?: AbortSignal): Promise<ToolCallResult> {
+    try { return await collectReview(root, store, base, signal); }
+    catch (error) {
+        return { ok: false, content: String(error), errorKind: error instanceof GitFailure ? error.kind : signal?.aborted ? 'cancelled' : 'runtime' };
+    }
 }

@@ -446,7 +446,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
 
         // Recover tool calls emitted as text by models that intermittently
         // ignore the function calling protocol (e.g. deepseek on Ollama Cloud).
-        if (this.textToolRecovery && !result.message.toolCalls?.length && request.tools?.length && result.message.content) {
+        if (this.textToolRecovery && result.stopReason === 'end_turn' && !result.message.toolCalls?.length && request.tools?.length && result.message.content) {
             const toolNames = new Set(request.tools.map(t => t.name))
             const recovered = recoverTextToolCalls(result.message.content, toolNames)
             if (recovered.length) {

@@ -90,9 +90,22 @@ function validateTurn(response: TurnResponse, allowTools: boolean): void {
     }
 }
 function failure(error: unknown, aborted: boolean): ModelFailure {
-    return { kind: aborted ? 'abort' : error instanceof LLMProtocolError ? 'protocol'
-        : error instanceof LLMRequestBudgetError ? 'request_budget' : error instanceof ModelStreamError ? 'stream' : 'transport',
-        message: error instanceof Error ? error.message : String(error) };
+    let kind: ModelFailure['kind'];
+    if (aborted) {
+        kind = 'abort';
+    } else if (error instanceof LLMProtocolError) {
+        kind = 'protocol';
+    } else if (error instanceof LLMRequestBudgetError) {
+        kind = 'request_budget';
+    } else if (error instanceof ModelStreamError) {
+        kind = 'stream';
+    } else {
+        kind = 'transport';
+    }
+    return {
+        kind,
+        message: error instanceof Error ? error.message : String(error),
+    };
 }
 
 async function execute<Request, Response extends { usage: TokenUsage }>(

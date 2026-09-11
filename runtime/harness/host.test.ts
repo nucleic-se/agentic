@@ -262,3 +262,35 @@ describe('approved architectural guarantees', () => {
         } finally { await client.close(); }
     });
 });
+
+
+it.each([false, true])('keeps the host stopped after a caught unknown effect (receipt storage failure: %s)', async failReceipt => {
+    const store = new MemorySessionStore();
+    const commit = store.commit.bind(store);
+    let failed = false;
+    vi.spyOn(store, 'commit').mockImplementation(async (...args) => {
+        if (failReceipt && !failed && args[3].type === 'tool.completed') { failed = true; throw new Error('Receipt storage unavailable'); }
+        return commit(...args);
+    });
+    const config = setup([], { store, execute: async () => ({ ok: false, content: 'Lost receipt', errorKind: 'unknown' }),
+        loop: { async run(services) {
+            const call = { id: 'uncertain', name: 'write', args: {} };
+            const suffix = { ...call, id: 'suffix' };
+            await services.append([{ role: 'assistant', content: '', toolCalls: [call, suffix] }]);
+            await expect(services.tools.executeBatch([call, suffix])).rejects.toThrow('unknown');
+            await expect(services.tools.executeBatch([{ ...call, id: 'later' }])).rejects.toThrow('unknown');
+            await expect(services.model.request({ messages: [] })).rejects.toThrow('unknown');
+        } },
+    });
+    const client = await createHarness().compose(config);
+    try {
+        const session = await client.create();
+        await client.submit(session.id, 'go', { commandId: randomUUID() });
+        const record = await client.wait(session.id);
+        expect(record.status).toBe('failed');
+        expect(record.operations.map(op => op.status)).toEqual(['unknown']);
+        expect(record.messages.filter(message => message.role === 'tool_result').map(message => message.toolCallId)).toEqual(['uncertain', 'suffix']);
+        expect(config.tools.call).toHaveBeenCalledOnce();
+        expect(config.provider.turn).not.toHaveBeenCalled();
+    } finally { await client.close(); }
+});

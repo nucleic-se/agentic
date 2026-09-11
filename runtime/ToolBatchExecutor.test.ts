@@ -1,3 +1,4 @@
+import { ToolRuntimeAdapter } from '../tools/adapter.js';
 import { describe, expect, it, vi } from 'vitest';
 import { executeToolBatch, executeToolBatchDetailed } from './ToolBatchExecutor.js';
 import { runAgentKernel } from './AgentKernel.js';
@@ -230,4 +231,33 @@ describe('independent read preflight', () => {
         expect(result.controlFailure?.kind).toBe('tool_outcome_unknown');
         expect(result.executions.map(r => r.status)).toEqual(['unknown', 'skipped']);
     });
+});
+
+
+it('stops after a typed execution throws following an effect', async () => {
+    const effects: string[] = [];
+    const tools = new ToolRuntimeAdapter([{ name: 'write', description: '',
+        input: { jsonSchema: { type: 'object' }, validate: value => ({ ok: true, value }) },
+        async execute(args: any) { effects.push(args.value); throw new Error('Lost receipt'); },
+    }]);
+    const result = await executeToolBatchDetailed(calls(), { tools });
+    expect(effects).toEqual(['first']);
+    expect(result.executions.map(e => e.status)).toEqual(['unknown', 'skipped']);
+    expect(result.controlFailure?.kind).toBe('tool_outcome_unknown');
+});
+
+it.each(['reject', 'throw'])('preserves returned data when output validation %s fails', async mode => {
+    const raw = { receipt: 'effect completed' };
+    const tools = new ToolRuntimeAdapter([{ name: 'write', description: '',
+        input: { jsonSchema: { type: 'object' }, validate: value => ({ ok: true, value }) },
+        output: { jsonSchema: { type: 'string' }, validate: () => {
+            if (mode === 'throw') throw new Error('Bad validator');
+            return { ok: false, issues: [{ message: 'Unexpected receipt' }] };
+        } },
+        async execute() { return raw; },
+    }]);
+    const result = await executeToolBatchDetailed(calls(), { tools });
+    expect(result.controlFailure).toBeUndefined();
+    expect(result.executions).toHaveLength(2);
+    for (const execution of result.executions) expect(execution.result).toMatchObject({ ok: false, errorKind: 'validation', data: raw });
 });

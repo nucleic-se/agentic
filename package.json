@@ -94,6 +94,42 @@
     "./providers/subscription": {
       "types": "./dist/providers/subscription.d.ts",
       "import": "./dist/providers/subscription.js"
+    },
+    "./harness/core": {
+      "types": "./dist/runtime/harness/core.d.ts",
+      "import": "./dist/runtime/harness/core.js"
+    },
+    "./harness/loops": {
+      "types": "./dist/runtime/harness/loops.d.ts",
+      "import": "./dist/runtime/harness/loops.js"
+    },
+    "./harness/context": {
+      "types": "./dist/runtime/harness/context.d.ts",
+      "import": "./dist/runtime/harness/context.js"
+    },
+    "./coding": {
+      "types": "./dist/runtime/harness/coding-index.d.ts",
+      "import": "./dist/runtime/harness/coding-index.js"
+    },
+    "./skills": {
+      "types": "./dist/tools/skills.d.ts",
+      "import": "./dist/tools/skills.js"
+    },
+    "./browser": {
+      "types": "./dist/tools/browser.d.ts",
+      "import": "./dist/tools/browser.js"
+    },
+    "./providers/select": {
+      "types": "./dist/providers/select.d.ts",
+      "import": "./dist/providers/select.js"
+    },
+    "./providers/anthropic-subscription": {
+      "types": "./dist/providers/anthropic-subscription-index.d.ts",
+      "import": "./dist/providers/anthropic-subscription-index.js"
+    },
+    "./delegation": {
+      "types": "./dist/tools/delegation.d.ts",
+      "import": "./dist/tools/delegation.js"
     }
   },
   "files": [

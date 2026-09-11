@@ -11,9 +11,14 @@ npm install @nucleic-se/agentic
 
 Requires `zod ^4.0.0` as a peer dependency and Node ≥ 20.18.1.
 
+For application integration, start with [embedding Agentic](docs/embedding.md):
+chat with your own history, coding with your own provider, or a durable Gears worker.
+See [provider access](docs/provider-access.md) to choose OpenAI or Anthropic with
+an API key or subscription authentication while retaining Agentic's execution loop.
+
 ## Composable harness and reference agent
 
-The feature-branch harness is an empty extension host with explicit `store`,
+The harness is an empty extension host with explicit `store`,
 `loop`, `context`, `provider`, `tools`, and `policy` roles. Constructing the host
 performs no initialization. The reference agent supplies these roles and can
 attach a terminal UI, browser UI, or your own `SessionClient` consumer.
@@ -67,7 +72,7 @@ For a read-only agent without a UI, use the reference preset directly:
 
 ```ts
 import { randomUUID } from 'node:crypto';
-import { createDefaultAgent } from '@nucleic-se/agentic/harness';
+import { createDefaultAgent } from '@nucleic-se/agentic/coding';
 
 const client = await createDefaultAgent({
   workspace: process.cwd(),
@@ -237,3 +242,7 @@ The latest [alpha API migration](docs/alpha-api-migration.md) covers budget-awar
 ## License
 
 ISC
+
+### Optional capabilities
+
+Use `@nucleic-se/agentic/harness/core` for the empty host, and opt into `/coding`, `/skills`, `/browser`, `/delegation`, or `/harness/terminal` separately. Skills are explicit immutable snapshots; browser tools use a caller-supplied driver with no browser dependency in core. The same tool runtimes can be owned by the local host or Gears. See [optional addons](docs/optional-addons.md) for composition, ownership and examples.

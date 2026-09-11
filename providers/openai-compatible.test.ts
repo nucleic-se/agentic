@@ -727,3 +727,30 @@ it('keeps failed tool output distinguishable without modifying the source messag
     expect(toOpenAIMessages('', [source])).toEqual([{ role: 'tool', tool_call_id: 'call', content: '[Tool failed]\npartial result' }]);
     expect(source.content).toBe('partial result');
 });
+
+
+describe('provider terminal regressions', () => {
+    afterEach(() => vi.unstubAllGlobals());
+    it('honors Ollama structured output limits and rejects parseable truncation with usage', async () => {
+        const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+            choices: [{ finish_reason: 'length', message: { content: '{"ok":true}' } }],
+            usage: { prompt_tokens: 2, completion_tokens: 3 },
+        }), { status: 200 }));
+        vi.stubGlobal('fetch', fetchMock);
+        const provider = new OllamaProvider({ model: 'fixture', extraBody: { max_tokens: 999 } });
+        await expect(provider.structured({ messages: [], schema: { type: 'object' }, maxTokens: 3 }))
+            .rejects.toMatchObject({ name: 'LLMProtocolError', usage: { inputTokens: 2, outputTokens: 3 } });
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body).max_tokens).toBe(3);
+    });
+    it('does not recover executable calls from truncated text', async () => {
+        const content = 'write\n{"value":"x"}';
+        vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+            choices: [{ finish_reason: 'length', message: { content } }],
+            usage: { prompt_tokens: 2, completion_tokens: 3 },
+        }), { status: 200 })));
+        const provider = new OpenAICompatibleProvider({ baseUrl: 'http://fixture.invalid/v1', model: 'fixture', recoverTextToolCalls: true });
+        const result = await provider.turn({ messages: [], tools: [{ name: 'write', description: '', parameters: { type: 'object' } }] });
+        expect(result).toMatchObject({ stopReason: 'max_tokens', message: { content }, usage: { inputTokens: 2, outputTokens: 3 } });
+        expect(result.message.toolCalls?.length ?? 0).toBe(0);
+    });
+});

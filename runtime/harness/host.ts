@@ -1,3 +1,4 @@
+import type { PolicyContext } from '../../contracts/IToolPolicy.js';
 import { sessionSummary } from './session-summary.js';
 import { isDeepStrictEqual } from 'node:util';
 import type { ContextStep } from './context-lifecycle.js';
@@ -14,13 +15,18 @@ import type { OperationResolution, SessionPage } from './types.js';
 import type { Extension, HarnessRoles, RoleName, SessionClient, SessionRecord, SessionUpdate, SessionEvent, LoopServices, PendingApproval, SubmitOptions, MaintenanceOptions } from './types.js';
 
 const REQUIRED: RoleName[] = ['store', 'loop', 'context', 'provider', 'tools', 'policy'];
-function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function assertId(id: string) { if (!/^[a-zA-Z0-9._-]{1,128}$/.test(id)) throw new Error('Invalid identifier'); }
+function errorText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+function assertId(id: string) {
+    if (!/^[a-zA-Z0-9._-]{1,128}$/.test(id)) throw new Error('Invalid identifier');
+}
 
 function reconcileInterruptedMessages(record: SessionRecord) {
     const result: Message[] = [];
     for (let i = 0; i < record.messages.length; i++) {
-        const message = record.messages[i]; result.push(message);
+        const message = record.messages[i];
+        result.push(message);
         if (message.role !== 'assistant' || !message.toolCalls?.length) continue;
         const seen = new Set<string>();
         while (record.messages[i + 1]?.role === 'tool_result') {
@@ -51,8 +57,13 @@ function compose<Roles extends object, Client extends HarnessClient>(
         dispose: { store: store => store.close(), tools: tools => tools.close?.() },
         async start(roles, extensions) {
             const client = new HarnessSessionClient(roles, extensions, limits);
-            try { await client.recover(); return client; }
-            catch (error) { await client.close(); throw error; }
+            try {
+                await client.recover();
+                return client;
+            } catch (error) {
+                await client.close();
+                throw error;
+            }
         },
     } });
 }
@@ -76,9 +87,16 @@ class HarnessSessionClient implements SessionClient {
         this.execution = createHarnessExecution(roles);
         this.fingerprint = compositionFingerprint(extensions);
     }
-    composition() { return this.extensions.map(e => ({ id: e.id, version: e.version, roles: Object.keys(e.roles ?? {}) })); }
-    private assertAdmission() { this.assertOpen(); if (this.closing) throw new Error('Harness is shutting down'); }
-    private assertOpen() { if (this.closed) throw new Error('Harness is closed'); }
+    composition() {
+        return this.extensions.map(e => ({ id: e.id, version: e.version, roles: Object.keys(e.roles ?? {}) }));
+    }
+    private assertAdmission() {
+        this.assertOpen();
+        if (this.closing) throw new Error('Harness is shutting down');
+    }
+    private assertOpen() {
+        if (this.closed) throw new Error('Harness is closed');
+    }
     private notify(event: SessionUpdate) {
         const key = `${event.sessionId}:${event.type}:${event.operationId ?? ''}`;
         const previous = this.notifications.get(key);
@@ -87,30 +105,64 @@ class HarnessSessionClient implements SessionClient {
         this.notifying = true;
         setImmediate(() => {
             this.notifying = false;
-            const events = [...this.notifications.values()]; this.notifications.clear();
-            for (const event of events) for (const listener of this.listeners) {
-                try { Promise.resolve(listener(structuredClone(event))).catch(() => {}); } catch {}
+            const events = [...this.notifications.values()];
+            this.notifications.clear();
+            for (const event of events) {
+                for (const listener of this.listeners) {
+                    try {
+                        Promise.resolve(listener(structuredClone(event))).catch(() => {});
+                    } catch {}
+                }
             }
         });
     }
-    subscribe(listener: (event: SessionUpdate) => void) { this.assertOpen(); this.listeners.add(listener); return () => this.listeners.delete(listener); }
+    subscribe(listener: (event: SessionUpdate) => void) {
+        this.assertOpen();
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
     private locked<T>(id: string, action: () => Promise<T>): Promise<T> {
         const previous = this.locks.get(id) ?? Promise.resolve();
         const next = previous.catch(() => {}).then(action);
         this.locks.set(id, next);
-        void next.finally(() => { if (this.locks.get(id) === next) this.locks.delete(id); }).catch(() => {});
+        void next.finally(() => {
+            if (this.locks.get(id) === next) this.locks.delete(id);
+        }).catch(() => {});
         return next;
     }
-    async get(id: string) { this.assertOpen(); assertId(id); const record = await this.roles.store.get(id); if (!record) throw new Error('Session not found'); return record; }
-    async list(page?: SessionPage) { this.assertOpen(); return (await this.roles.store.list(page)).map(sessionSummary); }
-    async events(id: string, afterSequence = 0, limit?: number) { await this.get(id); return this.roles.store.events(id, afterSequence, limit); }
+    async get(id: string) {
+        this.assertOpen();
+        assertId(id);
+        const record = await this.roles.store.get(id);
+        if (!record) throw new Error('Session not found');
+        return record;
+    }
+    async list(page?: SessionPage) {
+        this.assertOpen();
+        return (await this.roles.store.list(page)).map(sessionSummary);
+    }
+    async events(id: string, afterSequence = 0, limit?: number) {
+        await this.get(id);
+        return this.roles.store.events(id, afterSequence, limit);
+    }
     private async change(id: string, type: string, update: (record: SessionRecord) => void, data?: unknown) {
         return this.locked(id, async () => {
             this.assertOpen();
             const record = await commitJournalTransition(this.roles.store, id, {
-                update(record) { update(record); record.updatedAt = Date.now(); },
-                event: record => ({ schemaVersion: 1, id: randomUUID(), sessionId: id, runId: record.activeRunId,
-                    sequence: record.revision, type, timestamp: record.updatedAt, data } as SessionEvent),
+                update(record) {
+                    update(record);
+                    record.updatedAt = Date.now();
+                },
+                event: record => ({
+                    schemaVersion: 1,
+                    id: randomUUID(),
+                    sessionId: id,
+                    runId: record.activeRunId,
+                    sequence: record.revision,
+                    type,
+                    timestamp: record.updatedAt,
+                    data,
+                } as SessionEvent),
             });
             this.notify({ sessionId: id, type: 'changed', revision: record.revision, runId: record.activeRunId });
             return record;
@@ -132,9 +184,18 @@ class HarnessSessionClient implements SessionClient {
             operationId, signal, stream: true,
             ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : options.contextStep?.kind === 'maintenance' ? { requireComplete: true } : {}),
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
-            onRequest: async request => { await this.change(id, 'model.request', () => {}, { operationId, request }); },
+            onRequest: async request => {
+                await this.change(id, 'model.request', () => {}, { operationId, request });
+            },
             onIntent: intent => this.change(id, 'model.intent', record => {
-                record.operations.push({ id: intent.operationId, runId, kind: 'model', status: 'intent', requestRef: { sessionId: id, sequence: record.revision + 1 }, createdAt: intent.startedAt });
+                record.operations.push({
+                    id: intent.operationId,
+                    runId,
+                    kind: 'model',
+                    status: 'intent',
+                    requestRef: { sessionId: id, sequence: record.revision + 1 },
+                    createdAt: intent.startedAt,
+                });
             }, { operationId, request: intent.request, ...(report ? { contextReport: report } : {}), purpose: options.contextStep?.kind === 'maintenance' ? 'context' : options.maintenance ? 'maintenance' : 'task', ...(options.contextStep ? { contextMetadata: options.contextStep.metadata } : {}) }).then(() => undefined),
             onOutcome: async outcome => {
                 const completed = outcome.outcome === 'completed' || outcome.outcome === 'partial';
@@ -146,7 +207,8 @@ class HarnessSessionClient implements SessionClient {
                     if (!op || op.status !== 'intent') throw new Error('Model receipt has no pending journal intent');
                     op.dispatched = outcome.dispatched;
                     if ('response' in outcome) {
-                        op.status = outcome.outcome; op.output = outcome.response;
+                        op.status = outcome.outcome;
+                        op.output = outcome.response;
                         this.addUsage(record, outcome.usage);
                         if (options.contextStep?.reduce && outcome.outcome === 'completed' && !signal.aborted) {
                             try {
@@ -154,8 +216,14 @@ class HarnessSessionClient implements SessionClient {
                                 const state = structuredClone(transition.state), decision = structuredClone(transition.decision);
                                 record.contextState = state;
                                 data.contextDecision = decision;
-                                if (transition.error) { projectionFailed = true; projectionError = new Error(transition.error); }
-                            } catch (error) { projectionFailed = true; projectionError = error; }
+                                if (transition.error) {
+                                    projectionFailed = true;
+                                    projectionError = new Error(transition.error);
+                                }
+                            } catch (error) {
+                                projectionFailed = true;
+                                projectionError = error;
+                            }
                         }
                         if (options.maintenance && outcome.outcome === 'completed' && !signal.aborted) {
                             try {
@@ -165,7 +233,10 @@ class HarnessSessionClient implements SessionClient {
                                 data.messages = structuredClone(messages);
                                 record.messages = structuredClone(messages);
                                 delete record.contextState;
-                            } catch (error) { projectionFailed = true; projectionError = error; }
+                            } catch (error) {
+                                projectionFailed = true;
+                                projectionError = error;
+                            }
                         } else if (!options.maintenance && options.contextStep?.kind !== 'maintenance' && options.projection !== 'none' && outcome.outcome === 'completed') {
                             record.messages.push(structuredClone(outcome.response.message));
                         }
@@ -207,7 +278,9 @@ class HarnessSessionClient implements SessionClient {
                 for (const op of record.operations) if (op.status === 'intent') op.status = 'unknown';
                 // No approval remains executable after process recovery.
                 reconcileInterruptedMessages(record);
-                record.approvals = []; record.status = 'interrupted'; delete record.activeRunId;
+                record.approvals = [];
+                record.status = 'interrupted';
+                delete record.activeRunId;
                 record.error = 'Previous run was interrupted. Review unknown operations before resuming; no operation will be repeated automatically.';
             });
         }
@@ -215,7 +288,21 @@ class HarnessSessionClient implements SessionClient {
     async create(title = 'New session') {
         this.assertAdmission();
         const now = Date.now();
-        const record: SessionRecord = { id: randomUUID(), title: title.trim().slice(0, 120) || 'New session', revision: 0, createdAt: now, updatedAt: now, status: 'idle', messages: [], operations: [], approvals: [], commandIds: [], queue: [], usage: { inputTokens: 0, outputTokens: 0 }, composition: this.fingerprint };
+        const record: SessionRecord = {
+            id: randomUUID(),
+            title: title.trim().slice(0, 120) || 'New session',
+            revision: 0,
+            createdAt: now,
+            updatedAt: now,
+            status: 'idle',
+            messages: [],
+            operations: [],
+            approvals: [],
+            commandIds: [],
+            queue: [],
+            usage: { inputTokens: 0, outputTokens: 0 },
+            composition: this.fingerprint,
+        };
         return this.locked(record.id, async () => {
             await this.roles.store.create(record);
             this.notify({ sessionId: record.id, type: 'changed', revision: 0 });
@@ -229,9 +316,24 @@ class HarnessSessionClient implements SessionClient {
             if (this.runs.has(id) || parent.status === 'running' || parent.status === 'waiting') throw new Error('Cancel or finish the run before forking');
             if (parent.operations.some(op => op.kind === 'tool' && op.status === 'unknown')) throw new Error('Cannot fork a session with unknown tool outcomes');
             const now = Date.now();
-            const child: SessionRecord = { ...structuredClone(parent), id: randomUUID(), title: `${parent.title} (fork)`.slice(0,120), revision: 0, createdAt: now, updatedAt: now, status: 'idle', parent: { sessionId: id, revision: parent.revision }, approvals: [], queue: [], commandIds: [] };
-            delete child.activeRunId; delete child.error;
-            await this.roles.store.create(child); this.notify({ sessionId: child.id, type: 'changed', revision: 0 }); return child;
+            const child: SessionRecord = {
+                ...structuredClone(parent),
+                id: randomUUID(),
+                title: `${parent.title} (fork)`.slice(0, 120),
+                revision: 0,
+                createdAt: now,
+                updatedAt: now,
+                status: 'idle',
+                parent: { sessionId: id, revision: parent.revision },
+                approvals: [],
+                queue: [],
+                commandIds: [],
+            };
+            delete child.activeRunId;
+            delete child.error;
+            await this.roles.store.create(child);
+            this.notify({ sessionId: child.id, type: 'changed', revision: 0 });
+            return child;
         });
     }
     private checkRunnable(record: SessionRecord) {
@@ -256,7 +358,8 @@ class HarnessSessionClient implements SessionClient {
     }
     async resume(id: string) {
         this.assertAdmission();
-        const record = await this.get(id); this.checkRunnable(record);
+        const record = await this.get(id);
+        this.checkRunnable(record);
         if (this.runs.has(id)) throw new Error('Session is already running');
         if (!record.messages.length && !record.queue.length) throw new Error('Session has no input');
         this.launch(id);
@@ -276,7 +379,10 @@ class HarnessSessionClient implements SessionClient {
             if (record.revision !== expectedRevision) throw new Error('Session revision conflict');
             if (record.queue.length) throw new Error('Cannot replace messages with pending input');
             const previous = record.messages;
-            record.messages = replacement; delete record.contextState; record.revision++; record.updatedAt = Date.now();
+            record.messages = replacement;
+            delete record.contextState;
+            record.revision++;
+            record.updatedAt = Date.now();
             await this.roles.store.commit(id, expectedRevision, record, {
                 schemaVersion: 1, id: randomUUID(), sessionId: id, sequence: record.revision,
                 type: 'messages.replaced', timestamp: record.updatedAt,
@@ -287,7 +393,9 @@ class HarnessSessionClient implements SessionClient {
         });
     }
     async resolveOperation(id: string, operationId: string, resolution: OperationResolution): Promise<SessionRecord> {
-        this.assertAdmission(); assertId(id); assertId(operationId);
+        this.assertAdmission();
+        assertId(id);
+        assertId(operationId);
         const input = validateOperationResolution(resolution);
         return this.change(id, 'tool.resolved', record => {
             if (this.runs.has(id) || record.status === 'running' || record.status === 'waiting') throw new Error('Finish the run before resolving an operation');
@@ -301,15 +409,23 @@ class HarnessSessionClient implements SessionClient {
             op.resolution = input;
             const message = toToolResultMessage({ id: callId, name: op.name }, { ...input.result, content: input.result.content });
             let index = record.messages.length - 1;
-            while (index >= 0) { const item = record.messages[index]; if (item.role === 'tool_result' && item.toolCallId === callId) break; index--; }
+            while (index >= 0) {
+                const item = record.messages[index];
+                if (item.role === 'tool_result' && item.toolCallId === callId) break;
+                index--;
+            }
             delete record.contextState;
             if (index >= 0) record.messages[index] = message;
             else record.messages.push(message);
-            if (!record.operations.some(item => item.kind === 'tool' && item.status === 'unknown')) { record.status = 'interrupted'; delete record.error; }
+            if (!record.operations.some(item => item.kind === 'tool' && item.status === 'unknown')) {
+                record.status = 'interrupted';
+                delete record.error;
+            }
         }, { operationId, ...input });
     }
     async maintain(id: string, options: MaintenanceOptions): Promise<SessionRecord> {
-        this.assertAdmission(); assertId(id);
+        this.assertAdmission();
+        assertId(id);
         if (!options.system?.trim() || options.system.length > 32000 || typeof options.project !== 'function') throw new Error('Maintenance requires a system instruction and pure projector');
         const maxTokens = options.maxTokens ?? 4096;
         if (!Number.isSafeInteger(maxTokens) || maxTokens < 1) throw new Error('Maintenance maxTokens must be a positive safe integer');
@@ -337,22 +453,31 @@ class HarnessSessionClient implements SessionClient {
         let started = false;
         try {
             const current = await this.change(id, 'maintenance.started', record => {
-                signal.throwIfAborted(); this.checkRunnable(record);
+                signal.throwIfAborted();
+                this.checkRunnable(record);
                 if (record.status === 'running' || record.status === 'waiting' || record.queue.length) throw new Error('Maintenance requires a session without active or queued work');
-                record.status = 'running'; record.activeRunId = runId; delete record.error;
+                record.status = 'running';
+                record.activeRunId = runId;
+                delete record.error;
             });
             started = true;
             await this.executeModelEffect(id, runId, { system: options.system, messages: current.messages, tools: [], maxTokens: options.maxTokens }, signal, { maintenance: options });
             signal.throwIfAborted();
-            return await this.change(id, 'maintenance.completed', record => { record.status = 'idle'; delete record.activeRunId; });
+            return await this.change(id, 'maintenance.completed', record => {
+                record.status = 'idle';
+                delete record.activeRunId;
+            });
         } catch (error) {
             if (started) await this.change(id, 'maintenance.failed', record => {
-                record.status = signal.aborted ? 'interrupted' : 'failed'; record.error = errorText(error);
+                record.status = signal.aborted ? 'interrupted' : 'failed';
+                record.error = errorText(error);
                 for (const operation of record.operations) if (operation.runId === runId && operation.status === 'intent') operation.status = 'unknown';
                 delete record.activeRunId;
             }).catch(() => undefined);
             throw error;
-        } finally { clearTimeout(timer); }
+        } finally {
+            clearTimeout(timer);
+        }
     }
     async cancel(id: string) {
         await this.get(id);
@@ -369,7 +494,8 @@ class HarnessSessionClient implements SessionClient {
             record.approvals = record.approvals.filter(a => a.id !== approvalId);
             record.status = 'running';
         }, { approvalId, allow });
-        this.approvals.delete(approvalId); pending.resolve(allow);
+        this.approvals.delete(approvalId);
+        pending.resolve(allow);
     }
     private launch(id: string) {
         if (this.runs.has(id) || this.closed || this.closing) return;
@@ -385,12 +511,60 @@ class HarnessSessionClient implements SessionClient {
         this.runs.set(id, { controller, promise });
         void promise.catch(() => {});
     }
+    private async requestToolApproval(
+        sessionId: string,
+        runId: string,
+        signal: AbortSignal,
+        context: PolicyContext & { reason: string },
+    ): Promise<boolean> {
+        signal.throwIfAborted();
+        const approval: PendingApproval = {
+            ...structuredClone(context),
+            id: randomUUID(),
+            runId,
+            createdAt: Date.now(),
+        };
+        let resolve!: (allow: boolean) => void;
+        const decision = new Promise<boolean>(r => {
+            resolve = r;
+        });
+        this.approvals.set(approval.id, { sessionId, runId, resolve });
+        const aborted = () => resolve(false);
+        signal.addEventListener('abort', aborted, { once: true });
+        try {
+            await this.change(sessionId, 'approval.requested', record => {
+                record.approvals.push(approval);
+                record.status = 'waiting';
+            });
+            if (signal.aborted) return false;
+            return await decision;
+        } finally {
+            signal.removeEventListener('abort', aborted);
+            this.approvals.delete(approval.id);
+        }
+    }
     private async run(id: string, controller: AbortController) {
-        const runId = randomUUID(); const signal = controller.signal;
-        let modelCount = 0; let toolCount = 0;
+        const runId = randomUUID();
+        const signal = controller.signal;
+        let modelCount = 0;
+        let toolCount = 0;
+        let stopped: Error | undefined;
+        const checkActive = () => {
+            if (stopped) throw stopped;
+            signal.throwIfAborted();
+        };
+        const stop = (message: string) => {
+            stopped ??= new Error(message);
+            return stopped;
+        };
         const timer = setTimeout(() => controller.abort(new Error('Run deadline exceeded')), this.limits.timeoutMs);
         try {
-            await this.change(id, 'run.started', record => { this.checkRunnable(record); record.status = 'running'; record.activeRunId = runId; delete record.error; });
+            await this.change(id, 'run.started', record => {
+                this.checkRunnable(record);
+                record.status = 'running';
+                record.activeRunId = runId;
+                delete record.error;
+            });
             const takeQueued = async (mode: 'steer' | 'enqueue'): Promise<Message[]> => {
                 const picked: Message[] = [];
                 await this.change(id, 'input.delivered', record => {
@@ -403,87 +577,118 @@ class HarnessSessionClient implements SessionClient {
             };
             const append = async (messages: Message[]) => {
                 if (!messages.length) return;
-                await this.change(id, 'messages.appended', record => { record.messages.push(...structuredClone(messages)); }, messages);
+                await this.change(id, 'messages.appended', record => {
+                    record.messages.push(...structuredClone(messages));
+                }, messages);
             };
-            await takeQueued('steer'); await takeQueued('enqueue');
+            await takeQueued('steer');
+            await takeQueued('enqueue');
             const services: LoopServices = {
                 signal,
                 // Raw request snapshot; the model effect assembles once after loop overrides are final.
-                context: async () => { signal.throwIfAborted(); return { messages: (await this.get(id)).messages }; },
+                context: async () => {
+                    signal.throwIfAborted();
+                    return { messages: (await this.get(id)).messages };
+                },
                 messages: async () => (await this.get(id)).messages,
                 append, takeQueued,
-                model: { request: async (request, options) => {
-                    const admit = () => {
-                        if (++modelCount > this.limits.maxModelCalls) throw new Error('Run model-call budget exceeded');
-                    };
-                    if (this.roles.context.lifecycle && options?.projection !== 'none')
-                        return this.requestConversation(id, runId, request, signal, admit);
-                    admit();
-                    return this.executeModelEffect(id, runId, request, signal, { projection: options?.projection });
-                } },
-                tools: { executeBatch: async calls => {
-                    signal.throwIfAborted();
-                    toolCount += calls.length;
-                    if (toolCount > this.limits.maxToolCalls) throw new Error('Run tool-call budget exceeded');
-                    const operationIds = new Map<string, string>();
-                    const { executions } = await this.execution.tools(calls, {
-                        tools: this.roles.tools, policy: this.roles.policy, signal, sessionId: id, maxToolCallsPerTurn: this.limits.maxToolCallsPerBatch,
-                        confirmToolCall: async context => {
-                            signal.throwIfAborted();
-                            const approval: PendingApproval = { ...structuredClone(context), id: randomUUID(), runId, createdAt: Date.now() };
-                            let resolve!: (allow: boolean) => void;
-                            const decision = new Promise<boolean>(r => { resolve = r; });
-                            this.approvals.set(approval.id, { sessionId: id, runId, resolve });
-                            const aborted = () => resolve(false);
-                            signal.addEventListener('abort', aborted, { once: true });
-                            try {
-                                await this.change(id, 'approval.requested', record => { record.approvals.push(approval); record.status = 'waiting'; });
-                                if (signal.aborted) return false;
-                                return await decision;
-                            } finally {
-                                signal.removeEventListener('abort', aborted); this.approvals.delete(approval.id);
-                            }
-                        },
-                        emit: async event => {
-                            if (event.type === 'tool_start') {
-                                const operationId = randomUUID(); operationIds.set(event.callId, operationId);
-                                await this.change(id, 'tool.intent', record => { record.operations.push({ id: operationId, runId, kind: 'tool', status: 'intent', name: event.name, callId: event.callId, input: event.input, createdAt: Date.now() }); });
-                            } else if (event.type === 'tool_end') {
-                                const operationId = operationIds.get(event.callId);
-                                await this.change(id, 'tool.completed', record => {
-                                    if (operationId) {
-                                        const op = record.operations.find(o => o.id === operationId)!;
-                                        op.dispatched = event.execution.dispatched;
-                                        op.status = ['unknown', 'timeout', 'cancelled'].includes(event.execution.status) ? (event.execution.dispatched === false ? 'cancelled' : 'unknown') : event.execution.status === 'success' ? 'completed' : 'failed';
-                                        op.output = event.execution;
+                model: {
+                    request: async (request, options) => {
+                        checkActive();
+                        const admit = () => {
+                            checkActive();
+                            if (++modelCount > this.limits.maxModelCalls) throw new Error('Run model-call budget exceeded');
+                        };
+                        if (this.roles.context.lifecycle && options?.projection !== 'none')
+                            return this.requestConversation(id, runId, request, signal, admit);
+                        admit();
+                        return this.executeModelEffect(id, runId, request, signal, { projection: options?.projection });
+                    },
+                },
+                tools: {
+                    executeBatch: async calls => {
+                        checkActive();
+                        toolCount += calls.length;
+                        if (toolCount > this.limits.maxToolCalls) throw new Error('Run tool-call budget exceeded');
+                        const operationIds = new Map<string, string>();
+                        const { executions } = await this.execution.tools(calls, {
+                            tools: this.roles.tools,
+                            policy: this.roles.policy,
+                            signal,
+                            sessionId: id,
+                            maxToolCallsPerTurn: this.limits.maxToolCallsPerBatch,
+                            confirmToolCall: context => this.requestToolApproval(id, runId, signal, context),
+                            emit: async event => {
+                                if (event.type === 'tool_start') {
+                                    checkActive();
+                                    const operationId = randomUUID();
+                                    operationIds.set(event.callId, operationId);
+                                    await this.change(id, 'tool.intent', record => {
+                                        record.operations.push({
+                                            id: operationId,
+                                            runId,
+                                            kind: 'tool',
+                                            status: 'intent',
+                                            name: event.name,
+                                            callId: event.callId,
+                                            input: event.input,
+                                            createdAt: Date.now(),
+                                        });
+                                    });
+                                } else if (event.type === 'tool_end') {
+                                    const operationId = operationIds.get(event.callId);
+                                    if (operationId && event.execution.dispatched !== false && (['unknown', 'timeout', 'cancelled'].includes(event.execution.status))) {
+                                        stop('Tool outcome is unknown after timeout or cancellation; reconcile before continuing');
                                     }
-                                    const execution = event.execution;
-                                    const content = execution.result?.content ?? execution.error ?? `Tool call ${execution.status}`;
-                                    record.messages.push(toToolResultMessage({ id: execution.callId, name: execution.plan.name }, { ...execution.result, ok: execution.status === 'success', content: content }));
-                                }, event.execution);
-                                if (operationId && event.execution.dispatched !== false && (['unknown', 'timeout', 'cancelled'].includes(event.execution.status))) {
-                                    throw new Error('Tool outcome is unknown after timeout or cancellation; reconcile before continuing');
+                                    await this.change(id, 'tool.completed', record => {
+                                        if (operationId) {
+                                            const op = record.operations.find(o => o.id === operationId)!;
+                                            op.dispatched = event.execution.dispatched;
+                                            if (['unknown', 'timeout', 'cancelled'].includes(event.execution.status)) {
+                                                op.status = event.execution.dispatched === false ? 'cancelled' : 'unknown';
+                                            } else if (event.execution.status === 'success') {
+                                                op.status = 'completed';
+                                            } else {
+                                                op.status = 'failed';
+                                            }
+                                            op.output = event.execution;
+                                        }
+                                        const execution = event.execution;
+                                        const content = execution.result?.content ?? execution.error ?? `Tool call ${execution.status}`;
+                                        record.messages.push(toToolResultMessage({ id: execution.callId, name: execution.plan.name }, { ...execution.result, ok: execution.status === 'success', content: content }));
+                                    }, event.execution);
                                 }
-                            }
-                        },
-                    });
-                    if (executions.some(execution => execution.dispatched !== false && ['unknown', 'timeout', 'cancelled'].includes(execution.status))) {
-                        throw new Error('Tool outcome is unknown after timeout or cancellation; reconcile before continuing');
-                    }
-                    if (executions.some(execution => execution.hookFailure)) throw new Error('Post-tool hook failed; effect receipt preserved');
-                    return executions;
-                } },
+                            },
+                        }).catch(error => {
+                            throw stop(errorText(error));
+                        });
+                        if (executions.some(execution => execution.dispatched !== false && ['unknown', 'timeout', 'cancelled'].includes(execution.status))) {
+                            throw stop('Tool outcome is unknown after timeout or cancellation; reconcile before continuing');
+                        }
+                        if (executions.some(execution => execution.hookFailure)) throw stop('Post-tool hook failed; effect receipt preserved');
+                        return executions;
+                    },
+                },
             };
-            await this.roles.loop.run(services); signal.throwIfAborted();
-            await this.change(id, 'run.completed', record => { record.status = 'idle'; record.approvals = []; delete record.activeRunId; });
+            await this.roles.loop.run(services);
+            checkActive();
+            await this.change(id, 'run.completed', record => {
+                record.status = 'idle';
+                record.approvals = [];
+                delete record.activeRunId;
+            });
         } catch (error) {
             await this.change(id, 'run.failed', record => {
                 reconcileInterruptedMessages(record);
-                record.status = signal.aborted ? 'interrupted' : 'failed'; record.error = errorText(error); record.approvals = [];
+                record.status = signal.aborted ? 'interrupted' : 'failed';
+                record.error = errorText(error);
+                record.approvals = [];
                 for (const op of record.operations) if (op.runId === runId && op.status === 'intent') op.status = 'unknown';
                 delete record.activeRunId;
             }).catch(() => {});
-        } finally { clearTimeout(timer); }
+        } finally {
+            clearTimeout(timer);
+        }
     }
     close(): Promise<void> {
         if (this.closePromise) return this.closePromise;
@@ -499,6 +704,7 @@ class HarnessSessionClient implements SessionClient {
         // Commands admitted before shutdown may still be committing even when no run exists.
         // Repeat because completing one serialized action can expose its queued successor.
         while (this.locks.size) await Promise.allSettled([...this.locks.values()]);
-        this.closed = true; this.listeners.clear();
+        this.closed = true;
+        this.listeners.clear();
     }
 }

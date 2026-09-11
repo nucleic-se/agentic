@@ -1,3 +1,4 @@
+import { LLMProtocolError } from '../contracts/llm.js'
 /**
  * Ollama provider — a thin OpenAI-compatible wrapper for Ollama's `/v1` API.
  */
@@ -99,7 +100,7 @@ export class OllamaProvider extends OpenAICompatibleProvider {
         ]
 
         const res = await this.post<{
-            choices?: Array<{ message?: { content?: string | null } }>
+            choices?: Array<{ finish_reason?: string; message?: { content?: string | null } }>
             usage?: { prompt_tokens?: number; completion_tokens?: number }
         }>('/chat/completions', {
             model:    this.model,
@@ -107,8 +108,10 @@ export class OllamaProvider extends OpenAICompatibleProvider {
             stream:   false,
             response_format: { type: 'json_object' },
             ...this.extraBody,
+            ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
         }, options)
 
+        if (res.choices?.[0]?.finish_reason === 'length') throw new LLMProtocolError('Structured output was truncated', { usage: { inputTokens: res.usage?.prompt_tokens ?? 0, outputTokens: res.usage?.completion_tokens ?? 0 } })
         const content = res.choices?.[0]?.message?.content
         if (!content) throw new Error('OllamaProvider: structured response was empty')
 

@@ -1,5 +1,7 @@
 export { AnthropicProvider } from './anthropic.js'
 export type { AnthropicConfig } from './anthropic.js'
+export { selectProvider } from './select.js'
+export type { ProviderSelection } from './select.js'
 export { OpenAICompatibleProvider } from './openai-compatible.js'
 export type { OpenAICompatibleConfig } from './openai-compatible.js'
 export {

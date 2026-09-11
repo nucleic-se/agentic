@@ -1,4 +1,4 @@
-import { budgetedContext } from './defaults.js';
+import { budgetedContext } from './context.js';
 import { archivedToolResultReference } from './archive.js';
 import { checkpointContextLifecycle, referenceContextLifecycle } from './context-lifecycle.js';
 import { readProjectInstructions, projectInstructionText, projectInstructionTargets } from './instructions.js';
@@ -29,6 +29,8 @@ export interface CodingAgentContextOptions extends AgentContextOptions {
     tokenBudget: number;
     system?: string;
     instructionDirectories?: string[];
+    /** Supplemental application instructions, included before budgeting. */
+    additionalInstructions?: string;
 }
 
 /** Workspace instructions are refreshed for each request, independently of the driver/provider. */
@@ -38,5 +40,5 @@ export function codingAgentContext(options: CodingAgentContextOptions): ContextS
     return agentContext(async (messages, signal) => system + projectInstructionText(
         await readProjectInstructions(workspace, instructionDirectories, signal),
         [...instructionDirectories ?? [], ...projectInstructionTargets(messages, workspace)],
-    ), options.tokenBudget, options);
+    ) + (options.additionalInstructions ?? ''), options.tokenBudget, options);
 }

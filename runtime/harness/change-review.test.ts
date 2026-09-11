@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { codingToolRuntime } from './defaults.js';
 
 let root: string;
@@ -78,4 +78,31 @@ it('scopes review to the workspace, rejects option injection, and respects pre-c
     expect(review.content).not.toContain('outside');
     expect((await runtime.call('review_changes', { base: '--output=unwanted' })).ok).toBe(false);
     expect(await runtime.call('review_changes', {}, { signal: AbortSignal.abort() })).toMatchObject({ ok: false, errorKind: 'cancelled' });
+});
+
+
+it.skipIf(process.platform === 'win32')('kills Git helpers before returning cancellation', async () => {
+    const hook = join(root, 'monitor.sh');
+    const started = join(root, 'started');
+    await writeFile(hook, '#!/bin/sh\necho $$ > "' + started + '"\nsleep 30\n');
+    await chmod(hook, 0o755);
+    git('config', 'core.fsmonitor', hook);
+    const controller = new AbortController();
+    const pending = codingToolRuntime(root).call('review_changes', {}, { signal: controller.signal });
+    let pid = 0;
+    try {
+        await vi.waitFor(async () => { pid = Number((await readFile(started, 'utf8')).trim()); expect(pid).toBeGreaterThan(0); });
+    } finally { controller.abort(); }
+    expect(await pending).toMatchObject({ ok: false, errorKind: 'cancelled' });
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+});
+
+
+it('stops oversized Git output without saving a partial review', async () => {
+    await writeFile(join(root, 'source.js'), 'x'.repeat(9 * 1024 * 1024));
+    const review = await codingToolRuntime(root).call('review_changes', {});
+    expect(review).toMatchObject({ ok: false, errorKind: 'unknown' });
+    expect(review.content).toContain('8 MiB');
+    expect(review.data).toBeUndefined();
+    expect(review.content).not.toContain('Saved review:');
 });

@@ -81,3 +81,33 @@ it('composes read-only coding tools without hiding source recovery or relying on
         expect(await readFile(join(workspace, 'source.ts'), 'utf8')).toBe('Original evidence.');
     } finally { await rm(workspace, { recursive: true, force: true }); }
 });
+
+it('adds explicit skills/tools without conflicting roles and rolls back a colliding runtime', async () => {
+    const { loadSkills } = await import('../../tools/skills.js');
+    const workspace = await mkdtemp(join(tmpdir(), 'agentic-preset-addons-'));
+    try {
+        await writeFile(join(workspace, 'SKILL.md'), '---\nname: review\ndescription: Review code\n---\nHidden procedure');
+        const skills = await loadSkills({ directories: [workspace] });
+        const defaults = await defaultAgentExtensions({ workspace });
+        const configured = await defaultAgentExtensions({ workspace, skills });
+        expect(compositionFingerprint(defaults)).not.toBe(compositionFingerprint(configured));
+        const runtime = await configured.find(extension => extension.id === 'tools.coding')!.roles!.tools!();
+        expect(runtime.tools().some(tool => tool.name === 'read_skill')).toBe(true);
+        const context = await configured.find(extension => extension.id === 'context.budgeted')!.roles!.context!();
+        const request = await context.assemble([], new AbortController().signal);
+        expect(request.system).toContain('Review code');
+        expect(request.system).not.toContain('Hidden procedure');
+        await runtime.close?.();
+        let closed = 0, failClose = false;
+        const extensions = await defaultAgentExtensions({ workspace, additionalToolsIdentity: 'collision-v1', additionalTools: () => ({
+            tools: () => [{ name: 'fs_read', description: 'conflict', parameters: { type: 'object' } }],
+            validate: (_name, args) => ({ ok: true, args }), call: async () => ({ ok: true, content: '' }), close: () => { closed++; if (failClose) throw new Error('Cleanup failed'); return Promise.resolve(); },
+        }) });
+        await expect(extensions.find(extension => extension.id === 'tools.coding')!.roles!.tools!()).rejects.toThrow('already registered');
+        expect(closed).toBe(1);
+        failClose = true;
+        await expect(extensions.find(extension => extension.id === 'tools.coding')!.roles!.tools!()).rejects.toMatchObject({ name: 'AggregateError', errors: [expect.any(Error), expect.any(Error)] });
+        expect(closed).toBe(2);
+        await expect(defaultAgentExtensions({ workspace, additionalTools: () => runtime })).rejects.toThrow('additionalToolsIdentity');
+    } finally { await rm(workspace, { recursive: true, force: true }); }
+});

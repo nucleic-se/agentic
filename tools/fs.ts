@@ -129,7 +129,7 @@ const DEFINITIONS: ToolDefinition[] = [
     },
     {
         name:        'fs_patch',
-        description: 'Apply exact string replacements to a file. Each operation finds a unique literal string and replaces it. Fails safely if any search string is not found or matches multiple locations. Use this instead of fs_write when editing existing files.',
+        description: 'Apply exact string replacements to a regular UTF-8 file of at most 256 KiB. Invalid UTF-8 is rejected unchanged. Each operation finds a unique literal string and replaces it. Fails safely if any search string is not found or matches multiple locations. Use this instead of fs_write when editing existing files.',
         parameters: {
             type: 'object',
             required: ['path', 'patches'],
@@ -279,14 +279,18 @@ function handleWrite(root: string, args: Record<string, unknown>): ToolCallResul
         return fail(`Content too large (max ${MAX_WRITE_BYTES} bytes)`)
     }
 
+    let fd: number | undefined
     try {
         fs.mkdirSync(path.dirname(abs), { recursive: true })
-        fs.writeFileSync(abs, content, { flag: append ? 'a' : 'w', encoding: 'utf8' })
-        const bytes = fs.statSync(abs).size
+        fd = fs.openSync(abs, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW | (append ? fs.constants.O_APPEND : 0))
+        if (!fs.fstatSync(fd).isFile()) return fail('Path must be a regular file')
+        if (!append) fs.ftruncateSync(fd, 0)
+        fs.writeFileSync(fd, content, 'utf8')
+        const bytes = fs.fstatSync(fd).size
         return ok(`${append ? 'Appended' : 'Written'}: ${filePath} (${bytes} bytes)`, { path: abs, bytes })
     } catch (e) {
         return fail(`Write failed: ${e instanceof Error ? e.message : String(e)}`)
-    }
+    } finally { if (fd !== undefined) fs.closeSync(fd) }
 }
 
 async function handleList(root: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
@@ -370,34 +374,41 @@ function handlePatch(root: string, args: Record<string, unknown>): ToolCallResul
     const patches = args['patches']
     if (!Array.isArray(patches) || patches.length === 0) return fail('patches array is required and must not be empty')
 
-    let content: string
+    let fd: number | undefined
     try {
-        content = fs.readFileSync(abs, 'utf8')
-    } catch (e) {
-        return fail(`Read failed: ${e instanceof Error ? e.message : String(e)}`)
-    }
+        fd = fs.openSync(abs, fs.constants.O_RDWR | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW)
+        if (!fs.fstatSync(fd).isFile()) return fail('Path must be a regular file')
+        const buffer = Buffer.alloc(MAX_WRITE_BYTES + 1)
+        let length = 0
+        while (length < buffer.length) {
+            const count = fs.readSync(fd, buffer, length, buffer.length - length, length)
+            if (!count) break
+            length += count
+        }
+        if (length > MAX_WRITE_BYTES) return fail('File too large to patch')
+        let content = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buffer.subarray(0, length))
 
-    // Apply to a working copy; commit only after every sequential operation validates.
-    for (let i = 0; i < patches.length; i++) {
-        const patch = patches[i] as Record<string, unknown>
-        if (!patch || typeof patch !== 'object') return fail(`Patch ${i}: invalid operation`)
-        const search = String(patch['search'] ?? '')
-        if (!search) return fail(`Patch ${i}: search string is empty`)
+        // Apply to a working copy; commit only after every sequential operation validates.
+        for (let i = 0; i < patches.length; i++) {
+            const patch = patches[i] as Record<string, unknown>
+            if (!patch || typeof patch !== 'object') return fail(`Patch ${i}: invalid operation`)
+            const search = String(patch['search'] ?? '')
+            if (!search) return fail(`Patch ${i}: search string is empty`)
 
-        const occurrences = content.split(search).length - 1
-        if (occurrences === 0) return fail(`Patch ${i}: search string not found in file.\nSearch: ${search.slice(0, 200)}`)
-        if (occurrences > 1)   return fail(`Patch ${i}: search string matches ${occurrences} locations (must be unique).\nSearch: ${search.slice(0, 200)}`)
-        content = content.replace(search, () => String(patch['replace'] ?? ''))
-        if (Buffer.byteLength(content, 'utf8') > MAX_WRITE_BYTES) return fail('Patched content too large')
-    }
+            const occurrences = content.split(search).length - 1
+            if (occurrences === 0) return fail(`Patch ${i}: search string not found in file.\nSearch: ${search.slice(0, 200)}`)
+            if (occurrences > 1)   return fail(`Patch ${i}: search string matches ${occurrences} locations (must be unique).\nSearch: ${search.slice(0, 200)}`)
+            content = content.replace(search, () => String(patch['replace'] ?? ''))
+            if (Buffer.byteLength(content, 'utf8') > MAX_WRITE_BYTES) return fail('Patched content too large')
+        }
 
-    try {
-        fs.writeFileSync(abs, content, 'utf8')
-        const bytes = fs.statSync(abs).size
+        fs.writeFileSync(fd, content, 'utf8')
+        const bytes = Buffer.byteLength(content, 'utf8')
+        fs.ftruncateSync(fd, bytes)
         return ok(`Patched: ${filePath} (${patches.length} replacement${patches.length > 1 ? 's' : ''}, ${bytes} bytes)`, { path: abs, bytes, patchCount: patches.length })
     } catch (e) {
-        return fail(`Write failed: ${e instanceof Error ? e.message : String(e)}`)
-    }
+        return fail(`Patch failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally { if (fd !== undefined) fs.closeSync(fd) }
 }
 
 // ── Runtime ───────────────────────────────────────────────────────────────────
@@ -427,6 +438,7 @@ export class FsToolRuntime implements IToolRuntimeWithMeta {
     }
 
     async call(name: string, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
+        if (options?.signal?.aborted) return { ok: false, content: 'Cancelled before execution', errorKind: 'cancelled' }
         switch (name) {
             case 'fs_read':   return handleRead(this.root, args, this.textPageBytes, options)
             case 'fs_write':  return handleWrite(this.root, args)

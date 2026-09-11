@@ -161,10 +161,11 @@ export class ToolRuntimeAdapter implements IValidatedToolRuntime {
                         ok: false,
                         content: `Invalid tool output: validator threw: ${error instanceof Error ? error.message : String(error)}`,
                         errorKind: 'validation',
+                        data: raw,
                     };
                 }
                 if (!output.ok) {
-                    return { ok: false, content: formatIssues('output', output.issues), errorKind: 'validation' };
+                    return { ok: false, content: formatIssues('output', output.issues), errorKind: 'validation', data: raw };
                 }
                 return toResult(output.value);
             }
@@ -179,7 +180,7 @@ export class ToolRuntimeAdapter implements IValidatedToolRuntime {
             return {
                 ok: false,
                 content: error instanceof Error ? error.message : String(error),
-                errorKind: 'runtime',
+                errorKind: 'unknown',
             };
         } finally {
             if (timer) clearTimeout(timer);
