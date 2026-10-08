@@ -134,3 +134,38 @@ describe('journaled maintenance', () => {
         expect(snapshot?.messages).toEqual(initial.messages);
     });
 });
+
+it('uses checkpoint evidence for manual maintenance without streaming internal summaries or losing archived sources', async () => {
+    const { agentContext } = await import('./agent-context.js');
+    const store = new MemorySessionStore();
+    const history = Array.from({ length: 24 }, (_, index) => [
+        { role: 'user' as const, content: `Objective ${index}: ${'meeting evidence '.repeat(100)}` },
+        { role: 'assistant' as const, content: `Progress ${index}` },
+    ]).flat();
+    const requests: import('../../contracts/llm.js').TurnRequest[] = [];
+    const provider: ILLMProvider = {
+        structured: async () => { throw new Error('unused'); },
+        streamTurn: async () => { throw new Error('Maintenance must not stream to the user'); },
+        turn: async request => { requests.push(structuredClone(request)); return structuredClone(answer); },
+    };
+    const client = await createHarness().compose({ extensions: [{ id: 'checkpoint-maintenance', version: '1', apiVersion: 1, roles: {
+        store: () => store, provider: () => provider, loop: () => conversationalLoop(),
+        context: () => agentContext('Host rules', 4000, { protectUserMessages: 'latest', checkpointMaxTokens: 256 }),
+        tools: () => ({ tools: () => [], validate: (_name, args) => ({ ok: true as const, args }), call: async () => ({ ok: true, content: '' }) }),
+        policy: () => ({ evaluate: async () => ({ kind: 'allow' as const }) }),
+    } }] });
+    clients.push(client);
+    const session = await client.create();
+    await client.replaceMessages(session.id, session.revision, history);
+    const result = await client.maintain(session.id, maintenance);
+    expect(result.status).toBe('idle');
+    expect(result.contextState).toBeUndefined();
+    expect(result.messages).toEqual([{ role: 'user', content: 'summary' }]);
+    expect(requests.length).toBeGreaterThan(2);
+    expect(requests.at(-1)!.system).toBe(maintenance.system);
+    expect(requests.at(-1)!.messages.some(m => m.content.startsWith('Working checkpoint'))).toBe(true);
+    expect(result.usage.inputTokens).toBe(requests.length * answer.usage.inputTokens);
+    const events = await client.events(session.id);
+    const replacement = events.find(e => e.type === 'model.completed' && (e.data as { previousMessages?: unknown })?.previousMessages);
+    expect(replacement?.data).toMatchObject({ previousMessages: history });
+});

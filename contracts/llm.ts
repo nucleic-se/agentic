@@ -218,7 +218,7 @@ export interface ILLMProvider {
      * configuration; durable compositions then need a caller-owned identity.
      * This is separate from compatibility of provider continuation data. */
     readonly configurationIdentity?: string
-    readonly capabilities?: Readonly<ProviderCapabilities>
+    readonly capabilities?: Readonly<ProviderCapabilities> | undefined
     /**
      * Single-call structured completion without executing application tools.
      * The adapter supplies the JSON Schema through native structured output or

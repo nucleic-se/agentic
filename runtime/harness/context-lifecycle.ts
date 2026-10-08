@@ -2,7 +2,7 @@ import { ContextBudgetExceededError } from '../PromptEngine.js';
 import type { Message, TurnRequest, TurnResponse } from '../../contracts/llm.js';
 import type { HarnessExecution, PreparedHarnessModel } from './execution.js';
 import { checkpointView, prepareCheckpoint, prepareCheckpointRepair, checkpointFromResponse, rejectedCheckpoint,
-    type WorkingCheckpoint, type RejectedCheckpoint, type CheckpointSourceRange, type CheckpointEvidencePresentation, type CheckpointFormat } from './checkpoint.js';
+    type CheckpointRequestOptions, type WorkingCheckpoint, type RejectedCheckpoint, type CheckpointSourceRange, type CheckpointEvidencePresentation, type CheckpointFormat } from './checkpoint.js';
 
 /** The driver supplies preparation only: strategies cannot dispatch or acquire budgets. */
 export type ContextPreparation = Pick<HarnessExecution, 'prepareModel'>;
@@ -62,7 +62,7 @@ function checkpointState(value: unknown): CheckpointContextState {
 }
 
 /** Checkpoint selection and repair are one replaceable policy; hosts persist its opaque state. */
-export function checkpointContextLifecycle(configuration: { maxTokens: number; triggerRatio?: number; presentation?: CheckpointEvidencePresentation; format?: CheckpointFormat }): ContextLifecycle {
+export function checkpointContextLifecycle(configuration: Pick<CheckpointRequestOptions, 'protectUserMessages'> & { maxTokens: number; triggerRatio?: number; presentation?: CheckpointEvidencePresentation; format?: CheckpointFormat }): ContextLifecycle {
     const config = { ...configuration,
         ...(configuration.presentation ? { presentation: { ...configuration.presentation } } : {}),
         ...(configuration.format ? { format: { ...configuration.format, tools: structuredClone(configuration.format.tools ?? []) } } : {}),
@@ -81,7 +81,7 @@ export function checkpointContextLifecycle(configuration: { maxTokens: number; t
         if (state.candidate) {
             const { sourceRange, attempt, ...checkpoint } = state.candidate;
             try {
-                prepared = await execution.prepareModel({ ...request, messages: checkpointView(request.messages, checkpoint, suffix).messages });
+                prepared = await execution.prepareModel({ ...request, messages: checkpointView(request.messages, checkpoint, suffix, config).messages });
                 validated = sourceRange;
                 state = { kind: 'checkpoint', checkpoint };
             } catch (error) {
@@ -94,10 +94,10 @@ export function checkpointContextLifecycle(configuration: { maxTokens: number; t
         if (state.rejected?.attempt === 2) throw new Error(`Checkpoint rejected after two attempts: ${state.rejected.reason}`);
         // Invalid responses and candidates that cannot fit share the same one-repair allowance.
         let selected = state.rejected ? await prepareCheckpointRepair(execution, request.messages, state.rejected, {
-            maxTokens: config.maxTokens, cacheScope: cacheScope === undefined ? undefined : `${cacheScope}:repair`, format: config.format,
+            ...config, previous: state.checkpoint, notes, tools: request.tools, cacheScope: cacheScope === undefined ? undefined : `${cacheScope}:repair`, format: config.format,
         }) : undefined;
         if (!selected) {
-            const view = checkpointView(request.messages, state.checkpoint, suffix);
+            const view = checkpointView(request.messages, state.checkpoint, suffix, config);
             prepared ??= await execution.prepareModel({ ...request, messages: view.messages });
             if (!prepared.report) throw new Error('Checkpoint strategy requires a context usage report');
             selected = await prepareCheckpoint(execution, request.messages, view, prepared.report, {

@@ -57,9 +57,10 @@ it('resumes exact rejected candidate repair from serialized state before trying 
     const state = JSON.parse(JSON.stringify(rejected.state));
     const repaired = await lifecycle.prepare({ request, state }, {
         prepareModel: (request, options) => {
-            expect(request.system).toMatch(/^Repair/);
+            expect(request.system).toMatch(/^Maintain/);
             const evidence = JSON.parse(request.messages[0].content);
-            expect(evidence.draft).toBe('x'.repeat(8591));
+            expect(evidence.sources).toEqual(JSON.parse(first.prepared.request.messages[0].content).sources);
+            expect(evidence.output.targetTokens).toBe(32);
             expect(evidence.requirements).toEqual([
                 { index: 0, content: 'Do not release until verification passes.' },
                 { index: 41, content: 'Correction: security verification is also required.' },
@@ -184,5 +185,5 @@ it('uses the same narrowed preparation boundary for maintenance and repair', asy
     const repair = await lifecycle.prepare({ request, state: rejected.state }, bounded);
     expect(repair.kind).toBe('maintenance');
     expect(repair.prepared.report?.tokenBudget).toBe(2800);
-    expect(repair.prepared.request.system).toMatch(/^Repair/);
+    expect(repair.prepared.request.system).toMatch(/^Maintain/);
 });

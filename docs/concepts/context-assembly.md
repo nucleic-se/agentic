@@ -252,3 +252,39 @@ These are composition boundaries, not cache keys or cache-hit guarantees.
 Existing providers receive ordinary strings and messages. Future adapter code
 can consume the prepared report to choose supported cache controls; no OpenAI,
 Anthropic, or other vendor's wire fields belong in this builder metadata.
+
+## Long-lived harness sessions
+
+`budgetedContext` selects messages; it does not generate summaries. Compose
+`agentContext` to add journaled checkpoint maintenance through the same model
+execution boundary. The default preserves every human input verbatim. For
+long-lived conversations that must summarize older inputs, select the same
+retention policy for both budgeting and checkpoints:
+
+```ts
+import { agentContext } from '@nucleic-se/agentic/harness';
+
+const context = agentContext(systemPrompt, contextTokenBudget, {
+    protectUserMessages: 'latest',
+    checkpointMaxTokens: summaryOutputBudget,
+});
+```
+
+In `latest` mode the latest human input and all pinned inputs stay verbatim.
+Older inputs become source evidence for the checkpoint; summaries must carry
+forward still-relevant requirements and corrections. Original messages remain
+in the session, while the derived checkpoint and exact model requests are
+journaled separately. This is lossy working memory, not a guarantee of semantic
+retention. A current input, pinned material or tool manifest that cannot fit still
+fails explicitly; increasing session length must not imply increasing provider
+capacity.
+
+Maintenance never streams its internal text as the assistant's answer. Invalid
+or truncated summaries get one retry using their original source range; a complete
+summary that cannot fit the task context gets one shortening attempt. Receipts
+retain partial outcomes and usage. Explicit `client.maintain` also uses the context
+lifecycle before its final replacement, so it can operate on oversized history.
+Its final summary must be complete before the replacement is committed.
+
+Input deduplication is a separate host responsibility. Repeatedly appending the
+same external history window wastes context even when checkpointing works.

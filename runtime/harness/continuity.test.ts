@@ -232,3 +232,30 @@ it('persists structured maintenance as state without dispatching its schema call
     expect(events.filter(event => event.type === 'model.completed')).toHaveLength(2);
     expect(saved.usage.inputTokens).toBe(200);
 });
+
+
+it.each([false, true])('repairs truncated checkpoints through real model receipts (second response truncated=%s)', async twice => {
+    let calls = 0, firstSources: unknown;
+    const { client, record } = await setup(request => {
+        if (request.system?.startsWith('Maintain')) {
+            const input = JSON.parse(request.messages[0].content);
+            calls++;
+            if (calls === 1) firstSources = input.sources;
+            else expect(input.sources).toEqual(firstSources);
+            return { message: { role: 'assistant', content: 'Verified observations and remaining work.' },
+                stopReason: calls === 1 || twice ? 'max_tokens' : 'end_turn', usage: { inputTokens: 100, outputTokens: 20 } };
+        }
+        return 'done';
+    });
+    await client.submit(record.id, 'Continue', { commandId: 'continue' });
+    const saved = await client.wait(record.id);
+    expect(calls).toBe(2);
+    expect(saved.status).toBe(twice ? 'failed' : 'idle');
+    expect(saved.operations[0].status).toBe('partial');
+    expect(saved.usage.inputTokens).toBe(saved.operations.length * 100);
+    expect(saved.messages.slice(0, record.messages.length)).toEqual(record.messages);
+    const decisions = (await client.events(record.id)).map(event => (event.data as { contextDecision?: unknown })?.contextDecision).filter(Boolean);
+    expect(decisions[0]).toEqual({ accepted: false, reason: 'incomplete', attempt: 1 });
+    if (twice) expect(saved.error).toContain('after two attempts: incomplete');
+    else expect(saved.messages.at(-1)?.content).toBe('done');
+});

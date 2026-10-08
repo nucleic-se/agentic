@@ -51,7 +51,8 @@ it('preserves structured rejection data and format across repair and serialized 
     expect(repair.prepared.request.tools).toEqual(format.tools);
     expect(repair.prepared.request.system).toContain(format.instructions);
     const input = JSON.parse(repair.prepared.request.messages[0].content);
-    expect(JSON.parse(input.draft).toolCalls).toEqual(bad.message.toolCalls);
+    expect(input.sources).toEqual(JSON.parse(step.prepared.request.messages[0].content).sources);
+    expect((state.rejected as { text: string }).text).toContain("invalid");
     expect(input.requirements).toEqual([{ index: 0, content: request.messages[0].content }]);
     expect(repair.metadata.sourceRange).toEqual(step.metadata.sourceRange);
     const candidate = repair.reduce(response(value));

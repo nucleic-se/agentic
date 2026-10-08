@@ -181,8 +181,8 @@ class HarnessSessionClient implements SessionClient {
         const prepared = options.prepared ?? await this.execution.prepareModel(input, { signal });
         const report = prepared.report;
         return this.execution.dispatchModel(prepared, {
-            operationId, signal, stream: true,
-            ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : options.contextStep?.kind === 'maintenance' ? { requireComplete: true } : {}),
+            operationId, signal, stream: !options.maintenance && options.contextStep?.kind !== 'maintenance',
+            ...(options.maintenance ? { requireComplete: true, allowToolCalls: false } : {}),
             onDelta: text => this.notify({ sessionId: id, runId, operationId, type: 'delta', text }),
             onRequest: async request => {
                 await this.change(id, 'model.request', () => {}, { operationId, request });
@@ -210,7 +210,7 @@ class HarnessSessionClient implements SessionClient {
                         op.status = outcome.outcome;
                         op.output = outcome.response;
                         this.addUsage(record, outcome.usage);
-                        if (options.contextStep?.reduce && outcome.outcome === 'completed' && !signal.aborted) {
+                        if (options.contextStep?.reduce && (outcome.outcome === 'completed' || options.contextStep.kind === 'maintenance') && !signal.aborted) {
                             try {
                                 const transition = options.contextStep.reduce(structuredClone(outcome.response));
                                 const state = structuredClone(transition.state), decision = structuredClone(transition.decision);
@@ -253,7 +253,7 @@ class HarnessSessionClient implements SessionClient {
         });
     }
     private async requestConversation(id: string, runId: string, request: TurnRequest, signal: AbortSignal,
-        admit: () => void): Promise<TurnResponse> {
+        admit: () => void, maintenance?: MaintenanceOptions): Promise<TurnResponse> {
         const initial = await this.get(id);
         if (!isDeepStrictEqual(request.messages, initial.messages))
             throw new Error('Context lifecycle requires the complete current conversation');
@@ -267,6 +267,7 @@ class HarnessSessionClient implements SessionClient {
             admit();
             const response = await this.executeModelEffect(id, runId, step.prepared.request, signal, {
                 prepared: step.prepared, contextStep: step,
+                ...(step.kind === 'task' && maintenance ? { maintenance } : {}),
             });
             if (step.kind === 'task') return response;
         }
@@ -461,7 +462,15 @@ class HarnessSessionClient implements SessionClient {
                 delete record.error;
             });
             started = true;
-            await this.executeModelEffect(id, runId, { system: options.system, messages: current.messages, tools: [], maxTokens: options.maxTokens }, signal, { maintenance: options });
+            const request = { system: options.system, messages: current.messages, tools: [], maxTokens: options.maxTokens };
+            if (this.roles.context.lifecycle) {
+                let modelCount = 0;
+                await this.requestConversation(id, runId, request, signal, () => {
+                    if (++modelCount > this.limits.maxModelCalls) throw new Error('Maintenance model-call budget exceeded');
+                }, options);
+            } else {
+                await this.executeModelEffect(id, runId, request, signal, { maintenance: options });
+            }
             signal.throwIfAborted();
             return await this.change(id, 'maintenance.completed', record => {
                 record.status = 'idle';

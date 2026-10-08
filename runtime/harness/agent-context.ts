@@ -6,6 +6,8 @@ import type { ContextStrategy } from './types.js';
 
 export interface AgentContextOptions {
     checkpointing?: boolean;
+    /** Latest mode summarizes older unpinned inputs; all mode retains every human input verbatim. */
+    protectUserMessages?: 'all' | 'latest';
     checkpointMaxTokens?: number;
     /** Override the shared recent-conversation allowance. Pinned status is accounted separately. */
     minRecentGroups?: number;
@@ -16,11 +18,12 @@ export function agentContext(system: Parameters<typeof budgetedContext>[0], toke
     return {
         ...budgetedContext(system, tokenBudget, {
             includeToolCallIds: true,
+            protectUserMessages: options.protectUserMessages ?? 'all',
             minRecentGroups: options.minRecentGroups,
             referenceToolResult: archivedToolResultReference,
         }),
         lifecycle: options.checkpointing === false ? referenceContextLifecycle()
-            : checkpointContextLifecycle({ maxTokens: options.checkpointMaxTokens ?? 800 }),
+            : checkpointContextLifecycle({ maxTokens: options.checkpointMaxTokens ?? 800, protectUserMessages: options.protectUserMessages }),
     };
 }
 

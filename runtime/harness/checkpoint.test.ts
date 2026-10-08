@@ -417,3 +417,25 @@ it('keeps pinned delegated intent separate from human requirements across checkp
     expect(JSON.parse(repaired.prepared.request.messages[0].content).pinnedEvidence).toEqual(expected);
     expect(history).toEqual(original);
 });
+
+it('summarizes older human inputs only when latest retention is explicitly selected', () => {
+    const history: Message[] = [
+        { role: 'user', content: 'Permanent constraint', sticky: true },
+        { role: 'user', content: 'Older objective to preserve in the summary' },
+        { role: 'assistant', content: 'Progress' },
+        { role: 'user', provenance: 'deterministic', sticky: true, content: 'Host identity' },
+        { role: 'user', content: 'Current correction' },
+    ];
+    const original = structuredClone(history);
+    for (const through of [3, 5]) {
+        const view = checkpointView(history, { through, text: 'Derived progress' }, [], { protectUserMessages: 'latest' });
+        expect(view.messages.map(m => m.content)).not.toContain(history[1].content);
+        for (const index of [0, 3, 4]) expect(view.messages.filter(m => m.content === history[index].content)).toHaveLength(1);
+    }
+    const evidence = JSON.parse(checkpointRequest(history, 3, { protectUserMessages: 'latest' }).messages[0].content);
+    expect(evidence.requirements).toEqual([{ index: 0, content: history[0].content }, { index: 4, content: history[4].content }]);
+    expect(evidence.sources[1].content).toBe(history[1].content);
+    expect(evidence.pinnedEvidence[0].content).toBe('Host identity');
+    expect(checkpointView(history, { through: 5, text: 'Derived progress' }).messages.map(m => m.content)).toContain(history[1].content);
+    expect(history).toEqual(original);
+});
