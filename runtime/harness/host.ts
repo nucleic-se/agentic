@@ -349,7 +349,7 @@ class HarnessSessionClient implements SessionClient {
         this.assertAdmission();
         if (typeof content !== 'string' || !content.trim() || content.length > 32000) throw new Error('Message must contain 1–32000 characters');
         assertId(options.commandId);
-        if (options.mode && options.mode !== 'steer' && options.mode !== 'enqueue') throw new Error('Invalid delivery mode');
+        if (options.mode && options.mode !== 'steer' && options.mode !== 'enqueue' && options.mode !== 'context') throw new Error('Invalid delivery mode');
         const metadata = structuredClone(options.metadata);
         const contentHash = createHash('sha256').update(content.trim()).digest('hex');
         let accepted = false;
@@ -365,6 +365,14 @@ class HarnessSessionClient implements SessionClient {
             if (metadata !== undefined) (record.inputReceipts ??= []).push({
                 commandId: options.commandId, contentHash, metadata, status: 'accepted',
             });
+            if (options.mode === 'context') {
+                if (record.activeRunId) throw new Error('Cannot ingest context during an active run');
+                record.commandIds.push(options.commandId);
+                record.messages.push({ role: 'user', content: content.trim() });
+                const receipt = record.inputReceipts?.at(-1);
+                if (receipt?.commandId === options.commandId) { receipt.status = 'completed'; receipt.response = ''; }
+                return;
+            }
             record.commandIds.push(options.commandId);
             record.queue.push({ id: options.commandId, content: content.trim(), mode: options.mode ?? 'enqueue' });
             accepted = true;

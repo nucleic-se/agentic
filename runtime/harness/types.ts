@@ -95,7 +95,8 @@ export interface SessionStore extends ExecutionJournal<SessionRecord, SessionEve
 }
 export interface SubmitOptions {
     commandId: string;
-    mode?: 'steer' | 'enqueue';
+    /** context persists evidence without starting a model turn; only while idle. */
+    mode?: 'steer' | 'enqueue' | 'context';
     /** Atomically retained with accepted input, independently of lossy context maintenance. */
     metadata?: JsonValue;
 }
