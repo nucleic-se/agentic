@@ -1,3 +1,4 @@
+import type { JsonValue } from '../../contracts/shared.js';
 import type { ContextLifecycle } from './context-lifecycle.js';
 import type { Message, TurnRequest, TurnResponse, ILLMProvider, ToolCall, TokenUsage, ToolDefinition } from '../../contracts/llm.js';
 import type { ExecutionJournal } from '../ExecutionJournal.js';
@@ -33,6 +34,16 @@ export interface PendingApproval extends PolicyContext {
     reason: string;
     createdAt: number;
 }
+/** Host ingestion metadata is durable with acceptance, and never included in model context. */
+export interface InputReceipt {
+    commandId: string;
+    contentHash: string;
+    metadata: JsonValue;
+    status: 'accepted' | 'running' | 'completed' | 'failed' | 'interrupted';
+    runId?: string;
+    response?: string;
+    error?: string;
+}
 export interface SessionRecord {
     id: string;
     title: string;
@@ -46,6 +57,7 @@ export interface SessionRecord {
     operations: Operation[];
     approvals: PendingApproval[];
     commandIds: string[];
+    inputReceipts?: InputReceipt[];
     queue: Array<{ id: string; content: string; mode: 'steer' | 'enqueue' }>;
     usage: TokenUsage;
     composition: string;
@@ -81,7 +93,12 @@ export interface SessionStore extends ExecutionJournal<SessionRecord, SessionEve
     events(id: string, afterSequence?: number, limit?: number): Promise<SessionEvent[]>;
     close(): Promise<void>;
 }
-export interface SubmitOptions { commandId: string; mode?: 'steer' | 'enqueue' }
+export interface SubmitOptions {
+    commandId: string;
+    mode?: 'steer' | 'enqueue';
+    /** Atomically retained with accepted input, independently of lossy context maintenance. */
+    metadata?: JsonValue;
+}
 export interface MaintenanceOptions {
     /** Complete maintenance instruction, included in the context budget. */
     system: string;

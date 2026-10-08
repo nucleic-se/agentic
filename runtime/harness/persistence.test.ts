@@ -94,12 +94,14 @@ describe('SQLite harness integration', () => {
             await store.commit(session.id, 0, {
                 ...session, revision: 1, status: 'running', activeRunId: 'crashed-run',
                 messages: [{ role: 'user', content: 'Write once' }, proposal.message],
+                inputReceipts: [{ commandId: 'external-input', contentHash: 'hash', metadata: { cursor: 'opaque' }, status: 'running', runId: 'crashed-run' }],
                 operations: [{ id: 'pending-tool', runId: 'crashed-run', kind: 'tool', status: 'intent', name: 'write', input: proposal.message.toolCalls![0].args, createdAt: Date.now() }],
             }, { schemaVersion: 1, id: randomUUID(), sessionId: session.id, runId: 'crashed-run', sequence: 1, type: 'tool.intent', timestamp: Date.now() });
         } finally { await store.close(); }
         const recovered = await compose(path, [answer]);
         const state = await recovered.client.get(session.id);
         expect(state.status).toBe('interrupted');
+        expect(state.inputReceipts?.[0]).toMatchObject({ status: 'interrupted', metadata: { cursor: 'opaque' } });
         expect(state.operations[0].status).toBe('unknown');
         expect(state.messages.at(-1)).toMatchObject({ role: 'tool_result', toolCallId: 'write-1', isError: true });
         expect(state.approvals).toEqual([]);
@@ -108,4 +110,27 @@ describe('SQLite harness integration', () => {
         expect(recovered.tools.call).not.toHaveBeenCalled();
         expect((await recovered.client.events(session.id)).at(-1)?.type).toBe('run.recovered');
     });
+});
+
+it('atomically retains input metadata, rejects conflicting retries, and carries receipts through maintenance, fork and reopen', async () => {
+    const path = await databasePath();
+    const first = await compose(path, [answer]);
+    const record = await first.client.create();
+    const input = { commandId: 'delivery-1', metadata: { source: 'meeting', cursor: 'opaque-cursor' } };
+    await first.client.submit(record.id, 'Incoming message', input);
+    const saved = await first.client.wait(record.id);
+    expect(saved.inputReceipts?.[0]).toMatchObject({ ...input, status: 'completed', response: 'Finished' });
+    expect(saved.messages.some(message => message.content.includes('opaque-cursor'))).toBe(false);
+    input.metadata.cursor = 'caller-mutation';
+    expect((await first.client.get(record.id)).inputReceipts?.[0].metadata).toEqual({ source: 'meeting', cursor: 'opaque-cursor' });
+    await expect(first.client.submit(record.id, 'Different message', { ...input, metadata: { source: 'meeting', cursor: 'opaque-cursor' } })).rejects.toThrow('reused');
+    await expect(first.client.submit(record.id, 'Incoming message', input)).rejects.toThrow('reused');
+    await first.client.maintain(record.id, { system: 'Summarize', project: response => [response.message] });
+    expect((await first.client.get(record.id)).inputReceipts).toEqual(saved.inputReceipts);
+    const fork = await first.client.fork(record.id);
+    await first.client.close();
+    const reopened = await compose(path, [answer]);
+    await reopened.client.submit(fork.id, 'Incoming message', { commandId: 'delivery-1', metadata: { source: 'meeting', cursor: 'opaque-cursor' } });
+    expect(reopened.provider.turn).not.toHaveBeenCalled();
+    expect((await reopened.client.get(fork.id)).inputReceipts).toEqual(saved.inputReceipts);
 });

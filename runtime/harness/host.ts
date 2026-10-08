@@ -5,7 +5,7 @@ import type { ContextStep } from './context-lifecycle.js';
 import type { PreparedHarnessModel } from './execution.js';
 import { toToolResultMessage } from '../ToolOutput.js';
 import { validateOperationResolution } from './resolution.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Message, TurnRequest, TurnResponse, TokenUsage } from '../../contracts/llm.js';
 import { composeDriver, compositionFingerprint, type DriverComposition, type HarnessClient } from './composition.js';
 import { createHarnessExecution } from './execution.js';
@@ -281,6 +281,9 @@ class HarnessSessionClient implements SessionClient {
                 reconcileInterruptedMessages(record);
                 record.approvals = [];
                 record.status = 'interrupted';
+                for (const receipt of record.inputReceipts ?? []) if (receipt.status === 'running') {
+                    receipt.status = 'interrupted'; receipt.error = 'Previous run was interrupted';
+                }
                 delete record.activeRunId;
                 record.error = 'Previous run was interrupted. Review unknown operations before resuming; no operation will be repeated automatically.';
             });
@@ -329,6 +332,7 @@ class HarnessSessionClient implements SessionClient {
                 approvals: [],
                 queue: [],
                 commandIds: [],
+                ...(parent.inputReceipts ? { inputReceipts: structuredClone(parent.inputReceipts.filter(receipt => receipt.status !== 'accepted')) } : {}),
             };
             delete child.activeRunId;
             delete child.error;
@@ -346,15 +350,26 @@ class HarnessSessionClient implements SessionClient {
         if (typeof content !== 'string' || !content.trim() || content.length > 32000) throw new Error('Message must contain 1–32000 characters');
         assertId(options.commandId);
         if (options.mode && options.mode !== 'steer' && options.mode !== 'enqueue') throw new Error('Invalid delivery mode');
+        const metadata = structuredClone(options.metadata);
+        const contentHash = createHash('sha256').update(content.trim()).digest('hex');
         let accepted = false;
         await this.change(id, 'input.accepted', record => {
             this.checkRunnable(record);
+            const prior = record.inputReceipts?.find(receipt => receipt.commandId === options.commandId);
+            if (prior) {
+                if (prior.contentHash !== contentHash || !isDeepStrictEqual(prior.metadata, metadata))
+                    throw new Error('Input command ID was reused with different content or metadata');
+                return;
+            }
             if (record.commandIds.includes(options.commandId)) return;
+            if (metadata !== undefined) (record.inputReceipts ??= []).push({
+                commandId: options.commandId, contentHash, metadata, status: 'accepted',
+            });
             record.commandIds.push(options.commandId);
             record.queue.push({ id: options.commandId, content: content.trim(), mode: options.mode ?? 'enqueue' });
             accepted = true;
             if (record.title === 'New session') record.title = content.trim().slice(0, 80);
-        }, { commandId: options.commandId });
+        }, { commandId: options.commandId, ...(metadata === undefined ? {} : { contentHash, metadata }) });
         if (accepted && !this.runs.has(id)) this.launch(id);
     }
     async resume(id: string) {
@@ -579,7 +594,11 @@ class HarnessSessionClient implements SessionClient {
                 await this.change(id, 'input.delivered', record => {
                     const selected = record.queue.filter(item => item.mode === mode);
                     record.queue = record.queue.filter(item => item.mode !== mode);
-                    for (const item of selected) picked.push({ role: 'user', content: item.content });
+                    for (const item of selected) {
+                        picked.push({ role: 'user', content: item.content });
+                        const receipt = record.inputReceipts?.find(receipt => receipt.commandId === item.id);
+                        if (receipt) { receipt.status = 'running'; receipt.runId = runId; }
+                    }
                     record.messages.push(...picked);
                 });
                 return picked;
@@ -682,6 +701,10 @@ class HarnessSessionClient implements SessionClient {
             await this.roles.loop.run(services);
             checkActive();
             await this.change(id, 'run.completed', record => {
+                for (const receipt of record.inputReceipts ?? []) if (receipt.runId === runId && receipt.status === 'running') {
+                    receipt.status = 'completed';
+                    receipt.response = record.messages.filter(message => message.role === 'assistant').at(-1)?.content ?? '';
+                }
                 record.status = 'idle';
                 record.approvals = [];
                 delete record.activeRunId;
@@ -691,6 +714,10 @@ class HarnessSessionClient implements SessionClient {
                 reconcileInterruptedMessages(record);
                 record.status = signal.aborted ? 'interrupted' : 'failed';
                 record.error = errorText(error);
+                for (const receipt of record.inputReceipts ?? []) if (receipt.runId === runId && receipt.status === 'running') {
+                    receipt.status = record.status;
+                    receipt.error = record.error;
+                }
                 record.approvals = [];
                 for (const op of record.operations) if (op.runId === runId && op.status === 'intent') op.status = 'unknown';
                 delete record.activeRunId;
