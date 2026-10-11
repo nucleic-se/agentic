@@ -27,6 +27,15 @@ export class LLMProtocolError extends Error {
     }
 }
 
+/** Explicit provider rejection of the input context; no complete response was produced.
+ * Adapters must not use this for transport failures or truncated model output. */
+export class LLMContextOverflowError extends Error {
+    constructor() {
+        super('Provider rejected the request because its context exceeds the model limit');
+        this.name = 'LLMContextOverflowError';
+    }
+}
+
 /** A caller-owned hard request ceiling was exceeded before transport access. */
 export class LLMRequestBudgetError extends Error {
     constructor(

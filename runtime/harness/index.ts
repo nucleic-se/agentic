@@ -17,7 +17,7 @@ export { rejectedCheckpoint, prepareCheckpointRepair, type RejectedCheckpoint, c
 
 export { toToolResultMessage, readArchivedToolResult, readTextPage } from '../ToolOutput.js';
 export { readProjectInstructions, projectInstructionText, projectInstructionTargets, type ProjectInstruction } from './instructions.js';
-export { validateOperationResolution } from './resolution.js';
+export { validateOperationResolution, applyOperationResolution, resolveSessionOperation, inspectSessionRecovery } from './resolution.js';
 export { memoryToolRuntime, sessionNoteSource, type NoteStore, type NoteSource, type NoteSourceQuery, type NoteSourceReader } from './memory.js';
 
 export { archiveToolRuntime, archivedToolResultReference, archivedToolResultDefinition, validateArchivedToolResult } from './archive.js';
@@ -30,3 +30,5 @@ export { resolveContextBudget } from './context-budget.js';
 
 export { agentContext, codingAgentContext } from './agent-context.js';
 export type { AgentContextOptions, CodingAgentContextOptions } from './agent-context.js';
+
+export { TurnLimitError } from './loops.js';

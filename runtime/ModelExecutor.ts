@@ -1,6 +1,6 @@
 import { executionSignal } from './ExecutionOptions.js';
 import { randomUUID } from 'node:crypto';
-import { LLMProtocolError, LLMRequestBudgetError } from '../contracts/llm.js';
+import { LLMProtocolError, LLMRequestBudgetError, LLMContextOverflowError } from '../contracts/llm.js';
 import type { ILLMProvider, ProviderCallOptions, StructuredRequest, StructuredResponse, TokenUsage, TurnRequest, TurnResponse } from '../contracts/llm.js';
 
 export interface ModelIntent<Request = TurnRequest | StructuredRequest> {
@@ -10,7 +10,7 @@ export interface ModelIntent<Request = TurnRequest | StructuredRequest> {
     startedAt: number;
 }
 export interface ModelFailure {
-    kind: 'protocol' | 'request_budget' | 'transport' | 'abort' | 'validation' | 'stream';
+    kind: 'protocol' | 'context_overflow' | 'request_budget' | 'transport' | 'abort' | 'validation' | 'stream';
     message: string;
 }
 export type ModelOutcome<Response = TurnResponse | StructuredResponse<unknown>> = {
@@ -93,6 +93,8 @@ function failure(error: unknown, aborted: boolean): ModelFailure {
     let kind: ModelFailure['kind'];
     if (aborted) {
         kind = 'abort';
+    } else if (error instanceof LLMContextOverflowError) {
+        kind = 'context_overflow';
     } else if (error instanceof LLMProtocolError) {
         kind = 'protocol';
     } else if (error instanceof LLMRequestBudgetError) {

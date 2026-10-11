@@ -215,3 +215,12 @@ it('keeps continuation compatibility separate from persisted configuration ident
 it.each(['', ' ', '///'])('rejects an empty effective endpoint (%s)', baseUrl => {
     expect(() => new SubscriptionProvider({ model: 'fixture', baseUrl })).toThrow('baseUrl must be nonempty');
 });
+
+it('preserves explicit HTTP context rejection through the backend as a typed failure', async () => {
+    const { LLMContextOverflowError } = await import('../contracts/llm.js');
+    let calls=0;
+    const provider = new SubscriptionProvider({ model:'fixture', credentials:async()=>token,
+        fetch:async()=>{calls++;return new Response(JSON.stringify({error:{code:'context_length_exceeded',message:'Too long'}}),{status:400});} });
+    await expect(provider.turn({messages:[{role:'user',content:'test'}]})).rejects.toBeInstanceOf(LLMContextOverflowError);
+    expect(calls).toBe(1);
+});

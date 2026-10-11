@@ -294,3 +294,39 @@ Its final summary must be complete before the replacement is committed.
 
 Input deduplication is a separate host responsibility. Repeatedly appending the
 same external history window wastes context even when checkpointing works.
+
+
+### Provider overflow recovery
+
+The local session driver recognizes `LLMContextOverflowError`, an explicit provider
+rejection rather than a transport failure or truncated answer. With the default
+checkpoint lifecycle it records the failed request, persists a forced-checkpoint
+decision, summarizes an eligible source prefix, and retries the task request once.
+It does not raise the configured context ceiling or weaken pinned-input retention.
+No eligible prefix, a failed maintenance call, or a second overflow ends the run.
+All maintenance and retry calls still pass normal execution admission and tracing.
+Original messages and accepted-input receipts remain durable across restart.
+
+The OpenAI-compatible and subscription adapters recognize the structured HTTP
+`context_length_exceeded` code on 400/413 responses. Other adapters may produce
+the same provider-neutral error only when they can establish an explicit context
+rejection; arbitrary error text is not a retry signal. Stream-level errors without
+that evidence remain ordinary failures. Custom drivers can use the optional pure
+`ContextLifecycle.recoverOverflow` transition and must persist it and bound retries.
+Reference context selection without checkpointing does not automatically recover.
+
+### Inspection and effect reconciliation
+
+`readSqliteSession(path, id)` from `@nucleic-se/agentic/harness/sqlite` reads committed
+live WAL state without claiming ownership, initializing schema or opening a provider.
+It returns private session data; use `inspectSessionRecovery(record)` for a bounded
+operational view excluding prompts, tool arguments, output and error text. Its
+lists contain at most 100 entries and include total counts.
+
+`resolveSessionOperation(store, sessionId, operationId, resolution)` reconciles one
+unknown tool effect using an exact expected revision, external evidence and a known
+result. It shares the transition used by `SessionClient.resolveOperation`, updates
+the existing tool result and appends an audit event atomically. It never dispatches
+a tool, resumes a run, changes input receipts or grants authority. Offline hosts
+must fence admission and own the store; running/waiting sessions are refused.
+`TurnLimitError.maxTurns` is the typed conversational-loop exhaustion contract.

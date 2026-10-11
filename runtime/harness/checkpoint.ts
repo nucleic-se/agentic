@@ -240,7 +240,9 @@ export async function prepareCheckpoint(
     configuration: CheckpointRequestOptions & { maxTokens: number; cacheScope?: string;
         /** Start before pressure at this fraction (0, 1] of the reported context ceiling.
          * Without a reported ceiling, only pressure and partial progress trigger maintenance. */
-        triggerRatio?: number },
+        triggerRatio?: number;
+        /** Provider rejected a locally admitted task request. Compact an eligible prefix now. */
+        force?: boolean },
     options: Omit<HarnessPreparationOptions, 'preserveMessages'> = {},
 ) {
     const start = sourceBoundary(history, configuration.previous);
@@ -258,7 +260,7 @@ export async function prepareCheckpoint(
     };
     // Elective compaction should have at least its reserved output's worth of source to reclaim.
     // Eviction and partial progress need preservation regardless of prefix size.
-    if (!partial && !pressure && (!due || !worthwhile(Infinity))) return undefined;
+    if (!configuration.force && !partial && !pressure && (!due || !worthwhile(Infinity))) return undefined;
     type Selection = { through: number; partial?: WorkingCheckpoint['partial']; sourceRange: CheckpointSourceRange; prepared: PreparedHarnessModel };
     const prepare = (request: ReturnType<typeof evidenceRequest>) => execution.prepareModel({
         ...request, maxTokens: configuration.maxTokens, cacheScope: configuration.cacheScope,
@@ -303,5 +305,5 @@ export async function prepareCheckpoint(
             break;
         }
     }
-    return selected && !pressure && !selected.partial && !worthwhile(selected.through) ? undefined : selected;
+    return selected && !configuration.force && !pressure && !selected.partial && !worthwhile(selected.through) ? undefined : selected;
 }

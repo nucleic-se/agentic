@@ -1,3 +1,5 @@
+import { LLMContextOverflowError } from '../contracts/llm.js';
+import { isContextOverflowResponse } from './context-overflow.js';
 /**
  * Shared retry logic for HTTP providers.
  *
@@ -210,6 +212,9 @@ export async function resilientPost<T>(
         const res = await fetch(url, init)
 
         if (res.ok) return res.json() as Promise<T>
+
+        if ((res.status === 400 || res.status === 413) && isContextOverflowResponse(res.status, await res.clone().text()))
+            throw new LLMContextOverflowError()
 
         if (retryable.has(res.status) && attempt < maxRetries) {
             const delay = retryDelayFromHeaders(res.headers, attempt, resetHdrs, baseDelay, maxDelay)

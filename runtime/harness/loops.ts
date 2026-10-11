@@ -1,5 +1,12 @@
 import type { LoopServices, LoopStrategy } from './types.js';
 
+export class TurnLimitError extends Error {
+    constructor(readonly maxTurns: number) {
+        super(`Reached turn limit of ${maxTurns}`);
+        this.name = 'TurnLimitError';
+    }
+}
+
 async function drain(services: LoopServices, mode: 'steer' | 'enqueue'): Promise<boolean> {
     const messages = await services.takeQueued(mode);
     return messages.length > 0;
@@ -32,7 +39,7 @@ export function conversationalLoop(options: { maxTurns?: number; maxTokens?: num
                 if (await drain(services, 'enqueue')) continue;
                 return;
             }
-            throw new Error(`Reached turn limit of ${maxTurns}`);
+            throw new TurnLimitError(maxTurns);
         },
     };
 }

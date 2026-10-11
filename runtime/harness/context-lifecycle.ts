@@ -37,6 +37,8 @@ export type ContextStep = {
     reduce?(response: TurnResponse): ContextTransition;
 } | ContextMaintenance;
 export interface ContextLifecycle {
+    /** Pure recovery decision after a committed explicit provider overflow receipt. */
+    recoverOverflow?(state: unknown): ContextTransition;
     prepare(input: ContextLifecycleInput, execution: ContextPreparation): Promise<ContextStep>;
 }
 
@@ -49,6 +51,7 @@ export function referenceContextLifecycle(): ContextLifecycle {
 
 export interface CheckpointContextState {
     kind: 'checkpoint';
+    forceCheckpoint?: boolean;
     checkpoint?: WorkingCheckpoint;
     rejected?: RejectedCheckpoint & { attempt: 1 | 2 };
     /** A complete response awaiting local context admission. The last accepted checkpoint stays intact. */
@@ -72,7 +75,12 @@ export function checkpointContextLifecycle(configuration: Pick<CheckpointRequest
     if (!Number.isSafeInteger(config.maxTokens) || config.maxTokens < 1) throw new RangeError('Checkpoint output budget must be a positive safe integer');
     if (config.triggerRatio !== undefined && (!Number.isFinite(config.triggerRatio) || config.triggerRatio <= 0 || config.triggerRatio > 1))
         throw new RangeError('Checkpoint triggerRatio must be greater than zero and no greater than one');
-    return { async prepare(input, execution) {
+    return {
+        recoverOverflow(value) {
+            const state = checkpointState(value);
+            return { state: { ...state, forceCheckpoint: true }, decision: { reason: 'provider-overflow' } };
+        },
+        async prepare(input, execution) {
         const { request, suffix = [], notes } = input;
         let state = checkpointState(input.state);
         const cacheScope = request.cacheScope === undefined ? undefined : `${request.cacheScope}:checkpoint`;
@@ -83,7 +91,7 @@ export function checkpointContextLifecycle(configuration: Pick<CheckpointRequest
             try {
                 prepared = await execution.prepareModel({ ...request, messages: checkpointView(request.messages, checkpoint, suffix, config).messages });
                 validated = sourceRange;
-                state = { kind: 'checkpoint', checkpoint };
+                state = { kind: 'checkpoint', checkpoint, ...(state.forceCheckpoint ? { forceCheckpoint: true } : {}) };
             } catch (error) {
                 if (!(error instanceof ContextBudgetExceededError)) throw error;
                 if (attempt === 2) throw new Error('Checkpoint rejected after two attempts: too_large', { cause: error });
@@ -101,8 +109,9 @@ export function checkpointContextLifecycle(configuration: Pick<CheckpointRequest
             prepared ??= await execution.prepareModel({ ...request, messages: view.messages });
             if (!prepared.report) throw new Error('Checkpoint strategy requires a context usage report');
             selected = await prepareCheckpoint(execution, request.messages, view, prepared.report, {
-                ...config, previous: state.checkpoint, notes, cacheScope, tools: request.tools,
+                ...config, force: state.forceCheckpoint, previous: state.checkpoint, notes, cacheScope, tools: request.tools,
             });
+            if (!selected && state.forceCheckpoint) throw new Error('Provider overflow cannot be recovered: no eligible source prefix to compact');
             if (!selected) return { kind: 'task', prepared,
                 ...(validated ? { metadata: { checkpointAccepted: validated },
                     reduce: () => ({ state, decision: { accepted: true } }) } : {}) };

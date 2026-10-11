@@ -144,3 +144,26 @@ export async function createSqliteSessionStore(path: string): Promise<SessionSto
         };
     } catch (error) { try { db?.close(); } finally { await release(); } throw error; }
 }
+
+/** Read one committed session without ownership, schema migration or provider startup.
+ * Uses live WAL visibility; missing files and unsupported schemas are errors.
+ * The returned record is private inspection data, not a redacted public summary. */
+export async function readSqliteSession(path: string, id: string): Promise<SessionRecord | undefined> {
+    const db = await openSqlite(resolve(path), { readOnly: true });
+    try {
+        const version = Number(db.prepare('PRAGMA user_version').get()?.user_version);
+        if (version !== 1) throw new Error(`Unsupported session store schema version ${version}`);
+        const row = db.prepare('SELECT revision, record FROM sessions WHERE id=?').get(id);
+        if (!row) return undefined;
+        const record = JSON.parse(String(row.record)) as SessionRecord;
+        if (!record || record.id !== id || !Number.isSafeInteger(record.revision) || record.revision < 0 ||
+            record.revision !== Number(row.revision) || !Array.isArray(record.messages) ||
+            !['idle', 'running', 'waiting', 'interrupted', 'failed'].includes(record.status) ||
+            !Array.isArray(record.operations) || record.operations.some(op => !op || typeof op.id !== 'string' ||
+                !['model', 'tool'].includes(op.kind) || !['intent', 'completed', 'partial', 'failed', 'cancelled', 'unknown'].includes(op.status)) ||
+            !Array.isArray(record.approvals) || !Array.isArray(record.queue) ||
+            (record.inputReceipts !== undefined && !Array.isArray(record.inputReceipts)))
+            throw new Error('Invalid stored session record');
+        return record;
+    } finally { db.close(); }
+}

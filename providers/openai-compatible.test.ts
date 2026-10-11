@@ -754,3 +754,15 @@ describe('provider terminal regressions', () => {
         expect(result.message.toolCalls?.length ?? 0).toBe(0);
     });
 });
+
+it('classifies only explicit context rejection for both response modes', async () => {
+    const { LLMContextOverflowError } = await import('../contracts/llm.js');
+    const { OpenAICompatibleProvider } = await import('./openai-compatible.js');
+    const provider = new OpenAICompatibleProvider({baseUrl:'https://fixture.invalid',model:'fixture'});
+    for(const stream of [false,true]){
+        vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({error:{code:'context_length_exceeded'}}),{status:400})));
+        const call=stream?provider.streamTurn({messages:[]},()=>{}):provider.turn({messages:[]});
+        await expect(call).rejects.toBeInstanceOf(LLMContextOverflowError);
+        vi.unstubAllGlobals();
+    }
+});

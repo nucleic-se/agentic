@@ -1,3 +1,4 @@
+import { isContextOverflowResponse } from './context-overflow.js';
 import { presentToolResult } from '../runtime/ToolOutput.js';
 import { createHash } from 'node:crypto';
 import { zstdDecompressSync } from 'node:zlib';
@@ -5,7 +6,7 @@ import { OPENAI_CODEX_MODELS } from '@earendil-works/pi-ai/providers/openai-code
 import { stream } from '@earendil-works/pi-ai/api/openai-codex-responses';
 import type { AssistantMessage as NativeMessage, Context, Model } from '@earendil-works/pi-ai';
 import { openaiCredentials } from '@openai-oauth/local';
-import { LLMProtocolError, type AssistantMessage, type ILLMProvider, type ProviderCallOptions,
+import { LLMContextOverflowError, LLMProtocolError, type AssistantMessage, type ILLMProvider, type ProviderCallOptions,
     type StructuredRequest, type StructuredResponse, type TurnRequest, type TurnResponse, type TokenUsage,
     type ProviderCapabilities, type ProviderRequestObservation } from '../contracts/llm.js';
 import type { JsonValue } from '../contracts/shared.js';
@@ -160,6 +161,7 @@ export class SubscriptionProvider implements ILLMProvider {
                 fetch: (url, init) => fetcher(url, { ...init, signal }) }).getSession())?.accessToken;
         signal?.throwIfAborted();
         if (!apiKey) throw new Error('No authorized subscription session');
+        let contextRejected = false;
         const events = stream(this.#model, context, { apiKey, signal, transport: 'sse', maxRetries: 0,
             maxTokens: request.maxTokens, reasoningEffort: this.#options.reasoningEffort ?? 'low', toolChoice,
             sessionId: request.cacheScope === undefined ? undefined : hash(request.cacheScope),
@@ -172,13 +174,16 @@ export class SubscriptionProvider implements ILLMProvider {
                     await options?.onRequest?.(structuredClone(observation));
                 }
                 signal?.throwIfAborted();
-                return fetcher(url, init);
+                const response = await fetcher(url, init);
+                if (!response.ok) contextRejected = isContextOverflowResponse(response.status, await response.clone().text());
+                return response;
             } });
         let native: NativeMessage;
         try {
             for await (const event of events) if (event.type === 'text_delta') onDelta(event.delta);
             native = await events.result();
         } finally { controller.abort(); }
+        if (contextRejected) throw new LLMContextOverflowError();
         const measured = usage(native.usage);
         if (!['stop', 'length', 'toolUse'].includes(native.stopReason)) {
             // The backend initializes usage to zero before any receipt. An error

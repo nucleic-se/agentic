@@ -4,6 +4,15 @@ This tracker records implemented changes and open integration work. “Tested”
 means the named automated checks passed in this repository; it does not imply
 production maturity or real-world validation.
 
+## October 11 — session inspection and recovery boundaries
+
+Source implements library-owned read-only SQLite inspection, typed loop exhaustion,
+one bounded provider-overflow checkpoint/retry, and shared evidence-backed effect
+reconciliation. Regression coverage includes real adapter error translation,
+retained inputs, live WAL reads, revision conflicts and interrupted checkpoint
+restoration without repeated tool execution. Assembly adopts these contracts in a
+coordinated change. Deployment and live provider acceptance are separate.
+
 ## Shared session context — October 11
 
 The default checkpointed `agentContext` now summarizes older unpinned human

@@ -4,8 +4,9 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ContextStep } from './context-lifecycle.js';
 import type { PreparedHarnessModel } from './execution.js';
 import { toToolResultMessage } from '../ToolOutput.js';
-import { validateOperationResolution } from './resolution.js';
+import { applyOperationResolution, validateOperationResolution } from './resolution.js';
 import { createHash, randomUUID } from 'node:crypto';
+import { LLMContextOverflowError } from '../../contracts/llm.js';
 import type { Message, TurnRequest, TurnResponse, TokenUsage } from '../../contracts/llm.js';
 import { composeDriver, compositionFingerprint, type DriverComposition, type HarnessClient } from './composition.js';
 import { createHarnessExecution } from './execution.js';
@@ -257,6 +258,7 @@ class HarnessSessionClient implements SessionClient {
         const initial = await this.get(id);
         if (!isDeepStrictEqual(request.messages, initial.messages))
             throw new Error('Context lifecycle requires the complete current conversation');
+        let overflowRecovered = false;
         for (;;) {
             signal.throwIfAborted();
             const record = await this.get(id);
@@ -265,11 +267,26 @@ class HarnessSessionClient implements SessionClient {
                     cacheScope: request.cacheScope ?? `${this.fingerprint}:${id}` },
             }, { prepareModel: (request, options) => this.execution.prepareModel(request, { ...options, signal }) });
             admit();
-            const response = await this.executeModelEffect(id, runId, step.prepared.request, signal, {
-                prepared: step.prepared, contextStep: step,
-                ...(step.kind === 'task' && maintenance ? { maintenance } : {}),
-            });
-            if (step.kind === 'task') return response;
+            try {
+                const response = await this.executeModelEffect(id, runId, step.prepared.request, signal, {
+                    prepared: step.prepared, contextStep: step,
+                    ...(step.kind === 'task' && maintenance ? { maintenance } : {}),
+                });
+                if (step.kind === 'task') return response;
+            } catch (error) {
+                const recover = this.roles.context.lifecycle!.recoverOverflow;
+                if (!(error instanceof LLMContextOverflowError) || step.kind !== 'task' || maintenance ||
+                    overflowRecovered || !recover || signal.aborted) throw error;
+                const current = await this.get(id);
+                const failed = current.operations.at(-1);
+                if (failed?.kind !== 'model' || failed.runId !== runId || failed.status !== 'failed' ||
+                    (failed.output as { kind?: string })?.kind !== 'context_overflow') throw error;
+                const transition = recover.call(this.roles.context.lifecycle, structuredClone(current.contextState));
+                await this.change(id, 'context.overflow', record => { record.contextState = structuredClone(transition.state); },
+                    { operationId: failed.id, decision: transition.decision });
+                if (transition.error) throw new Error(transition.error);
+                overflowRecovered = true;
+            }
         }
     }
     async recover() {
@@ -423,28 +440,7 @@ class HarnessSessionClient implements SessionClient {
         const input = validateOperationResolution(resolution);
         return this.change(id, 'tool.resolved', record => {
             if (this.runs.has(id) || record.status === 'running' || record.status === 'waiting') throw new Error('Finish the run before resolving an operation');
-            if (record.revision !== input.expectedRevision) throw new Error('Session revision conflict');
-            const op = record.operations.find(item => item.id === operationId);
-            if (!op || op.kind !== 'tool' || op.status !== 'unknown') throw new Error('Operation is not an unresolved tool effect');
-            const previous = op.output as import('../../contracts/agent.js').ToolExecution | undefined;
-            const callId = op.callId ?? previous?.callId;
-            if (!callId) throw new Error('Legacy operation lacks a tool call identity; start a new session');
-            op.status = input.result.ok ? 'completed' : 'failed';
-            op.resolution = input;
-            const message = toToolResultMessage({ id: callId, name: op.name }, { ...input.result, content: input.result.content });
-            let index = record.messages.length - 1;
-            while (index >= 0) {
-                const item = record.messages[index];
-                if (item.role === 'tool_result' && item.toolCallId === callId) break;
-                index--;
-            }
-            delete record.contextState;
-            if (index >= 0) record.messages[index] = message;
-            else record.messages.push(message);
-            if (!record.operations.some(item => item.kind === 'tool' && item.status === 'unknown')) {
-                record.status = 'interrupted';
-                delete record.error;
-            }
+            applyOperationResolution(record, operationId, input);
         }, { operationId, ...input });
     }
     async maintain(id: string, options: MaintenanceOptions): Promise<SessionRecord> {

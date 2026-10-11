@@ -1,3 +1,5 @@
+import { isContextOverflowResponse } from './context-overflow.js';
+import { LLMContextOverflowError } from '../contracts/llm.js';
 import { presentToolResult } from '../runtime/ToolOutput.js';
 import { LLMProtocolError } from '../contracts/llm.js'
 import { sseData } from './sse.js'
@@ -499,6 +501,7 @@ export class OpenAICompatibleProvider implements ILLMProvider {
         })
         if (!res.ok) {
             const text = await res.text().catch(() => '(no body)')
+            if (isContextOverflowResponse(res.status, text)) throw new LLMContextOverflowError()
             throw new Error(`${this.providerName}: HTTP ${res.status} ${res.statusText} — ${text}`)
         }
         if (!res.body) throw new Error(`${this.providerName}: streaming response has no body`)
