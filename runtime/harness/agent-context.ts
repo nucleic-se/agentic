@@ -6,7 +6,7 @@ import type { ContextStrategy } from './types.js';
 
 export interface AgentContextOptions {
     checkpointing?: boolean;
-    /** Latest mode summarizes older unpinned inputs; all mode retains every human input verbatim. */
+    /** Defaults to latest with checkpointing, otherwise all. Pinned inputs always remain verbatim. */
     protectUserMessages?: 'all' | 'latest';
     checkpointMaxTokens?: number;
     /** Override the shared recent-conversation allowance. Pinned status is accounted separately. */
@@ -15,15 +15,18 @@ export interface AgentContextOptions {
 
 /** Reference context policy shared by local and durable agent compositions. */
 export function agentContext(system: Parameters<typeof budgetedContext>[0], tokenBudget: number, options: AgentContextOptions = {}): ContextStrategy {
+    // Without summaries, keep the conservative verbatim policy unless the caller
+    // explicitly opts into selecting only recent inputs.
+    const protectUserMessages = options.protectUserMessages ?? (options.checkpointing === false ? 'all' : 'latest');
     return {
         ...budgetedContext(system, tokenBudget, {
             includeToolCallIds: true,
-            protectUserMessages: options.protectUserMessages ?? 'all',
+            protectUserMessages,
             minRecentGroups: options.minRecentGroups,
             referenceToolResult: archivedToolResultReference,
         }),
         lifecycle: options.checkpointing === false ? referenceContextLifecycle()
-            : checkpointContextLifecycle({ maxTokens: options.checkpointMaxTokens ?? 800, protectUserMessages: options.protectUserMessages }),
+            : checkpointContextLifecycle({ maxTokens: options.checkpointMaxTokens ?? 800, protectUserMessages }),
     };
 }
 

@@ -257,9 +257,9 @@ Anthropic, or other vendor's wire fields belong in this builder metadata.
 
 `budgetedContext` selects messages; it does not generate summaries. Compose
 `agentContext` to add journaled checkpoint maintenance through the same model
-execution boundary. The default preserves every human input verbatim. For
-long-lived conversations that must summarize older inputs, select the same
-retention policy for both budgeting and checkpoints:
+execution boundary. With checkpointing enabled, the shared default summarizes older
+unpinned human inputs while retaining the latest input and pinned material verbatim.
+This policy is shared by the local and durable agent compositions. For example:
 
 ```ts
 import { agentContext } from '@nucleic-se/agentic/harness';
@@ -269,6 +269,12 @@ const context = agentContext(systemPrompt, contextTokenBudget, {
     checkpointMaxTokens: summaryOutputBudget,
 });
 ```
+
+The explicit `latest` option above is also the default. Set `protectUserMessages:
+'all'` when every human input must remain verbatim; this can exhaust a finite context
+window as a conversation grows. Disabling checkpointing defaults to `all`, so removing
+summaries does not silently discard older requirements. The lower-level
+`budgetedContext` also retains its conservative `all` default.
 
 In `latest` mode the latest human input and all pinned inputs stay verbatim.
 Older inputs become source evidence for the checkpoint; summaries must carry

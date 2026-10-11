@@ -4,6 +4,17 @@ This tracker records implemented changes and open integration work. “Tested”
 means the named automated checks passed in this repository; it does not imply
 production maturity or real-world validation.
 
+## Shared session context — October 11
+
+The default checkpointed `agentContext` now summarizes older unpinned human
+inputs. The latest input and pinned material remain verbatim; original history,
+execution evidence and input receipts stay in durable storage. Explicit `all`
+retention remains available, and disabling checkpointing keeps the conservative
+verbatim default. Local coding and durable host compositions share this policy.
+The regression covers oversized human history, rejected summary repair, serialized
+checkpoint restoration and unchanged source history. Build and all 785 tests pass.
+This verifies the lifecycle contract, not semantic accuracy of every model summary.
+
 ## Agentic v2 foundation
 
 | ID | State | Evidence | Change |

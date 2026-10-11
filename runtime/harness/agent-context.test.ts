@@ -30,7 +30,7 @@ it('shares the default coding context with another driver and refreshes workspac
     } finally { await rm(workspace, { recursive: true, force: true }); }
 });
 
-it('recovers oversized human history through bounded checkpoints, including a rejected draft and serialized restart', async () => {
+it('the default recovers oversized human history through checkpoints, including a rejected draft and serialized restart', async () => {
     const { agentContext } = await import('./agent-context.js');
     const { createHarnessExecution } = await import('./execution.js');
     const history: Message[] = Array.from({ length: 30 }, (_, i) => [
@@ -39,10 +39,11 @@ it('recovers oversized human history through bounded checkpoints, including a re
     ]).flat();
     history.push({ role: 'user', content: 'Current objective: finish the task' });
     const original = structuredClone(history);
-    const context = agentContext('Host rules', 4000, { protectUserMessages: 'latest', checkpointMaxTokens: 256 });
+    const context = agentContext('Host rules', 4000, { checkpointMaxTokens: 256 });
     const provider = { turn: async () => { throw new Error('Must only prepare'); }, structured: async () => { throw new Error('unused'); } };
     const execution = createHarnessExecution({ context, provider });
-    await expect(agentContext('Host rules', 4000).assemble(history, new AbortController().signal)).rejects.toThrow('protected');
+    await expect(agentContext('Host rules', 4000, { protectUserMessages: 'all' }).assemble(history, new AbortController().signal)).rejects.toThrow('protected');
+    await expect(agentContext('Host rules', 4000, { checkpointing: false }).assemble(history, new AbortController().signal)).rejects.toThrow('protected');
     let state: unknown, calls = 0, repaired = false;
     const sourceIndexes = new Set<number>();
     for (;;) {
