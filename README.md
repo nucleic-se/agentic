@@ -246,3 +246,35 @@ ISC
 ### Optional capabilities
 
 Use `@nucleic-se/agentic/harness/core` for the empty host, and opt into `/coding`, `/skills`, `/browser`, `/delegation`, or `/harness/terminal` separately. Skills are explicit immutable snapshots; browser tools use a caller-supplied driver with no browser dependency in core. The same tool runtimes can be owned by the local host or Gears. See [optional addons](docs/optional-addons.md) for composition, ownership and examples.
+
+### Long commands in the coding harness
+
+`codingToolRuntime` starts shell commands under a child supervisor. `shell_run`
+waits briefly (`yield_after_ms`, default 1000) and returns `data.processId` with
+`status: running` when work continues. Use `shell_poll` for bounded live output and
+terminal receipts, `shell_list` to rediscover handles, and `shell_cancel` to request
+explicit cancellation. A running result confirms launch acceptance, not successful
+command completion. Poll before starting dependent work or reporting completion.
+
+The former `timeout_ms` argument is a deprecated wait alias; it no longer kills
+commands. Conflicting wait aliases are rejected. There is no implicit execution
+deadline. Optional `execution_timeout_ms` explicitly kills the process group at its
+deadline. Cancellation or nonzero exit may leave earlier effects; neither implies
+rollback. Successful polling reports the observed command state even when it failed.
+
+Configure private `processDirectory` and `outputDirectory` outside a shared workspace
+for durable records. `processOwner` is a host-owned logical scope; absent that,
+`ToolCallOptions.sessionId` owns handles. Stable session/call identities deduplicate
+launches and reject changed execution arguments. Never take these identities from
+model arguments. A transcript handoff can retain the same logical owner. These API
+ownership checks do not isolate agents with arbitrary shell access under one OS user.
+
+A supervisor survives its calling Node process exiting. A systemd cgroup stop,
+machine restart, or supervisor crash can terminate supervision; retained records
+then report unknown and must not be automatically relaunched. A detached child
+is not a separate system service. Commands with retained running/unknown receipts
+must block deployment/drain acceptance. A lost harness completion receipt can be
+reconciled from the exact persisted session/call launch record, without claiming
+the command's intended effects succeeded. Historical unknown operations without
+this receipt contract require separate inspection. Sandboxed Assembly execution
+uses its existing sandbox path, not this unsandboxed supervisor.

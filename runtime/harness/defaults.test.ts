@@ -30,10 +30,10 @@ it('keeps the coding pack small and rejects excluded effects at dispatch', async
     try {
         const runtime = codingToolRuntime(root);
         expect(runtime.tools().map(tool => tool.name).sort()).toEqual([
-            'fs_list', 'fs_patch', 'fs_read', 'fs_write', 'read_output', 'review_changes', 'search_find', 'search_grep', 'shell_run',
+            'fs_list', 'fs_patch', 'fs_read', 'fs_write', 'read_output', 'review_changes', 'search_find', 'search_grep', 'shell_cancel', 'shell_list', 'shell_poll', 'shell_run',
         ]);
         const reads = codingToolRuntime(root, { readOnly: true });
-        expect(reads.tools()).toHaveLength(5);
+        expect(reads.tools()).toHaveLength(7);
         expect(reads.validate('review_changes', {}).ok).toBe(false);
         expect((await reads.call('review_changes', {})).ok).toBe(false);
         expect(reads.validate('fs_write', { path: 'unwanted', content: 'changed' }).ok).toBe(false);
@@ -182,14 +182,18 @@ describe('default coding runtime', () => {
             expect(result.errorKind).toBe('policy');
         } finally { rmSync(root, { recursive: true, force: true }); }
     });
-    it('cancels running shell work and bounds captured output', async () => {
+    it('cancels waiting without killing accepted work and bounds captured output', async () => {
         const root = mkdtempSync(join(tmpdir(), 'agentic-default-'));
         try {
             const runtime = codingToolRuntime(root);
             const controller = new AbortController();
             const running = runtime.call('shell_run', { command: 'sleep 30', timeout_ms: 5000 }, { signal: controller.signal });
             setTimeout(() => controller.abort(), 30);
-            expect((await running).errorKind).toBe('cancelled');
+            const accepted = await running;
+            expect(accepted).toMatchObject({ ok: true, data: { status: 'running' } });
+            const id = (accepted.data as { processId: string }).processId;
+            await runtime.call('shell_cancel', { id });
+            expect((await runtime.call('shell_poll', { id, yield_after_ms: 1000 })).data).toMatchObject({ status: 'cancelled' });
             writeFileSync(join(root, 'output.cjs'), 'process.stdout.write("a".repeat(100000));');
             const output = await runtime.call('shell_run', { command: `${JSON.stringify(process.execPath)} output.cjs` });
             expect(output.ok).toBe(true);

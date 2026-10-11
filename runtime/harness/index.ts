@@ -32,3 +32,5 @@ export { agentContext, codingAgentContext } from './agent-context.js';
 export type { AgentContextOptions, CodingAgentContextOptions } from './agent-context.js';
 
 export { TurnLimitError } from './loops.js';
+
+export { validateShellReceipt } from './shell-receipts.js';

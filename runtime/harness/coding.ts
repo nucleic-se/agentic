@@ -1,9 +1,8 @@
-import { killProcessGroup } from './process.js';
+import { ShellProcesses } from './shell-process.js';
 import { fsReadSchema, fsWriteSchema, workspaceFilePath } from '../../tools/fs-schema.js';
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { FileToolOutputStore, ToolOutputCapture } from './output.js';
+import { FileToolOutputStore } from './output.js';
 import { reviewChanges } from './change-review.js';
 import { lstatSync, realpathSync } from 'node:fs';
 import * as path from 'node:path';
@@ -56,10 +55,15 @@ const schemas: Record<string, z.ZodType<Record<string, unknown>>> = {
         pattern: z.string().min(1).describe('Glob pattern, for example **/*.ts.'),
         path: searchPath.optional().describe('Search path. Omit or use an empty string for the workspace root.'),
     }).strict(),
+    shell_list: z.object({}).strict(),
+    shell_poll: z.object({ id: z.string().regex(/^[a-f0-9]{64}$/), offset: z.number().int().nonnegative().optional(), yield_after_ms: z.number().int().min(0).max(120000).optional() }).strict(),
+    shell_cancel: z.object({ id: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
     shell_run: z.object({
         command: z.string().min(1),
         cwd: searchPath.optional(),
-        timeout_ms: z.number().int().min(1).max(120000).optional(),
+        yield_after_ms: z.number().int().min(0).max(120000).optional().describe("Wait for output, then return a running handle without stopping execution."),
+        timeout_ms: z.number().int().min(1).max(120000).optional().describe("Deprecated alias for yield_after_ms; does not kill the command."),
+        execution_timeout_ms: z.number().int().min(1).max(2147483647).optional().describe("Explicit execution deadline that kills the process group; omitted by default."),
         env: z.record(z.string(), z.string()).optional(),
     }).strict(),
 };
@@ -80,48 +84,11 @@ function confined(root: string, target: string): string {
     return absolute;
 }
 
-function runShell(root: string, outputStore: FileToolOutputStore, args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
-    if (options?.signal?.aborted) return Promise.resolve({ ok: false, content: 'Cancelled before execution', errorKind: 'cancelled' });
-    const cwd = confined(root, args.cwd as string ?? '.');
-    return new Promise(resolve => {
-        const child = spawn(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh',
-            process.platform === 'win32' ? ['/d', '/s', '/c', args.command as string] : ['-c', args.command as string],
-            { cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...args.env as Record<string, string> } });
-        const outputCapture = new ToolOutputCapture();
-        let stopped: 'cancelled' | 'timeout' | undefined;
-        let finished = false;
-        const capture = (data: Buffer) => outputCapture.append(data);
-        const stop = (reason: 'cancelled' | 'timeout') => {
-            stopped ??= reason;
-            killProcessGroup(child);
-        };
-        const abort = () => stop('cancelled');
-        const timer = setTimeout(() => stop('timeout'), args.timeout_ms as number ?? 30000);
-        const finish = async (code: number | null, error?: Error) => {
-            if (finished) return;
-            finished = true;
-            clearTimeout(timer);
-            options?.signal?.removeEventListener('abort', abort);
-            const { content: output, ...captureMetadata } = await outputCapture.finish(outputStore);
-            resolve({ ok: !stopped && !error && code === 0,
-                content: `${output}${output ? '\n' : ''}${stopped ?? error?.message ?? `Exit code: ${code}`}`,
-                ...((stopped || error || code !== 0) ? { errorKind: stopped ?? 'runtime' as const } : {}),
-                data: { exitCode: code, ...captureMetadata } });
-        };
-        child.stdout.on('data', capture);
-        child.stderr.on('data', capture);
-        child.on('error', error => finish(null, error));
-        child.on('close', code => finish(code));
-        options?.signal?.addEventListener('abort', abort, { once: true });
-        if (options?.signal?.aborted) abort();
-    });
-}
-
 /** Local trusted-code tools. Root checks do not sandbox arbitrary shell commands. */
 const codingEffects = {
-    fs_read: 'read', fs_list: 'read', search_grep: 'read', search_find: 'read', read_output: 'read',
+    fs_read: 'read', fs_list: 'read', search_grep: 'read', search_find: 'read', read_output: 'read', shell_poll: 'read', shell_list: 'read',
     // Git may invoke repository-configured filters or filesystem-monitor hooks.
-    fs_write: 'write', fs_patch: 'write', shell_run: 'write', review_changes: 'write',
+    fs_write: 'write', fs_patch: 'write', shell_run: 'write', shell_cancel: 'write', review_changes: 'write',
 } as const;
 
 export function codingToolEffect(name: string): 'read' | 'write' | undefined {
@@ -130,17 +97,23 @@ export function codingToolEffect(name: string): 'read' | 'write' | undefined {
 
 export function codingToolRuntime(workingRoot: string, options: {
     outputDirectory?: string;
+    /** Private durable command receipts; defaults alongside saved output. */
+    processDirectory?: string;
+    /** Host-owned logical scope, stable across transcript handoff. */
+    processOwner?: string;
     /** Exclude editing and command execution from both discovery and dispatch. */
     readOnly?: boolean;
     /** Complete-line file page ceiling in bytes; defaults to 16000. Validated by FsToolRuntime. */
     textPageBytes?: number;
 } = {}): IValidatedToolRuntime {
     const root = realpathSync(workingRoot);
-    const outputStore = new FileToolOutputStore(options.outputDirectory ?? path.join(tmpdir(), 'agentic-output', createHash('sha256').update(root).digest('hex')));
+    const outputDirectory = options.outputDirectory ?? path.join(tmpdir(), 'agentic-output', createHash('sha256').update(root).digest('hex'));
+    const outputStore = new FileToolOutputStore(outputDirectory);
+    const processes = new ShellProcesses(options.processDirectory ?? path.join(outputDirectory, 'processes'), outputDirectory, options.processOwner);
     const fs = new FsToolRuntime(root, { textPageBytes: options.textPageBytes ?? 16000 });
     const search = new SearchToolRuntime(root, { maxOutputBytes: 4000 });
     const shell = new ShellToolRuntime(root);
-    const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), {
+    const definitions = structuredClone([...fs.tools(), ...search.tools(), ...shell.tools(), { name: 'shell_list', description: 'List command handles and lifecycle states owned by this scope, including commands retained across a transcript handoff.', parameters: {type: 'object' as const} }, { name: 'shell_poll', description: 'Inspect an existing command by its session-owned process ID; optionally wait for completion. Never starts a command.', parameters: {type: 'object' as const} }, { name: 'shell_cancel', description: 'Explicitly request cancellation of a session-owned command. Prior effects are not rolled back; poll for the terminal receipt.', parameters: {type: 'object' as const} }, {
         name: 'read_output', description: 'Read exact saved tool text by output ID. Offset and nextOffset use UTF-16 code units; returns up to 4000 units. Continue until eof. Saved output may be incomplete if capture reached its limit.',
         parameters: { type: 'object' as const, properties: { id: { type: 'string' as const }, offset: { type: 'integer' as const, minimum: 0 } }, required: ['id'], additionalProperties: false },
     }, {
@@ -149,7 +122,7 @@ export function codingToolRuntime(workingRoot: string, options: {
     }]).filter(tool => codingToolEffect(tool.name) !== undefined && (!options.readOnly || codingToolEffect(tool.name) === 'read'))
         .map(tool => ({ ...tool, parameters: { ...z.toJSONSchema(schemas[tool.name], { target: 'draft-7' }), type: 'object' } as ToolDefinition['parameters'] }));
     const shellDefinition = definitions.find(tool => tool.name === 'shell_run');
-    if (shellDefinition) shellDefinition.description += ' Large output is saved with a read_output reference; capture is limited to 8 MiB and reports incompleteness.';
+    if (shellDefinition) shellDefinition.description = 'Start a command with no implicit execution deadline. Wait briefly (yield_after_ms, default 1000), then return a process ID if still running. Poll that ID rather than repeat the command. timeout_ms is a deprecated wait alias. Use shell_cancel for explicit cancellation; only execution_timeout_ms imposes a killing deadline.' + ' Large output is saved with a read_output reference; capture is limited to 8 MiB and reports incompleteness.';
     const enabled = new Set(definitions.map(tool => tool.name));
     const runtime: IValidatedToolRuntime = {
         tools: () => structuredClone(definitions),
@@ -158,6 +131,7 @@ export function codingToolRuntime(workingRoot: string, options: {
             if (!schema || !enabled.has(name)) return { ok: false, result: { ok: false, content: `Unknown tool: ${name}`, errorKind: 'validation' } };
             const parsed = schema.safeParse(args);
             if (!parsed.success) return { ok: false, result: { ok: false, content: parsed.error.message, errorKind: 'validation' } };
+            if (name === 'shell_run' && parsed.data.timeout_ms !== undefined && parsed.data.yield_after_ms !== undefined && parsed.data.timeout_ms !== parsed.data.yield_after_ms) return { ok: false, result: { ok: false, content: 'Conflicting timeout_ms and yield_after_ms wait values', errorKind: 'validation' } };
             try {
                 for (const key of ['path', 'from', 'to', 'cwd']) {
                     if (typeof parsed.data[key] === 'string') confined(root, parsed.data[key] as string);
@@ -172,7 +146,7 @@ export function codingToolRuntime(workingRoot: string, options: {
                 const checked = runtime.validate(name, args);
                 if (!checked.ok) return checked.result;
                 if (options?.authorizedArgs && !isDeepStrictEqual(checked.args, options.authorizedArgs)) return { ok: false, content: 'Arguments differ from authorization', errorKind: 'policy' };
-                if (options?.signal?.aborted) return { ok: false, content: 'Cancelled', errorKind: 'cancelled' };
+                if (options?.signal?.aborted && !['shell_run', 'shell_poll'].includes(name)) return { ok: false, content: 'Cancelled', errorKind: 'cancelled' };
                 if (name === 'read_output') {
                     return {
                         ok: true,
@@ -183,8 +157,12 @@ export function codingToolRuntime(workingRoot: string, options: {
                     return await reviewChanges(root, outputStore, checked.args.base as string ?? 'HEAD', options?.signal);
                 }
                 if (name === 'shell_run') {
-                    return await runShell(root, outputStore, checked.args, options);
+                    const { yield_after_ms, timeout_ms, ...execution } = checked.args;
+                    return await processes.launch({ ...execution, cwd: confined(root, checked.args.cwd as string ?? '.'), yield_after_ms, timeout_ms }, options);
                 }
+                if (name === 'shell_list') return await processes.list(options);
+                if (name === 'shell_poll') return await processes.poll(checked.args, options);
+                if (name === 'shell_cancel') return await processes.cancel(checked.args, options);
                 return await (name.startsWith('fs_') ? fs : search).call(name, checked.args, options);
             } catch (error) {
                 return { ok: false, content: String(error), errorKind: 'runtime' };

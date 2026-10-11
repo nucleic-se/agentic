@@ -5,3 +5,5 @@ export type { DefaultAgentOptions } from './preset.js';
 export { agentContext, codingAgentContext } from './agent-context.js';
 export type { AgentContextOptions, CodingAgentContextOptions } from './agent-context.js';
 export { readProjectInstructions, projectInstructionText, projectInstructionTargets } from './instructions.js';
+
+export { validateShellReceipt } from './shell-receipts.js';
