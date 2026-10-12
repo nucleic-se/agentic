@@ -76,8 +76,8 @@ it('charges maintenance to the same run call budget as task execution', async ()
     await client.submit(record.id, 'Continue', { commandId: 'continue' });
     const saved = await client.wait(record.id);
     expect(calls).toBe(1);
-    expect(saved.status).toBe('failed');
-    expect(saved.error).toContain('model-call budget');
+    expect(saved.status).toBe('paused');
+    expect(saved.error).toContain('model-calls limit');
     expect((saved.contextState as CheckpointContextState).candidate?.through).toBeGreaterThan(0);
     expect(saved.usage.inputTokens).toBe(100);
 });

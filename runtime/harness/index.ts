@@ -32,5 +32,7 @@ export { agentContext, codingAgentContext } from './agent-context.js';
 export type { AgentContextOptions, CodingAgentContextOptions } from './agent-context.js';
 
 export { TurnLimitError } from './loops.js';
+export { ExecutionLimitExceededError } from '../ExecutionOptions.js';
 
-export { validateShellReceipt } from './shell-receipts.js';
+export { validateShellReceipt, readEffectiveShellReceipt, inspectShellProcess, resolveShellProcess } from './shell-receipts.js';
+export type { ShellProcessResolutionInput, ShellProcessResolution } from './shell-receipts.js';

@@ -158,7 +158,7 @@ export async function readSqliteSession(path: string, id: string): Promise<Sessi
         const record = JSON.parse(String(row.record)) as SessionRecord;
         if (!record || record.id !== id || !Number.isSafeInteger(record.revision) || record.revision < 0 ||
             record.revision !== Number(row.revision) || !Array.isArray(record.messages) ||
-            !['idle', 'running', 'waiting', 'interrupted', 'failed'].includes(record.status) ||
+            !['idle', 'running', 'waiting', 'interrupted', 'failed', 'paused'].includes(record.status) ||
             !Array.isArray(record.operations) || record.operations.some(op => !op || typeof op.id !== 'string' ||
                 !['model', 'tool'].includes(op.kind) || !['intent', 'completed', 'partial', 'failed', 'cancelled', 'unknown'].includes(op.status)) ||
             !Array.isArray(record.approvals) || !Array.isArray(record.queue) ||

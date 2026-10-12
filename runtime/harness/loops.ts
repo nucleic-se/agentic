@@ -1,8 +1,9 @@
 import type { LoopServices, LoopStrategy } from './types.js';
+import { ExecutionLimitExceededError } from '../ExecutionOptions.js';
 
-export class TurnLimitError extends Error {
+export class TurnLimitError extends ExecutionLimitExceededError {
     constructor(readonly maxTurns: number) {
-        super(`Reached turn limit of ${maxTurns}`);
+        super('responses', maxTurns);
         this.name = 'TurnLimitError';
     }
 }
@@ -13,12 +14,12 @@ async function drain(services: LoopServices, mode: 'steer' | 'enqueue'): Promise
 }
 
 export function conversationalLoop(options: { maxTurns?: number; maxTokens?: number } = {}): LoopStrategy {
-    const maxTurns = options.maxTurns ?? 20;
-    if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) throw new RangeError('maxTurns must be a positive safe integer');
+    const maxTurns = options.maxTurns;
+    if (maxTurns !== undefined && (!Number.isSafeInteger(maxTurns) || maxTurns < 1)) throw new RangeError('maxTurns must be a positive safe integer');
     if (options.maxTokens !== undefined && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens < 1)) throw new RangeError('maxTokens must be a positive safe integer');
     return {
         async run(services) {
-            for (let turn = 0; turn < maxTurns; turn++) {
+            for (let turn = 0; maxTurns === undefined || turn < maxTurns; turn++) {
                 services.signal.throwIfAborted();
                 await drain(services, 'steer');
                 const response = await services.model.request({
@@ -39,7 +40,7 @@ export function conversationalLoop(options: { maxTurns?: number; maxTokens?: num
                 if (await drain(services, 'enqueue')) continue;
                 return;
             }
-            throw new TurnLimitError(maxTurns);
+            throw new TurnLimitError(maxTurns!);
         },
     };
 }

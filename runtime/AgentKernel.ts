@@ -105,11 +105,11 @@ async function executeAgentKernel(
     signal?: AbortSignal,
 ): Promise<TurnRecord[]> {
     const records: TurnRecord[] = [];
-    const maxTurns = config.maxTurns ?? 20;
-    if (!Number.isSafeInteger(maxTurns) || maxTurns < 1) throw new RangeError('maxTurns must be a positive safe integer');
+    const maxTurns = config.maxTurns ?? Infinity;
+    if (config.maxTurns !== undefined && (!Number.isSafeInteger(maxTurns) || maxTurns < 1)) throw new RangeError('maxTurns must be a positive safe integer');
     const maxResultChars = config.maxToolResultChars ?? 4_000;
-    const maxToolCalls = config.maxToolCallsPerTurn ?? DEFAULT_MAX_TOOL_CALLS_PER_TURN;
-    if (!Number.isSafeInteger(maxToolCalls) || maxToolCalls < 1) {
+    const maxToolCalls = config.maxToolCallsPerTurn ?? Infinity;
+    if (config.maxToolCallsPerTurn !== undefined && (!Number.isSafeInteger(maxToolCalls) || maxToolCalls < 1)) {
         throw new RangeError('maxToolCallsPerTurn must be a positive safe integer');
     }
 

@@ -102,11 +102,11 @@ function safeValidate(
 export async function executeToolBatchDetailed(
     calls: ToolCall[], config: ToolBatchExecutionOptions,
 ): Promise<ToolBatchExecutionResult> {
-    const maxCalls = config.maxToolCallsPerTurn ?? DEFAULT_MAX_TOOL_CALLS_PER_TURN;
-    if (!Number.isSafeInteger(maxCalls) || maxCalls < 1) {
+    const maxCalls = config.maxToolCallsPerTurn;
+    if (maxCalls !== undefined && (!Number.isSafeInteger(maxCalls) || maxCalls < 1)) {
         throw new RangeError('maxToolCallsPerTurn must be a positive safe integer');
     }
-    if (calls.length > maxCalls) {
+    if (maxCalls !== undefined && calls.length > maxCalls) {
         throw new LLMProtocolError(`Provider returned ${calls.length} tool calls; maximum is ${maxCalls}`);
     }
     const ids = new Set<string>();

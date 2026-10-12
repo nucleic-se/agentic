@@ -30,10 +30,10 @@ it('keeps the coding pack small and rejects excluded effects at dispatch', async
     try {
         const runtime = codingToolRuntime(root);
         expect(runtime.tools().map(tool => tool.name).sort()).toEqual([
-            'fs_list', 'fs_patch', 'fs_read', 'fs_write', 'read_output', 'review_changes', 'search_find', 'search_grep', 'shell_cancel', 'shell_list', 'shell_poll', 'shell_run',
+            'fs_list', 'fs_patch', 'fs_read', 'fs_write', 'read_output', 'review_changes', 'search_find', 'search_grep', 'shell_cancel', 'shell_list', 'shell_poll', 'shell_run', 'shell_wait',
         ]);
         const reads = codingToolRuntime(root, { readOnly: true });
-        expect(reads.tools()).toHaveLength(7);
+        expect(reads.tools()).toHaveLength(8);
         expect(reads.validate('review_changes', {}).ok).toBe(false);
         expect((await reads.call('review_changes', {})).ok).toBe(false);
         expect(reads.validate('fs_write', { path: 'unwanted', content: 'changed' }).ok).toBe(false);
@@ -102,7 +102,7 @@ describe('default harness strategies', () => {
     });
     it('enforces loop limits rather than silently returning unfinished work', async () => {
         const run = setup([response('', true)]);
-        await expect(conversationalLoop({ maxTurns: 1 }).run(run.services)).rejects.toThrow('turn limit');
+        await expect(conversationalLoop({ maxTurns: 1 }).run(run.services)).rejects.toThrow('responses limit');
     });
     it('does not duplicate messages already projected by queue delivery', async () => {
         const run = setup([response('Answer')]);

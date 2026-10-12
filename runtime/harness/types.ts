@@ -9,7 +9,7 @@ import type { ToolExecution } from '../../contracts/agent.js';
 import type { IValidatedToolRuntime } from '../../contracts/tool-runtime.js';
 import type { IToolPolicy, PolicyContext } from '../../contracts/IToolPolicy.js';
 
-export type SessionStatus = 'idle' | 'running' | 'waiting' | 'interrupted' | 'failed';
+export type SessionStatus = 'idle' | 'running' | 'waiting' | 'interrupted' | 'failed' | 'paused';
 export interface Operation {
     id: string;
     runId: string;
@@ -39,7 +39,7 @@ export interface InputReceipt {
     commandId: string;
     contentHash: string;
     metadata: JsonValue;
-    status: 'accepted' | 'running' | 'completed' | 'failed' | 'interrupted';
+    status: 'accepted' | 'running' | 'completed' | 'failed' | 'interrupted' | 'paused';
     runId?: string;
     response?: string;
     error?: string;
@@ -64,6 +64,7 @@ export interface SessionRecord {
     activeRunId?: string;
     parent?: { sessionId: string; revision: number };
     error?: string;
+    pause?: { kind: string; limit: number };
 }
 export type SessionSummary = Pick<SessionRecord, 'id' | 'title' | 'revision' | 'createdAt' | 'updatedAt' | 'status'>;
 export interface SessionEvent {

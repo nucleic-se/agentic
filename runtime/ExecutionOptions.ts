@@ -44,3 +44,11 @@ export interface ExecutionLimits {
     maxToolCallsPerBatch?: number;
     timeoutMs?: number;
 }
+
+/** An operator-selected budget stopped execution at an inspectable boundary. */
+export class ExecutionLimitExceededError extends Error {
+    constructor(readonly kind: 'model-calls' | 'tool-calls' | 'tool-batch' | 'responses' | 'time', readonly limit: number) {
+        super(`Configured ${kind} limit reached (${limit}); progress is retained for explicit continuation`);
+        this.name = 'ExecutionLimitExceededError';
+    }
+}

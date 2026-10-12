@@ -8,7 +8,7 @@ import { mkdir, open, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ToolCallOptions, ToolCallResult } from '../../contracts/tool-runtime.js';
-import { privateDirectory, readReceipt, writeReceipt, receiptPath, processIdentity, validateShellReceipt, type ShellRequest, type ShellReceipt } from './shell-receipts.js';
+import { privateDirectory, readReceipt, writeReceipt, receiptPath, processIdentity, readEffectiveShellReceipt, type ShellRequest, type ShellReceipt } from './shell-receipts.js';
 function stable(value: unknown): string {
     if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
     if (value && typeof value === 'object') return '{' + Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => JSON.stringify(k) + ':' + stable(v)).join(',') + '}';
@@ -64,7 +64,7 @@ export class ShellProcesses {
         }
         const result = await this.poll({ id, yield_after_ms: args.yield_after_ms ?? args.timeout_ms ?? 1000 }, options);
         const status = (result.data as { status: string }).status;
-        return ['failed', 'cancelled', 'deadline_exceeded'].includes(status) ? { ...result, ok: false, errorKind: 'runtime' } : result;
+        return status === 'stopped' ? { ...result, ok: false, errorKind: 'unknown' } : ['failed', 'cancelled', 'deadline_exceeded'].includes(status) ? { ...result, ok: false, errorKind: 'runtime' } : result;
         } catch (error) {
             if (String(error).includes('identity reused')) throw error;
             return { ok: false, errorKind: 'unknown', content: `Shell launch/observation unresolved for ${id}; do not relaunch. ${String(error)}`, data: { processId: id, status: 'unknown' } };
@@ -76,12 +76,11 @@ export class ShellProcesses {
         const deadline = Date.now() + (args.yield_after_ms as number ?? 0);
         let receipt: ShellReceipt;
         do {
-            try { receipt = await readReceipt<ShellReceipt>(receiptPath(folder)); }
+            try { receipt = await readEffectiveShellReceipt(folder); }
             catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
                 receipt = { status: 'running', startedAt: request.createdAt };
             }
-            validateShellReceipt(receipt);
             if (receipt.status !== 'running' || options?.signal?.aborted || Date.now() >= deadline) break;
             await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
         } while (true);
@@ -106,8 +105,7 @@ export class ShellProcesses {
             // identity remains inspectable, but never authorizes a second launch.
             if (disappeared) {
                 // Completion may have been published between our read and the liveness check.
-                const latest = await readReceipt<ShellReceipt>(receiptPath(folder));
-                validateShellReceipt(latest);
+                const latest = await readEffectiveShellReceipt(folder);
                 receipt = latest.status !== 'running' ? latest : { ...latest, status: 'unknown', reason: 'Supervisor disappeared; inspect effects, do not relaunch' };
             }
         }
@@ -147,6 +145,12 @@ export class ShellProcesses {
             items.push(result.data);
         }
         return { ok: true, content: JSON.stringify(items), data: items };
+    }
+    async wait(args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
+        for (;;) {
+            const result = await this.poll({ id: args.id, yield_after_ms: 1000 }, options);
+            if ((result.data as { status?: string }).status !== 'running' || options?.signal?.aborted) return result;
+        }
     }
     async cancel(args: Record<string, unknown>, options?: ToolCallOptions): Promise<ToolCallResult> {
         const { folder } = await this.request(args.id as string, options);

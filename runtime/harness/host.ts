@@ -12,6 +12,7 @@ import { composeDriver, compositionFingerprint, type DriverComposition, type Har
 import { createHarnessExecution } from './execution.js';
 import { commitJournalTransition } from '../ExecutionJournal.js';
 import type { ExecutionLimits } from '../ExecutionOptions.js';
+import { ExecutionLimitExceededError } from '../ExecutionOptions.js';
 import type { OperationResolution, SessionPage } from './types.js';
 import type { Extension, HarnessRoles, RoleName, SessionClient, SessionRecord, SessionUpdate, SessionEvent, LoopServices, PendingApproval, SubmitOptions, MaintenanceOptions } from './types.js';
 
@@ -51,7 +52,7 @@ function compose<Roles extends object, Client extends HarnessClient>(
     options: SessionComposition | DriverComposition<Roles, Client>,
 ): Promise<SessionClient | Client> {
     if ('driver' in options) return composeDriver(options);
-    const limits = { maxModelCalls: 40, maxToolCalls: 100, maxToolCallsPerBatch: 16, timeoutMs: 600000, ...options.limits };
+    const limits = { ...options.limits };
     for (const [key, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || (key === 'timeoutMs' && value > 2147483647)) return Promise.reject(new RangeError(`Invalid execution limit: ${key}`));
     return composeDriver<HarnessRoles, SessionClient>({ extensions: options.extensions, driver: {
         roles: REQUIRED,
@@ -84,7 +85,7 @@ class HarnessSessionClient implements SessionClient {
     private closePromise?: Promise<void>;
     private readonly fingerprint: string;
     private readonly execution;
-    constructor(private readonly roles: HarnessRoles, private readonly extensions: Extension[], private readonly limits: Required<ExecutionLimits>) {
+    constructor(private readonly roles: HarnessRoles, private readonly extensions: Extension[], private readonly limits: ExecutionLimits) {
         this.execution = createHarnessExecution(roles);
         this.fingerprint = compositionFingerprint(extensions);
     }
@@ -376,6 +377,7 @@ class HarnessSessionClient implements SessionClient {
             if (prior) {
                 if (prior.contentHash !== contentHash || !isDeepStrictEqual(prior.metadata, metadata))
                     throw new Error('Input command ID was reused with different content or metadata');
+                accepted = prior.status === 'paused' && record.status === 'paused';
                 return;
             }
             if (record.commandIds.includes(options.commandId)) return;
@@ -469,7 +471,7 @@ class HarnessSessionClient implements SessionClient {
     }
     private async runMaintenance(id: string, options: MaintenanceOptions, controller: AbortController): Promise<SessionRecord> {
         const runId = randomUUID(), signal = controller.signal;
-        const timer = setTimeout(() => controller.abort(new Error('Maintenance deadline exceeded')), this.limits.timeoutMs);
+        const timer = this.limits.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(new ExecutionLimitExceededError('time', this.limits.timeoutMs!)), this.limits.timeoutMs);
         let started = false;
         try {
             const current = await this.change(id, 'maintenance.started', record => {
@@ -485,7 +487,8 @@ class HarnessSessionClient implements SessionClient {
             if (this.roles.context.lifecycle) {
                 let modelCount = 0;
                 await this.requestConversation(id, runId, request, signal, () => {
-                    if (++modelCount > this.limits.maxModelCalls) throw new Error('Maintenance model-call budget exceeded');
+                    if (this.limits.maxModelCalls !== undefined && modelCount >= this.limits.maxModelCalls) throw new ExecutionLimitExceededError('model-calls', this.limits.maxModelCalls);
+                    modelCount++;
                 }, options);
             } else {
                 await this.executeModelEffect(id, runId, request, signal, { maintenance: options });
@@ -585,13 +588,15 @@ class HarnessSessionClient implements SessionClient {
             stopped ??= new Error(message);
             return stopped;
         };
-        const timer = setTimeout(() => controller.abort(new Error('Run deadline exceeded')), this.limits.timeoutMs);
+        const timer = this.limits.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(new ExecutionLimitExceededError('time', this.limits.timeoutMs!)), this.limits.timeoutMs);
         try {
             await this.change(id, 'run.started', record => {
                 this.checkRunnable(record);
                 record.status = 'running';
                 record.activeRunId = runId;
                 delete record.error;
+                delete record.pause;
+                for (const receipt of record.inputReceipts ?? []) if (receipt.status === 'paused') { receipt.status = 'running'; receipt.runId = runId; delete receipt.error; }
             });
             const takeQueued = async (mode: 'steer' | 'enqueue'): Promise<Message[]> => {
                 const picked: Message[] = [];
@@ -629,7 +634,8 @@ class HarnessSessionClient implements SessionClient {
                         checkActive();
                         const admit = () => {
                             checkActive();
-                            if (++modelCount > this.limits.maxModelCalls) throw new Error('Run model-call budget exceeded');
+                            if (this.limits.maxModelCalls !== undefined && modelCount >= this.limits.maxModelCalls) throw new ExecutionLimitExceededError('model-calls', this.limits.maxModelCalls);
+                            modelCount++;
                         };
                         if (this.roles.context.lifecycle && options?.projection !== 'none')
                             return this.requestConversation(id, runId, request, signal, admit);
@@ -640,8 +646,22 @@ class HarnessSessionClient implements SessionClient {
                 tools: {
                     executeBatch: async calls => {
                         checkActive();
+                        const exceeded = this.limits.maxToolCallsPerBatch !== undefined && calls.length > this.limits.maxToolCallsPerBatch
+                            ? new ExecutionLimitExceededError('tool-batch', this.limits.maxToolCallsPerBatch)
+                            : this.limits.maxToolCalls !== undefined && toolCount + calls.length > this.limits.maxToolCalls
+                                ? new ExecutionLimitExceededError('tool-calls', this.limits.maxToolCalls) : undefined;
+                        if (exceeded) {
+                            await this.change(id, 'tools.not-dispatched', record => {
+                                for (const call of calls) {
+                                    record.operations.push({ id: randomUUID(), runId, kind: 'tool', status: 'cancelled', dispatched: false,
+                                        callId: call.id, name: call.name, input: call.args, createdAt: Date.now(),
+                                        output: { dispatched: false, status: 'skipped', error: exceeded.message } });
+                                    record.messages.push(toToolResultMessage(call, { ok: false, errorKind: 'policy', content: 'Not dispatched: ' + exceeded.message }));
+                                }
+                            });
+                            throw exceeded;
+                        }
                         toolCount += calls.length;
-                        if (toolCount > this.limits.maxToolCalls) throw new Error('Run tool-call budget exceeded');
                         const operationIds = new Map<string, string>();
                         const { executions } = await this.execution.tools(calls, {
                             tools: this.roles.tools,
@@ -716,7 +736,10 @@ class HarnessSessionClient implements SessionClient {
         } catch (error) {
             await this.change(id, 'run.failed', record => {
                 reconcileInterruptedMessages(record);
-                record.status = signal.aborted ? 'interrupted' : 'failed';
+                const reason = signal.aborted ? signal.reason : error;
+                const safePause = reason instanceof ExecutionLimitExceededError && !record.operations.some(op => op.kind === 'tool' && ['intent', 'partial', 'unknown'].includes(op.status));
+                record.status = safePause ? 'paused' : signal.aborted ? 'interrupted' : 'failed';
+                if (safePause) record.pause = { kind: reason.kind, limit: reason.limit };
                 record.error = errorText(error);
                 for (const receipt of record.inputReceipts ?? []) if (receipt.runId === runId && receipt.status === 'running') {
                     receipt.status = record.status;

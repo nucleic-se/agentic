@@ -246,7 +246,7 @@ describe('approved architectural guarantees', () => {
         try {
             const session = await client.create(); await client.submit(session.id, 'go', { commandId: 'limit' });
             const record = await client.wait(session.id);
-            expect(record.error).toMatch(/model-call budget/);
+            expect(record.error).toMatch(/model-calls limit/);
             expect(config.provider.turn).toHaveBeenCalledOnce();
         } finally { await client.close(); }
     });

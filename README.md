@@ -252,7 +252,7 @@ Use `@nucleic-se/agentic/harness/core` for the empty host, and opt into `/coding
 `codingToolRuntime` starts shell commands under a child supervisor. `shell_run`
 waits briefly (`yield_after_ms`, default 1000) and returns `data.processId` with
 `status: running` when work continues. Use `shell_poll` for bounded live output and
-terminal receipts, `shell_list` to rediscover handles, and `shell_cancel` to request
+`shell_wait` to sleep until completion without model calls or a default wait deadline, `shell_list` to rediscover handles, and `shell_cancel` to request
 explicit cancellation. A running result confirms launch acceptance, not successful
 command completion. Poll before starting dependent work or reporting completion.
 
@@ -278,3 +278,15 @@ reconciled from the exact persisted session/call launch record, without claiming
 the command's intended effects succeeded. Historical unknown operations without
 this receipt contract require separate inspection. Hosts with sandboxed execution
 must retain their sandbox path rather than use this unsandboxed supervisor.
+
+Harness run time, model-call, response, tool-call and batch limits are optional;
+none is imposed when omitted. Explicit limits pause safe work with retained input
+receipts and history. Resume deliberately; unknown tool effects still require
+reconciliation and are never replayed automatically. Context capacity remains a
+separate physical model constraint.
+
+Operator recovery can inspect a process with `inspectShellProcess` and record
+termination with `resolveShellProcess` while host admission is fenced. Resolution
+requires matching request/receipt hashes and absent supervisor, command and process
+group identities. It preserves the raw receipt, records external effects as
+unresolved, and never creates a successful exit code. Missing identities are refused.

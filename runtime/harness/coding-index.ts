@@ -6,4 +6,5 @@ export { agentContext, codingAgentContext } from './agent-context.js';
 export type { AgentContextOptions, CodingAgentContextOptions } from './agent-context.js';
 export { readProjectInstructions, projectInstructionText, projectInstructionTargets } from './instructions.js';
 
-export { validateShellReceipt } from './shell-receipts.js';
+export { validateShellReceipt, readEffectiveShellReceipt, inspectShellProcess, resolveShellProcess } from './shell-receipts.js';
+export type { ShellProcessResolutionInput, ShellProcessResolution } from './shell-receipts.js';
