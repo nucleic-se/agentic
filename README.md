@@ -276,5 +276,5 @@ is not a separate system service. Commands with retained running/unknown receipt
 must block deployment/drain acceptance. A lost harness completion receipt can be
 reconciled from the exact persisted session/call launch record, without claiming
 the command's intended effects succeeded. Historical unknown operations without
-this receipt contract require separate inspection. Sandboxed Assembly execution
-uses its existing sandbox path, not this unsandboxed supervisor.
+this receipt contract require separate inspection. Hosts with sandboxed execution
+must retain their sandbox path rather than use this unsandboxed supervisor.
