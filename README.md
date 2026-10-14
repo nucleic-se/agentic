@@ -290,3 +290,21 @@ termination with `resolveShellProcess` while host admission is fenced. Resolutio
 requires matching request/receipt hashes and absent supervisor, command and process
 group identities. It preserves the raw receipt, records external effects as
 unresolved, and never creates a successful exit code. Missing identities are refused.
+
+### Isolating uncertain tool outcomes
+
+The session driver defaults to blocking continuation after an unknown tool outcome.
+Always-on hosts can compose with `unknownToolOutcomes: 'isolate'` to accept new
+inputs in the same session while retaining all earlier operations and receipts.
+The failed turn stops; it is never automatically resumed. Exact repeats of an
+unknown tool's name and validated arguments are denied before dispatch, including
+policy rewrites. Unknown operations without arguments fence that tool name.
+Current authorization still governs every other call.
+
+Hosts must keep uncertainty visible and instruct agents to avoid work that depends
+on it. Argument equality cannot detect semantically equivalent commands, alternate
+tools or dependencies between effects. This mode is an explicit host choice, not
+a proof that every new action is independent. Fork, history replacement, maintenance
+and direct resume remain blocked until evidence-based reconciliation; a newer safe
+paused run may be explicitly continued. Resolving an operation retains its original
+receipt and journals the verified outcome.

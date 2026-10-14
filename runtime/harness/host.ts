@@ -45,20 +45,26 @@ function reconcileInterruptedMessages(record: SessionRecord) {
     record.messages = result;
 }
 
-interface SessionComposition { extensions: Extension[]; limits?: ExecutionLimits }
+interface SessionComposition {
+    extensions: Extension[];
+    limits?: ExecutionLimits;
+    /** Keep uncertain effects fenced while admitting new input; never resumes the failed run. */
+    unknownToolOutcomes?: 'block' | 'isolate';
+}
 function compose(options: SessionComposition): Promise<SessionClient>;
 function compose<Roles extends object, Client extends HarnessClient>(options: DriverComposition<Roles, Client>): Promise<Client>;
 function compose<Roles extends object, Client extends HarnessClient>(
     options: SessionComposition | DriverComposition<Roles, Client>,
 ): Promise<SessionClient | Client> {
     if ('driver' in options) return composeDriver(options);
+    if (options.unknownToolOutcomes !== undefined && !['block', 'isolate'].includes(options.unknownToolOutcomes)) return Promise.reject(new Error('Invalid unknown tool outcome policy'));
     const limits = { ...options.limits };
     for (const [key, value] of Object.entries(limits)) if (!Number.isSafeInteger(value) || value < 1 || (key === 'timeoutMs' && value > 2147483647)) return Promise.reject(new RangeError(`Invalid execution limit: ${key}`));
     return composeDriver<HarnessRoles, SessionClient>({ extensions: options.extensions, driver: {
         roles: REQUIRED,
         dispose: { store: store => store.close(), tools: tools => tools.close?.() },
         async start(roles, extensions) {
-            const client = new HarnessSessionClient(roles, extensions, limits);
+            const client = new HarnessSessionClient(roles, extensions, limits, options.unknownToolOutcomes ?? 'block');
             try {
                 await client.recover();
                 return client;
@@ -85,7 +91,7 @@ class HarnessSessionClient implements SessionClient {
     private closePromise?: Promise<void>;
     private readonly fingerprint: string;
     private readonly execution;
-    constructor(private readonly roles: HarnessRoles, private readonly extensions: Extension[], private readonly limits: ExecutionLimits) {
+    constructor(private readonly roles: HarnessRoles, private readonly extensions: Extension[], private readonly limits: ExecutionLimits, private readonly unknownToolOutcomes: 'block' | 'isolate') {
         this.execution = createHarnessExecution(roles);
         this.fingerprint = compositionFingerprint(extensions);
     }
@@ -359,9 +365,9 @@ class HarnessSessionClient implements SessionClient {
             return child;
         });
     }
-    private checkRunnable(record: SessionRecord) {
+    private checkRunnable(record: SessionRecord, newInput = false) {
         if (record.composition !== this.fingerprint) throw new Error('Session composition differs from this harness; open with its original extensions');
-        if (record.operations.some(op => op.kind === 'tool' && op.status === 'unknown')) throw new Error('Unknown tool outcome requires manual reconciliation; resolve the operation with evidence or start a new session');
+        if (!(newInput && this.unknownToolOutcomes === 'isolate') && record.operations.some(op => op.kind === 'tool' && op.status === 'unknown')) throw new Error('Unknown tool outcome requires manual reconciliation; resolve the operation with evidence or submit independent new input');
     }
     async submit(id: string, content: string, options: SubmitOptions) {
         this.assertAdmission();
@@ -372,7 +378,7 @@ class HarnessSessionClient implements SessionClient {
         const contentHash = createHash('sha256').update(content.trim()).digest('hex');
         let accepted = false;
         await this.change(id, 'input.accepted', record => {
-            this.checkRunnable(record);
+            this.checkRunnable(record, true);
             const prior = record.inputReceipts?.find(receipt => receipt.commandId === options.commandId);
             if (prior) {
                 if (prior.contentHash !== contentHash || !isDeepStrictEqual(prior.metadata, metadata))
@@ -402,7 +408,7 @@ class HarnessSessionClient implements SessionClient {
     async resume(id: string) {
         this.assertAdmission();
         const record = await this.get(id);
-        this.checkRunnable(record);
+        this.checkRunnable(record, record.status === 'paused');
         if (this.runs.has(id)) throw new Error('Session is already running');
         if (!record.messages.length && !record.queue.length) throw new Error('Session has no input');
         this.launch(id);
@@ -591,7 +597,7 @@ class HarnessSessionClient implements SessionClient {
         const timer = this.limits.timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(new ExecutionLimitExceededError('time', this.limits.timeoutMs!)), this.limits.timeoutMs);
         try {
             await this.change(id, 'run.started', record => {
-                this.checkRunnable(record);
+                this.checkRunnable(record, record.queue.length > 0 || record.status === 'paused');
                 record.status = 'running';
                 record.activeRunId = runId;
                 delete record.error;
@@ -665,7 +671,20 @@ class HarnessSessionClient implements SessionClient {
                         const operationIds = new Map<string, string>();
                         const { executions } = await this.execution.tools(calls, {
                             tools: this.roles.tools,
-                            policy: this.roles.policy,
+                            policy: { evaluate: async context => {
+                                const record = await this.get(id);
+                                const repeated = (args: Record<string, unknown>) => record.operations.some(op =>
+                                    op.kind === 'tool' && op.status === 'unknown' && op.name === context.name &&
+                                    (op.input === undefined || isDeepStrictEqual(op.input, args)));
+                                if (repeated(context.args)) return { kind: 'deny' as const, reason: 'Not dispatched: this tool operation has unresolved effects. Reconcile its outcome before repeating it; independent work may continue.' };
+                                const decision = await this.roles.policy.evaluate(context);
+                                if ((decision.kind === 'rewrite' || decision.kind === 'confirm') && decision.args) {
+                                    const checked = this.roles.tools.validate(context.name, structuredClone(decision.args));
+                                    if (checked.ok && repeated(checked.args))
+                                        return { kind: 'deny' as const, reason: 'Not dispatched: rewritten arguments repeat an operation with unresolved effects.' };
+                                }
+                                return decision;
+                            } },
                             signal,
                             sessionId: id,
                             maxToolCallsPerTurn: this.limits.maxToolCallsPerBatch,
@@ -737,7 +756,7 @@ class HarnessSessionClient implements SessionClient {
             await this.change(id, 'run.failed', record => {
                 reconcileInterruptedMessages(record);
                 const reason = signal.aborted ? signal.reason : error;
-                const safePause = reason instanceof ExecutionLimitExceededError && !record.operations.some(op => op.kind === 'tool' && ['intent', 'partial', 'unknown'].includes(op.status));
+                const safePause = reason instanceof ExecutionLimitExceededError && !record.operations.some(op => op.runId === runId && op.kind === 'tool' && ['intent', 'partial', 'unknown'].includes(op.status));
                 record.status = safePause ? 'paused' : signal.aborted ? 'interrupted' : 'failed';
                 if (safePause) record.pause = { kind: reason.kind, limit: reason.limit };
                 record.error = errorText(error);

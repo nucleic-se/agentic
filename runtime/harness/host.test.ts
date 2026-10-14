@@ -200,6 +200,106 @@ describe('empty harness and effects', () => {
     });
 });
 
+describe('isolated uncertain operations', () => {
+    it('accepts new input and other tool calls while retaining an unknown operation and its failed input', async () => {
+        const config = setup([proposal, proposal, answer], { execute: async () => ({ ok: false, content: 'lost response', errorKind: 'unknown' }) });
+        const client = await createHarness().compose({ ...config, unknownToolOutcomes: 'isolate' });
+        try {
+            const session = await client.create();
+            await client.submit(session.id, 'first', { commandId: 'first', metadata: { source: 'first' } });
+            const failed = await client.wait(session.id);
+            const unknown = structuredClone(failed.operations.find(op => op.kind === 'tool')!);
+            expect(unknown.status).toBe('unknown');
+            await expect(client.resume(session.id)).rejects.toThrow('Unknown tool');
+            // An exact repeat is refused before the tool dispatch, but the model can still reply.
+            await client.submit(session.id, 'new input', { commandId: 'new', metadata: { source: 'new' } });
+            const continued = await client.wait(session.id);
+            expect(continued.status).toBe('idle');
+            expect(config.tools.call).toHaveBeenCalledOnce();
+            expect(continued.operations.find(op => op.id === unknown.id)).toEqual(unknown);
+            expect(continued.inputReceipts?.find(input => input.commandId === 'first')?.status).toBe('failed');
+            expect(continued.inputReceipts?.find(input => input.commandId === 'new')?.status).toBe('completed');
+            expect(continued.messages.some(message => message.role === 'tool_result' && message.content.includes('unresolved'))).toBe(true);
+        } finally { await client.close(); }
+    });
+    it('can explicitly continue a newer safe paused run without resolving an older unknown effect', async () => {
+        const other = {...proposal,message:{...proposal.message,toolCalls:[{id:'other',name:'write',args:{path:'other'}}]}};
+        let effects=0;
+        const config=setup([proposal,other,answer],{execute:async()=>++effects===1?{ok:false,content:'unknown',errorKind:'unknown'}:{ok:true,content:'written'}});
+        const client=await createHarness().compose({...config,unknownToolOutcomes:'isolate',limits:{maxModelCalls:1}});
+        try {
+            const session=await client.create();
+            await client.submit(session.id,'first',{commandId:'first'});await client.wait(session.id);
+            await expect(client.resume(session.id)).rejects.toThrow('Unknown tool');
+            await client.submit(session.id,'other',{commandId:'other',metadata:{source:'other'}});
+            const paused=await client.wait(session.id);expect(paused.status).toBe('paused');
+            await client.resume(session.id);const completed=await client.wait(session.id);
+            expect(completed.status).toBe('idle');expect(effects).toBe(2);
+            expect(completed.operations.filter(op=>op.status==='unknown')).toHaveLength(1);
+            expect(completed.inputReceipts?.find(receipt=>receipt.commandId==='other')?.status).toBe('completed');
+        } finally {await client.close();}
+    });
+    it('blocks policy rewrites into uncertain arguments without bypassing the current policy', async () => {
+        const config = setup([proposal, { ...proposal, message: { ...proposal.message, toolCalls: [{id:'second',name:'write',args:{path:'other'}}] } }, answer],
+            {execute: async () => ({ok:false,content:'lost reply',errorKind:'unknown'})});
+        let rewrite = false;
+        const evaluate = vi.fn(async () => rewrite ? {kind:'rewrite' as const,args:{path:'safe'},reason:'fixture rewrite'} : {kind:'allow' as const});
+        config.extensions[0].roles!.policy = () => ({evaluate});
+        const client = await createHarness().compose({...config,unknownToolOutcomes:'isolate'});
+        try {
+            const session = await client.create();
+            await client.submit(session.id,'first',{commandId:'first'});await client.wait(session.id);
+            rewrite=true;
+            await client.submit(session.id,'independent',{commandId:'independent'});
+            const result=await client.wait(session.id);
+            expect(result.status).toBe('idle');expect(config.tools.call).toHaveBeenCalledOnce();
+            expect(evaluate).toHaveBeenCalledTimes(2);
+            expect(result.messages.some(message=>message.role==='tool_result'&&message.content.includes('rewritten arguments'))).toBe(true);
+        } finally {await client.close();}
+    });
+    it.each(['rewrite','confirm'] as const)('fences normalized %s arguments before dispatch or approval', async kind => {
+        const config=setup([proposal,{...proposal,message:{...proposal.message,toolCalls:[{id:'other',name:'write',args:{path:'other'}}]}},answer],
+            {execute:async()=>({ok:false,content:'lost reply',errorKind:'unknown'})});
+        config.tools.validate=(_name,args)=>({ok:true,args:{...args,path:args.path??'safe'}});
+        let changed=false,approvals=0;
+        config.extensions[0].roles!.policy=()=>({evaluate:async()=>changed?{kind,args:{},reason:'default rewrite'}:{kind:'allow'}});
+        const client=await createHarness().compose({...config,unknownToolOutcomes:'isolate'});
+        const unsubscribe=client.subscribe(async event=>{
+            const record=await client.get(event.sessionId);
+            for(const approval of record.approvals){approvals++;await client.approve(record.id,approval.id,true);}
+        });
+        try {
+            const session=await client.create();await client.submit(session.id,'first',{commandId:'first'});await client.wait(session.id);
+            changed=true;await client.submit(session.id,'independent',{commandId:'independent'});
+            const result=await client.wait(session.id);
+            expect(result.status).toBe('idle');expect(config.tools.call).toHaveBeenCalledOnce();expect(approvals).toBe(0);
+            expect(result.operations.filter(op=>op.kind==='tool'&&op.status==='unknown')).toHaveLength(1);
+        } finally {unsubscribe();await client.close();}
+    });
+    it('after reopening allows unrelated work, preserves receipts and keeps lifecycle controls fenced', async () => {
+        const config = setup([proposal], { execute: async () => ({ ok: false, content: 'lost response', errorKind: 'unknown' }) });
+        const first = await createHarness().compose({ ...config, unknownToolOutcomes: 'isolate' });
+        const session = await first.create();
+        await first.submit(session.id, 'first', { commandId: 'first' });
+        const failed = await first.wait(session.id);
+        // Keep the fixture store open while replacing the owning host.
+        vi.spyOn(config.store, 'close').mockImplementation(async () => {});
+        await first.close();
+        const fresh = setup([{ ...proposal, message: { ...proposal.message, toolCalls: [{ id: 'unrelated', name: 'write', args: { path: 'other' } }] } }, answer], { store: config.store });
+        const reopened = await createHarness().compose({ ...fresh, unknownToolOutcomes: 'isolate' });
+        try {
+            await expect(reopened.fork(session.id)).rejects.toThrow('unknown');
+            await expect(reopened.maintain(session.id, { system: 'summarize', project: () => [] })).rejects.toThrow('Unknown tool');
+            await reopened.submit(session.id, 'unrelated work', { commandId: 'unrelated' });
+            const result = await reopened.wait(session.id);
+            expect(result.status).toBe('idle');
+            expect(fresh.tools.call).toHaveBeenCalledOnce();
+            expect(result.operations.find(op => op.id === failed.operations[1].id)).toEqual(failed.operations[1]);
+            expect(result.messages.slice(0, failed.messages.length)).toEqual(failed.messages);
+        } finally { await reopened.close(); }
+    });
+});
+
 describe('approved architectural guarantees', () => {
     it('cancels and drains activated work before disposing a failed composition', async () => {
         let entered!: () => void;
